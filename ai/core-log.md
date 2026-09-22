@@ -644,3 +644,34 @@ The engine can now do what was asked: fill, opaque copy, and transparent (colork
 - [x] Passed
 
 ---
+
+## 20 COMMIT Unreleased 511f55e 2026-09-22T09:01:16-07:00
+
+#### Coming From:
+
+Unreleased f10adb6
+
+#### Purpose:
+
+Benchmark the real command path -- push, dispatch, execute, fence -- now that SOLID_FILL, BLIT_COPY, and BLIT_COPY_KEY all work end to end, at the user's request.
+
+#### Outcome:
+
+Added tools/bench.c: pushes a batch of identical commands back to back, times from the first push to LINK-005's fence confirming the last one actually finished, reports commands/sec and pixels/sec -- the end-to-end number a real host program would see, not an idealized FPGA-only figure. Ran on real hardware (clk_sys=20MHz). SOLID_FILL runs at essentially 1 clock cycle per pixel steady-state (49.4ns/px extrapolated from 32x32->64x64, 208.6us for a full 64x64 fill) -- the theoretical maximum for a single-write-per-cycle engine, meaning there are effectively zero backpressure stalls at this scale. BLIT_COPY costs about 8.2 cycles/pixel steady-state (410ns/px, 1686.5us for a full 64x64 copy) -- roughly 8x SOLID_FILL's per-pixel cost, which traces directly to DDR-003's already-documented single-outstanding-read simplification: blit_copy issues one read, waits for the complete round trip, then writes, with zero pipelining between pixels. BLIT_COPY_KEY with a colorkey chosen to never match (worst case, every pixel written) measured the same as plain BLIT_COPY within noise (426.3 vs 425.8us/cmd at 32x32, 1686.5 vs 1686.5us/cmd at 64x64) -- the colorkey compare is a free, purely combinational check adding no measurable latency. A 1x1 fill (500 samples) isolates roughly-fixed per-command overhead at ~3.3us, consistent with link_ring's own poll/fetch/dispatch cost (8 sequential DDR3 reads per command, LINK-003). No core-reference.md changes -- this is measured evidence, not a new decision or contract, so it belongs here per the project's own maintenance-boundary rule rather than as a record.
+
+#### Next Steps:
+
+The ~8x SOLID_FILL-vs-BLIT_COPY gap is fully explained by DDR-003's single-outstanding-read design, which that record already flagged as a deliberate v1 simplification with a known extension path (MiSTer-Raster's descriptor-queue arbiter, for when a second concurrent reader or read pipelining is ever needed) -- worth revisiting if BLIT_COPY throughput becomes a real bottleneck for whatever gets built on top of this, but not before then. No other action items from this benchmark; it was a measurement task, not a bug hunt.
+
+#### Files Modified:
+
+- tools/bench.c
+- Makefile
+- scripts/deploy.sh
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
