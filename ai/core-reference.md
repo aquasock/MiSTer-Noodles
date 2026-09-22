@@ -91,6 +91,7 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 | Where does the ring buffer live in memory? | LINK component records | LINK-002 |
 | How does CMDQ actually find and fetch a queued command? | LINK component records | LINK-003 |
 | Why does a shared read port need a "who's mid-request" signal, not just rd_en? | DDR/LINK component records | DDR-005 |
+| How do I pack an R,G,B color into SOLID_FILL's color field? | BLIT component records | BLIT-004 |
 
 ---
 
@@ -116,6 +117,7 @@ BLIT-003: "BLIT_COPY (opcode 2) reuses dst_addr/pitch/width/height, adds src_add
 DDR-003: "Generic single-outstanding read port added to the DDRAM adapter (ddram_write_adapter.sv -> ddram_adapter.sv), muxed onto the shared physical bus alongside the write port"
 DDR-004: "DDRAM_* (ram1) is a separate physical F2H SDRAM port from MISTER_FB's own vbuf scan-out port and ram2's audio/palette port -- no Avalon-level contention"
 DDR-005: "A shared read-port mux must select on a REQ+WAIT-spanning signal (link_ring's new rd_active), not a requester's own rd_en, or it silently hands a pending response's byte-half-select to the wrong (idle) client -- found via a link-pushed dst_addr reading back as opcode's own value"
+BLIT-004: "SOLID_FILL's color field is packed R | (G<<8) | (B<<16) -- R in the LOW byte -- matching FB_FORMAT's RGB memory order, not the 0xRRGGBB hex-literal reading"
 LINK-002: "64-slot ring buffer at phys 0x30020000 (header: write_ptr +0, read_ptr +8) / 0x30021000 (slots), reusing CMDQ-001's 32-byte slot format"
 LINK-003: "link_ring.sv polls write_ptr only while CMDQ is idle (cmd_ready), fetches via 8 sequential reads, dispatches to CMDQ, writes back read_ptr"
 ```
@@ -269,7 +271,14 @@ LINK-003: "link_ring.sv polls write_ptr only while CMDQ is idle (cmd_ready), fet
   decision: "Opcode 2 (BLIT_COPY), the second of BLIT-001's three milestone ops, copies a width x height rectangle from a source surface to a destination surface with no scaling, blending or format conversion, 4 bytes/pixel like SOLID_FILL. It reuses CMDQ-001's existing 32-byte slot without changing the layout: dst_addr/dst_pitch/width/height keep their SOLID_FILL positions (words 1-4), color (word 5) is unused for this opcode, and the two words CMDQ-001 called 'reserved, must be zero' become src_addr (word 6) and src_pitch (word 7) instead -- reserved words are zero only for opcodes that do not define them, not universally; CMDQ-001's slot positions are unchanged, only which opcodes assign meaning to which words grows. Implemented as a separate module, rtl/blit_copy.sv, dispatched by CMDQ alongside rtl/blit.sv (SOLID_FILL) rather than merging the two engines -- keeps the already-proven fill FSM untouched."
   consequence: "BLIT_COPY needs a read port for the first time -- see DDR-003. Per-pixel it issues a read at src_addr+row*src_pitch+col*4, waits for that one word, then writes it to dst_addr+row*dst_pitch+col*4 before advancing; exactly one outstanding read at a time, never a second read issued before the first is consumed. Source and destination rectangles are not checked for overlap; an overlapping copy's result is whatever row-major read-then-write order produces, not a defined semantic."
 
-- record_id: DDR-003
+- record_id: BLIT-004
+  kind: CONVENTION
+  component_id: BLIT
+  title: "SOLID_FILL's color field byte order matches FB_FORMAT's RGB memory layout -- R is the low byte, not the high byte"
+  status: DECIDED
+  decided_date: 2026-09-22
+  decision: "BLIT-002 already establishes that `color` is written verbatim as raw pixel bytes with no format conversion. This record pins down what byte order those raw bytes need to be in to actually display as the intended color, given this project's FB_FORMAT=5'b00110 (32bpp, bit[4]=0=RGB per emu_ports.vh). Per emu_ports.vh's own [4]=0=RGB/1=BGR comment, the pixel's bytes in ascending memory-address order are R, G, B, (unused). Since DDRAM_DIN/DDRAM_DOUT and every uint32_t on the ARM host side are little-endian, a 32-bit `color` value's LOWEST byte (bits [7:0]) lands at the LOWEST memory address -- i.e. bits[7:0]=R, bits[15:8]=G, bits[23:16]=B, bits[31:24]=unused. This is the reverse of the 'obvious' 0x00RRGGBB hex-literal reading most people reach for first. Found on real hardware: tools/link_push.c's SOLID_FILL used color=0x0000FFFF intending cyan (R=0,G=255,B=255) and instead displayed yellow (R=255,G=255,B=0) -- exactly what 0x0000FFFF produces under this byte order (low byte 0xFF=R, next byte 0xFF=G, next byte 0x00=B). The OSD 'Draw Test' button's magenta (0x00FF00FF, BLIT-001's original test command) never exposed this because R=0xFF,G=0x00,B=0xFF is palindromic under an R/B swap -- it looks correct under either byte-order assumption, which is why the bug went unnoticed until a non-palindromic color (cyan) was tried."
+  consequence: "Any host-side code choosing a `color` value must construct it as `R | (G<<8) | (B<<16)`, not the naive `(R<<16) | (G<<8) | B` a 0xRRGGBB hex literal implies. tools/link_push.c's cyan constant is corrected to 0x00FFFF00 accordingly. This only applies while FB_FORMAT keeps bit[4]=0 (RGB) and bit[2:0]=3'b110 (32bpp) as OUT-002 set them; if a future record changes either, this byte-order mapping must be re-derived, not assumed to carry over. No record yet defines a host-side color-packing helper -- until one exists, every caller must independently apply this byte order or repeat this same mistake."
   kind: INTERFACE
   component_id: DDR
   title: "Generic read port, single-outstanding, added to the DDRAM adapter"
