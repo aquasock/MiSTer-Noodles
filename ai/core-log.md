@@ -42,6 +42,41 @@ Wire CMDQ and BLIT into Noodles.sv for real: design and implement the DDRAM writ
 
 ---
 
+## 31 COMMIT Unreleased ??? 2026-09-22T12:27:08-07:00
+
+#### Coming From:
+
+Unreleased d3cb985
+
+#### Purpose:
+
+Replace PRESENT's failed heuristic retirement delay with an explicit acknowledgement from ascal when it latches the requested framebuffer base.
+
+#### Outcome:
+
+The approved implementation will add an avl-clock-domain toggle at ascal's existing framebuffer-base latch, synchronize that toggle into clk_sys in sys_top, pass the synchronized event to PRESENT, and make PRESENT complete only after the acknowledgement, retaining a conservative post-ack retirement margin if simulation shows outstanding scanout activity. Simulation will cover arbitrary phase relationships among FB_VBL, the ascal acknowledgement, and PRESENT completion, followed by a full Quartus build and repeated 64-sprite hardware validation.
+
+#### Next Steps:
+
+Implement the cross-clock acknowledgement path without adding a third surface, run the RTL simulation and full Quartus compile, deploy the resulting core, and repeat the 64-sprite workload until the display result is confirmed.
+
+#### Files Modified:
+
+- sys/ascal.vhd
+- sys/sys_top.v
+- sys/emu_ports.vh
+- rtl/present.sv
+- Noodles.sv
+- sim/present_dut.sv
+- sim/tb_present.cpp
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
+
 ## 2 COMMIT Unreleased ecadd93 2026-09-21T23:04:52-07:00
 
 #### Coming From:
