@@ -42,6 +42,22 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 - component_id: LINK
   name: "HPS-FPGA link"
   description: "The communication contract between Linux/ARM userland and the FPGA fabric: shared-memory command lists built by the host in HPS RAM and executed by the FPGA-side command processor via DMA."
+
+- component_id: CMDQ
+  name: "Command processor"
+  description: "DMA-fetches the host's command list from HPS RAM, decodes opcodes, dispatches each command to BLIT, and reports completion back to the host."
+
+- component_id: BLIT
+  name: "Raster / draw unit"
+  description: "Executes draw operations (fill, blit, and later color-key/alpha/scale) against surfaces in SDRAM."
+
+- component_id: SURF
+  name: "Surface memory model"
+  description: "How pixel buffers are allocated and addressed in SDRAM."
+
+- component_id: OUT
+  name: "Display output"
+  description: "Native MiSTer video timing generation and HDMI/VGA output, scanning out a surface to the screen."
 ```
 
 ---
@@ -50,16 +66,22 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 
 | Question | Consult first | Fast records |
 |---|---|---|
-| Is this its own core or does it live inside an existing one? | CORE component records | ARCH-001 |
-| How does the host tell the FPGA what to draw? | LINK component records | ARCH-002 |
+| Is this its own core or does it live inside an existing one? | CORE component records | CORE-001 |
+| How does the host tell the FPGA what to draw? | LINK component records | LINK-001 |
+| How does the picture get to the screen? | OUT component records | OUT-001 |
+| Where do pixel buffers live and how are they addressed? | SURF component records | SURF-001 |
+| What can the engine actually draw right now? | BLIT component records | BLIT-001 |
 
 ---
 
 ## 4. Fast lookup index
 
 ```yaml
-ARCH-001: "2D engine and demo are a standalone, independent MiSTer core"
-ARCH-002: "Host-to-FPGA communication is DMA'd shared-memory command lists, not per-operation registers"
+CORE-001: "2D engine and demo are a standalone, independent MiSTer core"
+LINK-001: "Host-to-FPGA communication is DMA'd shared-memory command lists, not per-operation registers"
+OUT-001: "CORE generates its own video timing and drives HDMI/VGA directly, like a normal MiSTer core"
+SURF-001: "Surfaces live in SDRAM, addressed by raw byte address + pitch, no handle table in v1"
+BLIT-001: "First milestone op set: solid-fill, straight blit, hardware static/noise-fill"
 ```
 
 ---
@@ -67,7 +89,7 @@ ARCH-002: "Host-to-FPGA communication is DMA'd shared-memory command lists, not 
 ## 5. Architecture records
 
 ```yaml
-- record_id: ARCH-001
+- record_id: CORE-001
   kind: ARCHITECTURE
   component_id: CORE
   title: "Standalone MiSTer core"
@@ -76,7 +98,7 @@ ARCH-002: "Host-to-FPGA communication is DMA'd shared-memory command lists, not 
   decision: "The FPGA-accelerated 2D graphics engine and its demo are implemented as their own independent MiSTer core, built with Quartus/RTL, and are not an overlay on the Linux framebuffer path, an extension of the Menu core, or dependent on any other core being loaded."
   consequence: "The project owns a full core build (top.v/sv, core-side HPS bridge instantiation, MiSTer framework integration) rather than only ARM-side userland. Earlier framebuffer-overlay work (src/spike_fb.c, fbterm_toggle.c, the F9/uinput toggle) is prior exploration, not the delivery path, and is superseded by this record for anything it conflicts with."
 
-- record_id: ARCH-002
+- record_id: LINK-001
   kind: ARCHITECTURE
   component_id: LINK
   title: "Shared-memory command-list HPS-FPGA link"
@@ -84,6 +106,33 @@ ARCH-002: "Host-to-FPGA communication is DMA'd shared-memory command lists, not 
   decided_date: 2026-09-21
   decision: "Linux/ARM userland communicates with the FPGA 2D engine by building command lists in HPS RAM. The FPGA-side command processor reads and executes those lists via DMA across the HPS-FPGA bridge, rather than the host issuing one register write per drawing operation."
   consequence: "The core needs a DMA-capable command processor and a defined command-list buffer format (ring buffer vs. discrete lists, head/tail signalling, completion notification) before any drawing command can be implemented. Register-level MMIO across the lightweight HPS-to-FPGA bridge is still needed for control/status (queue pointers, doorbell, engine status) even though drawing commands themselves are not per-register calls. The exact command encoding, buffer layout, and control-register map are not yet decided and need their own INTERFACE records before implementation starts."
+
+- record_id: OUT-001
+  kind: ARCHITECTURE
+  component_id: OUT
+  title: "Native video output"
+  status: DECIDED
+  decided_date: 2026-09-21
+  decision: "CORE generates its own video timing and drives HDMI/VGA output directly, the same way a standard MiSTer core does, rather than presenting through the Linux framebuffer (/dev/fb0)."
+  consequence: "CORE takes on standard MiSTer video-pipeline integration (sync/timing generation, scaler interface, video mode handling) as part of CORE/OUT. The Linux-framebuffer path explored in spike_fb.c and the F9/uinput toggle is not the presentation path for this engine, per CORE-001. Which SURF surface OUT scans out at any moment, and how that hand-off/flip is synchronized, needs its own INTERFACE record once the display timing is implemented."
+
+- record_id: SURF-001
+  kind: ARCHITECTURE
+  component_id: SURF
+  title: "SDRAM-resident, address+pitch surfaces"
+  status: DECIDED
+  decided_date: 2026-09-21
+  decision: "Surfaces (pixel buffers operated on by BLIT and scanned out by OUT) live in board SDRAM. Commands address a surface directly by its raw SDRAM byte address and row pitch; there is no surface-handle table or indirection layer in v1."
+  consequence: "The host allocates and tracks surface addresses/pitches itself and encodes them literally into each command; the FPGA side does not validate surface existence or bounds beyond what BLIT needs to execute the op. A handle/indirection layer, if added later, is a superseding record, not a silent change, since it changes the command encoding."
+
+- record_id: BLIT-001
+  kind: ARCHITECTURE
+  component_id: BLIT
+  title: "First milestone op set"
+  status: DECIDED
+  decided_date: 2026-09-21
+  decision: "The first hardware-proof milestone implements exactly three BLIT operations: (1) solid-fill -- fill a destination rect in a surface with a constant color, (2) straight blit -- copy a source rect from one surface to a destination rect in another surface with no scaling or blending, (3) noise/static-fill -- fill a destination rect with the pet's procedural static pattern directly in hardware, ported from the same generator logic as the Menu core's static. No color-key, alpha blend, or scaling operations are in this milestone."
+  consequence: "This scope directly targets the proven CPU bottleneck (full-1080p animated static could not hold frame rate in software -- 12 fps measured at 1920x1080, per README) as the milestone's proof point, while keeping the first CMDQ/BLIT implementation to the smallest op set that can show a hardware win. Color-key, alpha blending, and scaled blit are explicitly deferred to a later milestone and need their own records when scoped."
 ```
 
 ---
