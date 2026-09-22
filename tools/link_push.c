@@ -66,7 +66,10 @@ int main(void) {
         256,            // dst_pitch
         64,             // width
         64,             // height
-        0x0000FFFFu,    // color: cyan
+        0x00FFFF00u,    // color: cyan (byte0=R=0x00, byte1=G=0xFF, byte2=B=0xFF --
+                        // see BLIT-004: FB_FORMAT's RGB byte order means R is
+                        // the LOWEST byte of the 32-bit word, not the highest,
+                        // so cyan is NOT the "obvious" 0x0000FFFF hex reading)
         0,              // reserved0 / src_addr (unused for SOLID_FILL)
         0,              // reserved1 / src_pitch (unused for SOLID_FILL)
     };
