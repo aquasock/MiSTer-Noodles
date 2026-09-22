@@ -1,6 +1,0 @@
-#!/bin/sh
-# Copy to /media/fat/linux/user-startup.sh on the MiSTer.
-# Run by /etc/init.d/S99user at boot; it survives Linux updates, /etc does not.
-# Keep it non-blocking -- anything synchronous here delays the boot.
-
-/media/fat/pet/misterpet >/tmp/misterpet.log 2>&1 &
