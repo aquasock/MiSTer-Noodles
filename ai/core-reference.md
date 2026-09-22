@@ -58,6 +58,10 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 - component_id: OUT
   name: "Display output"
   description: "Native MiSTer video timing generation and HDMI/VGA output, scanning out a surface to the screen."
+
+- component_id: DDR
+  name: "DDRAM_* physical bus adapter"
+  description: "Translates BLIT's and CMDQ's generic byte-addressed ports onto the framework's real DDRAM_* pins (the F2H SDRAM Avalon-MM bridge into HPS DDR3). Separate from SURF, which is the logical addressing model (byte address + pitch); DDR is the physical wire protocol underneath it."
 ```
 
 ---
@@ -75,6 +79,7 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 | How does a surface actually reach the screen? | OUT component records | OUT-002 |
 | What does a command slot look like on the wire? | CMDQ component records | CMDQ-001 |
 | What are SOLID_FILL's exact fields? | BLIT component records | BLIT-002 |
+| How does a write actually reach DDRAM_*? | DDR component records | DDR-001 |
 
 ---
 
@@ -90,6 +95,7 @@ SURF-002: "Surfaces live in the HPS-shared DDR3 (DDRAM_*), not the dedicated low
 OUT-002: "Display output uses the template's built-in MISTER_FB DDRAM framebuffer scan-out, not a custom timing generator"
 CMDQ-001: "v1 command slot is a fixed 32-byte / 256-bit record, plain uint32 fields, no bit-packing"
 BLIT-002: "SOLID_FILL (opcode 1) fields: dst_addr, dst_pitch, width, height, color"
+DDR-001: "DDRAM_* is a standard Avalon-MM master port; v1 adapter does single-word (burstcnt=1), write-only, 4-byte-into-8-byte-word transfers"
 ```
 
 ---
@@ -176,7 +182,16 @@ BLIT-002: "SOLID_FILL (opcode 1) fields: dst_addr, dst_pitch, width, height, col
   status: DECIDED
   decided_date: 2026-09-21
   decision: "Opcode 1 (SOLID_FILL) writes `color` into every pixel of a width x height rectangle whose top-left pixel is at byte address dst_addr, advancing dst_pitch bytes per row. Pixels are always 4 bytes; SOLID_FILL does not read dst_pitch or width/height in any unit other than pixels/bytes as stated, and performs no format conversion -- `color` is written verbatim as the destination surface's raw pixel bytes. width==0 or height==0 is a no-op (BLIT never asserts busy)."
-  consequence: "The RTL (rtl/blit.sv) and its Verilator testbench (sim/tb_solid_fill.cpp) are the executable form of this record: one write per pixel on a generic byte-addressed port, row-major, address = dst_addr + row*dst_pitch + col*4. Fixed 4-byte pixels means BLIT-002 does not yet address the FB_FORMAT/pixel-format question (palette or 16-bit modes) -- that needs its own record before non-32bpp surfaces are supported."
+  consequence: "The RTL (rtl/blit.sv) and its Verilator testbench (sim/tb_solid_fill.cpp) are the executable form of this record: one write per pixel on a generic byte-addressed port, row-major, address = dst_addr + row*dst_pitch + col*4. Fixed 4-byte pixels means BLIT-002 does not yet address the FB_FORMAT/pixel-format question (palette or 16-bit modes) -- that needs its own record before non-32bpp surfaces are supported. DDR-001's write adapter additionally requires dst_addr and dst_pitch to both be multiples of 4, so every pixel address stays 4-byte aligned; this is not yet enforced anywhere (neither host-side nor in BLIT) and should be before anything but hand-picked test values reaches it."
+
+- record_id: DDR-001
+  kind: INTERFACE
+  component_id: DDR
+  title: "DDRAM_* is Avalon-MM; v1 adapter is single-word, write-only"
+  status: DECIDED
+  decided_date: 2026-09-21
+  decision: "DDRAM_* is a standard Altera/Intel Avalon-MM master interface -- confirmed by reading sys/sys_top.v, which wires DDRAM_BUSY/DOUT_READY/RD/WE straight onto an f2h_sdram Avalon port's waitrequest/readdatavalid/read/write signals of the same name pattern. DDRAM_ADDR is a word address over a 64-bit (8-byte) data bus: word_addr = byte_addr[31:3]. A request (RD or WE asserted, ADDR/DIN/BE stable) is accepted on the clock edge DDRAM_BUSY is sampled low; the master must hold the request stable on every cycle DDRAM_BUSY is high. Read data returns asynchronously later, one DDRAM_DOUT_READY pulse per requested word. rtl/ddram_write_adapter.sv implements only single-word writes (DDRAM_BURSTCNT=1, DDRAM_RD tied low) -- no reads, no bursts, nothing for CMDQ's future DDR3 polling yet."
+  consequence: "BLIT's existing generic wr_addr/wr_data/wr_en/wr_ready port (BLIT-002) needed no changes to work with this: its valid-held-until-ready convention already matches Avalon-MM's write/waitrequest semantics, so the adapter is purely combinational (DDRAM_WE=wr_en, DDRAM_ADDR=wr_addr[31:3], wr_ready=~DDRAM_BUSY). Because DDRAM_DIN is 8 bytes wide and BLIT writes 4-byte pixels, the adapter steers each write into the upper or lower half of DDRAM_DIN using wr_addr[2] and masks the other half off with DDRAM_BE -- correct only when wr_addr is 4-byte aligned (see BLIT-002's added consequence note). CMDQ's read path for LINK's ring buffer needs a second, read-capable adapter; this record and rtl/ddram_write_adapter.sv cover the write side only."
 ```
 
 ---
