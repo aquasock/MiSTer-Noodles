@@ -14,9 +14,11 @@ ARMFLAGS := -march=armv7-a -mtune=cortex-a9 -mfpu=neon -mfloat-abi=hard
 CFLAGS   := -std=c99 -O2 -Wall -Wextra -Wno-unused-parameter
 LDLIBS   := -lm
 
-ARMBIN  := build/arm/misterpet-spike
-ARMTOG  := build/arm/fbterm-toggle
-HOSTBIN := build/host/misterpet-spike
+ARMBIN     := build/arm/misterpet-spike
+ARMTOG     := build/arm/fbterm-toggle
+ARMMARKER  := build/arm/ddram-marker-check
+HOSTBIN    := build/host/misterpet-spike
+HOSTMARKER := build/host/ddram-marker-check
 
 HOST    ?= mister.local
 DEST    ?= /media/fat/pet
@@ -24,16 +26,18 @@ DEST    ?= /media/fat/pet
 VERILATOR ?= verilator
 SIM_DIR   := build/sim
 
-SOLID_FILL_SIM   := $(SIM_DIR)/solid_fill/Vengine_dut
-DDRAM_ADAPTER_SIM:= $(SIM_DIR)/ddram_adapter/Vengine_ddram_dut
+SOLID_FILL_SIM    := $(SIM_DIR)/solid_fill/Vengine_dut
+DDRAM_ADAPTER_SIM := $(SIM_DIR)/ddram_adapter/Vengine_ddram_dut
+MARKER_TEST_SIM   := $(SIM_DIR)/marker_test/Vmarker_test_dut
 
 .PHONY: all host deploy sim clean
 
-all: $(ARMBIN) $(ARMTOG)
+all: $(ARMBIN) $(ARMTOG) $(ARMMARKER)
 
-sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM)
+sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(MARKER_TEST_SIM)
 	$(SOLID_FILL_SIM)
 	$(DDRAM_ADAPTER_SIM)
+	$(MARKER_TEST_SIM)
 
 $(SOLID_FILL_SIM): rtl/cmdq.sv rtl/blit.sv sim/engine_dut.sv sim/tb_solid_fill.cpp
 	@mkdir -p $(dir $@)
@@ -47,6 +51,12 @@ $(DDRAM_ADAPTER_SIM): rtl/cmdq.sv rtl/blit.sv rtl/ddram_write_adapter.sv sim/eng
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
 		rtl/cmdq.sv rtl/blit.sv rtl/ddram_write_adapter.sv sim/engine_ddram_dut.sv sim/tb_ddram_adapter.cpp -o $(notdir $@)
 
+$(MARKER_TEST_SIM): rtl/ddram_marker_test.sv sim/marker_test_dut.sv sim/tb_marker_test.cpp
+	@mkdir -p $(dir $@)
+	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module marker_test_dut \
+		--Wall --Wno-fatal -Wno-DECLFILENAME \
+		rtl/ddram_marker_test.sv sim/marker_test_dut.sv sim/tb_marker_test.cpp -o $(notdir $@)
+
 $(ARMBIN): src/spike_fb.c | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ $< $(LDLIBS)
 	@$(CROSS)size $@ 2>/dev/null || true
@@ -55,10 +65,16 @@ $(ARMBIN): src/spike_fb.c | build/arm
 $(ARMTOG): src/fbterm_toggle.c | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ $<
 
-host: $(HOSTBIN)
+$(ARMMARKER): tools/ddram_marker_check.c | build/arm
+	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ $<
+
+host: $(HOSTBIN) $(HOSTMARKER)
 
 $(HOSTBIN): src/spike_fb.c | build/host
 	$(HOSTCC) $(CFLAGS) -o $@ $< $(LDLIBS)
+
+$(HOSTMARKER): tools/ddram_marker_check.c | build/host
+	$(HOSTCC) $(CFLAGS) -o $@ $<
 
 build/arm build/host:
 	mkdir -p $@

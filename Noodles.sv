@@ -21,20 +21,27 @@
 // CMDQ, BLIT and the DDRAM write adapter (DDR-001) are wired for real below
 // and drive the actual DDRAM_* pins. This is still a bring-up checkpoint,
 // not the finished engine, and deliberately stops short of ever firing a
-// write on real hardware: cmd_valid is tied to 0 (no trigger exists yet),
-// so DDRAM_WE can never assert no matter what is flashed to the board.
+// BLIT-driven write on real hardware: cmd_valid is tied to 0 (no trigger
+// exists yet), so CMDQ/BLIT can never assert DDRAM_WE no matter what is
+// flashed to the board.
 //
 // That is intentional, not an oversight. BLIT-002's dst_addr is whatever the
-// command says -- nothing in this core yet validates it against what's
-// actually safe to write in the HPS's shared DDR3 (Linux owns most of that
-// physical memory; MiSTer's own framebuffer/loader conventions reserve some
-// of it, per docs/mister-framebuffer.md's FB_ADDR research, but this project
-// has not confirmed the safe region for our own use). Until that's nailed
-// down, wiring a live trigger (an OSD button, LINK's future ring buffer)
-// would let a build actually stomp on running Linux memory the moment
-// someone presses it. FB_EN stays 0 for the same reason: nothing is being
-// displayed, so there's no reason to point FB_BASE at a guessed address
-// either. See OUT-001, SURF-001/SURF-002 and DDR-001 for what is decided.
+// command says, and this project had not confirmed what DDR3 address range
+// is actually safe to write given Linux owns most of that physical memory.
+// It has now: SURF-003, read straight from MiSTer-devel/Main_MiSTer's own
+// source, confirms physical [0x20000000,0x40000000) is FPGA-reserved, with
+// the first 32MB of it (0x20000000-0x21FFFFFF) explicitly a core's own to
+// use ("Core's fb" in video.cpp). What is NOT yet confirmed is DDR-002:
+// whether DDRAM_ADDR=0 (the FPGA-side address) really corresponds to that
+// physical 0x20000000, or something else -- inferred from Main's fpga_mem()
+// macro, but not verified against our own RTL. ddram_marker_test below
+// exists to check exactly that, in isolation: pressing the OSD's single
+// "Marker Test" button writes one fixed word to DDRAM_ADDR=0, once, and
+// nothing else. tools/ddram_marker_check.c reads Linux physical 0x20000000
+// back and reports whether it matches. Until that check has actually been
+// run and passed, treat DDR-002 as unverified -- FB_EN stays 0 and nothing
+// beyond this one marker word should be trusted to land where intended.
+// See OUT-001, SURF-001/SURF-002/SURF-003 and DDR-001/DDR-002.
 
 module emu
 (
@@ -78,10 +85,8 @@ assign FB_FORCE_BLANK = 1;
 
 ///////////////////////   ENGINE   /////////////////////////////////
 
-// No trigger exists yet -- see the file header. This block is wired to the
-// real DDRAM_* pins and will place/route/time as part of a real build, but
-// cmd_valid tied to 0 means CMDQ never leaves IDLE and DDRAM_WE never
-// asserts.
+// cmd_valid tied to 0 means CMDQ never leaves IDLE, so BLIT can never
+// assert wr_en -- no trigger exists for it yet. See the file header.
 wire        engine_cmd_ready;
 wire [31:0] engine_wr_addr, engine_wr_data;
 wire        engine_wr_en, engine_wr_ready;
@@ -124,13 +129,45 @@ blit blit
 	.wr_ready (engine_wr_ready)
 );
 
+// Deliberately, individually triggered by one OSD button -- writes ONE
+// fixed word to DDRAM_ADDR=0 per press and stops. See the file header and
+// DDR-002.
+wire        marker_busy, marker_done;
+wire [31:0] marker_wr_addr, marker_wr_data;
+wire        marker_wr_en, marker_wr_ready;
+
+ddram_marker_test marker_test
+(
+	.clk     (clk_sys),
+	.reset   (reset),
+	.trigger (status[1]),
+	.busy    (marker_busy),
+	.done    (marker_done),
+	.wr_addr (marker_wr_addr),
+	.wr_data (marker_wr_data),
+	.wr_en   (marker_wr_en),
+	.wr_ready(marker_wr_ready)
+);
+
+// Single-master mux into the DDRAM write adapter. BLIT can never assert
+// wr_en (cmd_valid is tied to 0 above), so the marker test always has a
+// clear path whenever it fires; this priority is arbitrary since the two
+// sources are never simultaneously active.
+wire        adapter_wr_addr_sel = marker_wr_en;
+wire [31:0] adapter_wr_addr = adapter_wr_addr_sel ? marker_wr_addr : engine_wr_addr;
+wire [31:0] adapter_wr_data = adapter_wr_addr_sel ? marker_wr_data : engine_wr_data;
+wire        adapter_wr_en   = adapter_wr_addr_sel ? marker_wr_en   : engine_wr_en;
+wire        adapter_wr_ready;
+assign marker_wr_ready = adapter_wr_addr_sel ? adapter_wr_ready : 1'b0;
+assign engine_wr_ready = adapter_wr_addr_sel ? 1'b0 : adapter_wr_ready;
+
 ddram_write_adapter ddram_write_adapter
 (
 	.clk           (clk_sys),
-	.wr_addr       (engine_wr_addr),
-	.wr_data       (engine_wr_data),
-	.wr_en         (engine_wr_en),
-	.wr_ready      (engine_wr_ready),
+	.wr_addr       (adapter_wr_addr),
+	.wr_data       (adapter_wr_data),
+	.wr_en         (adapter_wr_en),
+	.wr_ready      (adapter_wr_ready),
 	.ddram_clk     (DDRAM_CLK),
 	.ddram_busy    (DDRAM_BUSY),
 	.ddram_burstcnt(DDRAM_BURSTCNT),
@@ -152,6 +189,8 @@ localparam CONF_STR = {
 	"-;",
 	"T[0],Reset;",
 	"R[0],Reset and close OSD;",
+	"-;",
+	"T[1],Marker Test -- writes ONE word to phys 0x20000000!;",
 	"v,0;",
 	"V,v",`BUILD_DATE
 };
