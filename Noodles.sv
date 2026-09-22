@@ -20,30 +20,37 @@
 //
 // CMDQ, BLIT and the DDRAM write adapter (DDR-001) are wired for real below
 // and drive the actual DDRAM_* pins. This is still a bring-up checkpoint,
-// not the finished engine, and deliberately stops short of ever firing a
-// BLIT-driven write on real hardware: cmd_valid is tied to 0 (no trigger
-// exists yet), so CMDQ/BLIT can never assert DDRAM_WE no matter what is
-// flashed to the board.
+// not the finished engine -- CMDQ's only command source is one hardcoded,
+// OSD-triggered test command (CMDQ-002), not LINK's ring buffer.
 //
-// That is intentional, not an oversight. BLIT-002's dst_addr is whatever the
-// command says, and this project had not confirmed what DDR3 address range
-// is actually safe to write given Linux owns most of that physical memory.
-// SURF-003, read straight from MiSTer-devel/Main_MiSTer's own source,
-// confirms physical [0x20000000,0x40000000) is FPGA-reserved, with the
-// first 32MB (0x20000000-0x21FFFFFF) explicitly a core's own to use
-// ("Core's fb" in video.cpp).
+// Every address used below is deliberately inside SURF-003's confirmed-safe
+// window (physical [0x20000000,0x40000000), FPGA-reserved DDR3, read
+// straight from MiSTer-devel/Main_MiSTer's own source) AND avoids
+// 0x20000000 itself per SURF-004: MiSTer's own system video scaler uses
+// that exact physical address as its RAM base, a real collision the
+// MiSTer-Raster project hit and fixed on this same platform. Every address
+// here is 0x30000000+, the region that project's own hardware-accepted
+// releases have used safely since. Nothing here should ever target an
+// address outside that without a new record explaining why it's safe.
 //
-// DDR-002 has now been checked on real hardware, and the first attempt was
-// informative: with ddram_marker_test targeting DDRAM_ADDR=0 (byte address
-// 0x0), the marker word landed at physical 0x00000000 -- the base of live
-// Linux memory -- not inside the reserved window. DDRAM_ADDR is an
+// DDR-002 was checked on real hardware and, after an initial wrong guess
+// (DDRAM_ADDR=0 landed at physical 0x0, not 0x20000000 -- see the marker
+// test's own history and CMDQ/DDR-002 records), confirmed DDRAM_ADDR is an
 // unwindowed, direct physical word address (word N = byte N*8 in the same
-// address space as everything else), confirmed by a full-range /dev/mem
-// scan that found the marker at exactly phys 0x0 and nowhere in the
-// reserved region. ddram_marker_test now targets 0x20000000/8 = word
-// 0x04000000, the corrected, actually-safe address. DDR-001's adapter math
-// (word_addr = byte_addr>>3) needed no change -- only the address supplied
-// to it did. See OUT-001, SURF-001/SURF-002/SURF-003 and DDR-001/DDR-002.
+// address space as everything else). SURF-004 then found 0x20000000 itself
+// unsafe for a different reason (see above), so ddram_marker_test's
+// address moved again, to 0x30000000/8 = word 0x06000000.
+//
+// A real command now flows end to end: the "Draw Test" OSD button fires
+// one hardcoded SOLID_FILL through CMDQ (CMDQ-002), filling a 64x64 32bpp
+// surface at 0x30000000 with a fixed color, and
+// FB_EN/FB_BASE/FB_STRIDE/FB_WIDTH/FB_HEIGHT/FB_FORMAT scan that surface
+// out over HDMI via MISTER_FB -- gated behind a "draw ever completed" latch
+// so nothing is displayed (FB_EN stays 0) until that button has actually
+// been pressed once, rather than showing whatever was in memory at boot.
+// This is still a hardcoded, single test command, not LINK's ring buffer --
+// see LINK-001's still-open consequence and CMDQ-002.
+// See OUT-001/OUT-002, SURF-001/SURF-002/SURF-003/SURF-004 and DDR-001/DDR-002.
 
 module emu
 (
@@ -71,12 +78,10 @@ assign AUDIO_L = 0;
 assign AUDIO_R = 0;
 assign AUDIO_MIX = 0;
 
-// LED_DISK is otherwise unused -- repurposed as a diagnostic while DDR-002
-// is unresolved: latches solid on once the marker write has actually
-// completed on the DDRAM_* bus (not just been requested), independent of
-// where it landed. If this LED never lights after pressing "Marker Test",
-// the write itself never completed (e.g. DDRAM_BUSY stuck), not just
-// landed at an unexpected address.
+// LED_DISK is otherwise unused -- diagnostic left in place from DDR-002's
+// bring-up: latches solid on once the marker write has actually completed
+// on the DDRAM_* bus (not just been requested), independent of where it
+// landed. Still useful for future low-level DDRAM_* debugging.
 reg marker_done_ever;
 always @(posedge clk_sys or posedge reset)
 	if (reset) marker_done_ever <= 1'b0;
@@ -86,33 +91,72 @@ assign LED_DISK = marker_done_ever;
 assign LED_POWER = 0;
 assign BUTTONS = 0;
 
-// MISTER_FB is enabled at the project level (Noodles.qsf) for the eventual
-// SURF/OUT scan-out path, but it is not driven yet -- disabled and blanked.
-assign FB_EN = 0;
-assign FB_FORMAT = 0;
-assign FB_WIDTH = 0;
-assign FB_HEIGHT = 0;
-assign FB_BASE = 0;
-assign FB_STRIDE = 0;
-assign FB_FORCE_BLANK = 1;
+// draw_done_ever gates FB_EN so nothing is displayed until "Draw Test" has
+// actually completed once -- otherwise the screen would show whatever
+// happened to be in memory at 0x20000000 at boot (possibly still
+// marker_test's stray value from DDR-002's bring-up).
+reg draw_done_ever;
+always @(posedge clk_sys or posedge reset)
+	if (reset) draw_done_ever <= 1'b0;
+	else if (draw_done) draw_done_ever <= 1'b1;
+
+// MISTER_FB scan-out (OUT-002): a fixed 64x64, 32bpp (FB_FORMAT[2:0]=3'b110)
+// surface at 0x30000000 -- NOT 0x20000000, see SURF-004: MiSTer's own
+// system video scaler uses physical byte 0x20000000 as its RAM base, a real
+// collision hit and fixed by the MiSTer-Raster project on this exact
+// platform. 0x30000000 is the address that project has used safely across
+// many hardware-accepted releases since.
+assign FB_EN = draw_done_ever;
+assign FB_FORMAT = {2'b00, 3'b110};
+assign FB_WIDTH = 12'd64;
+assign FB_HEIGHT = 12'd64;
+assign FB_BASE = 32'h3000_0000;
+assign FB_STRIDE = 14'd256;
+assign FB_FORCE_BLANK = ~draw_done_ever;
 
 ///////////////////////   ENGINE   /////////////////////////////////
 
-// cmd_valid tied to 0 means CMDQ never leaves IDLE, so BLIT can never
-// assert wr_en -- no trigger exists for it yet. See the file header.
+// CMDQ-002: the "Draw Test" OSD button fires this one hardcoded SOLID_FILL
+// command through CMDQ -- stands in for LINK's not-yet-built ring buffer.
+// opcode=1 (SOLID_FILL), dst_addr=0x30000000 (SURF-004), dst_pitch=256
+// (64px*4B), width=64, height=64, color=0x00FF00FF (magenta). Field order
+// matches CMDQ-001's slot layout; must stay identical to
+// sim/cmd_trigger_dut.sv's default, which is what `make sim` actually
+// verifies.
+localparam logic [255:0] DRAW_TEST_COMMAND = {
+	32'd0, 32'd0, 32'h00FF00FF, 32'd64, 32'd64, 32'd256, 32'h30000000, 32'd1
+};
+
 wire        engine_cmd_ready;
 wire [31:0] engine_wr_addr, engine_wr_data;
 wire        engine_wr_en, engine_wr_ready;
 wire        blit_start, blit_busy, blit_done;
 wire [31:0] blit_dst_addr, blit_color;
 wire [15:0] blit_dst_pitch, blit_width, blit_height;
+wire        draw_trigger_busy, draw_done;
+wire [255:0] draw_cmd_data;
+wire         draw_cmd_valid;
+
+cmd_test_trigger #(
+	.COMMAND(DRAW_TEST_COMMAND)
+) draw_test
+(
+	.clk      (clk_sys),
+	.reset    (reset),
+	.trigger  (status[2]),
+	.busy     (draw_trigger_busy),
+	.done     (draw_done),
+	.cmd_data (draw_cmd_data),
+	.cmd_valid(draw_cmd_valid),
+	.cmd_ready(engine_cmd_ready)
+);
 
 cmdq cmdq
 (
 	.clk           (clk_sys),
 	.reset         (reset),
-	.cmd_valid     (1'b0),
-	.cmd_data      (256'd0),
+	.cmd_valid     (draw_cmd_valid),
+	.cmd_data      (draw_cmd_data),
 	.cmd_ready     (engine_cmd_ready),
 	.blit_start    (blit_start),
 	.blit_dst_addr (blit_dst_addr),
@@ -143,22 +187,22 @@ blit blit
 );
 
 // Deliberately, individually triggered by one OSD button -- writes ONE
-// fixed word to physical 0x20000000 per press and stops. See the file
-// header and DDR-002.
+// fixed word to physical 0x30000000 per press and stops. See the file
+// header, DDR-002 and SURF-004.
 //
-// MARKER_ADDR is 0x20000000, not 0 -- DDR-002's first hardware test showed
-// DDRAM_ADDR is an unwindowed, direct physical word address (word N = byte
-// N*8 in the same address space as everything else), not an offset into
-// SURF-003's reserved window as originally assumed. Address 0 on that first
-// test therefore landed at physical 0x00000000 -- the base of live Linux
-// memory -- not inside the safe window. 0x20000000/8 = word address
-// 0x04000000 is the corrected, actually-safe target.
+// MARKER_ADDR history: originally 0, which DDR-002's first hardware test
+// showed lands at physical 0x00000000 (DDRAM_ADDR is an unwindowed, direct
+// physical word address, not offset from any window). Moved to
+// 0x20000000, which DDR-002 then confirmed correctly -- but SURF-004 later
+// found 0x20000000 itself collides with MiSTer's own system video scaler.
+// Now 0x30000000, the address MiSTer-Raster's own hardware-validated fix
+// uses for exactly this reason.
 wire        marker_busy, marker_done;
 wire [31:0] marker_wr_addr, marker_wr_data;
 wire        marker_wr_en, marker_wr_ready;
 
 ddram_marker_test #(
-	.MARKER_ADDR(32'h2000_0000)
+	.MARKER_ADDR(32'h3000_0000)
 ) marker_test
 (
 	.clk     (clk_sys),
@@ -214,6 +258,7 @@ localparam CONF_STR = {
 	"R[0],Reset and close OSD;",
 	"-;",
 	"T[1],Marker Test -- writes ONE word to phys 0x20000000!;",
+	"T[2],Draw Test -- fills a 64x64 test surface via CMDQ/BLIT;",
 	"v,0;",
 	"V,v",`BUILD_DATE
 };
@@ -251,7 +296,17 @@ pll pll
 wire reset = RESET | status[0] | buttons[1];
 
 assign CLK_VIDEO = clk_sys;
-assign CE_PIXEL = 0;
+
+// A permanently-0 CE_PIXEL was never correct -- the framework's OSD
+// compositing/mixer chain (sys/sys_top.v, sys/video_mixer.sv) uses it
+// regardless of whether the picture comes from MISTER_FB or a core's own
+// raster output; ascal generates its own independent output timing for the
+// FB path, but the downstream mixer still needs a real toggling enable.
+// Exact rate is not yet tuned to any specific video mode -- a modest
+// divide-by-4 of clk_sys, the same shape virtually every MiSTer core uses.
+reg [1:0] ce_div;
+always @(posedge clk_sys) ce_div <= ce_div + 2'd1;
+assign CE_PIXEL = (ce_div == 2'd0);
 
 assign VGA_DE = 0;
 assign VGA_HS = 0;

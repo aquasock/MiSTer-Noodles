@@ -1,10 +1,10 @@
 // Checks that a write the FPGA makes (via rtl/ddram_marker_test.sv, fired
-// once from the "Marker Test" OSD option, targeting DDRAM_ADDR=0x20000000/8)
-// lands at Linux physical address 0x20000000 -- the start of the
-// FPGA-reserved DDR3 window Main_MiSTer's own source uses (SURF-003).
-// DDR-002 already confirmed DDRAM_ADDR is a direct, unwindowed physical
-// word address; this just confirms the deployed build's marker target
-// wasn't fat-fingered back to 0x0.
+// once from the "Marker Test" OSD option, targeting DDRAM_ADDR=0x30000000/8)
+// lands at Linux physical address 0x30000000 -- inside the FPGA-reserved
+// DDR3 window (SURF-003) but away from 0x20000000 itself, which SURF-004
+// found collides with MiSTer's own system video scaler. DDR-002 already
+// confirmed DDRAM_ADDR is a direct, unwindowed physical word address; this
+// just confirms the deployed build's marker target wasn't fat-fingered.
 //
 // Usage, as root on the MiSTer, after pressing "Marker Test" in the OSD:
 //   ./ddram_marker_check
@@ -18,7 +18,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-#define FPGA_MEM_BASE 0x20000000u
+#define FPGA_MEM_BASE 0x30000000u
 #define MARKER_VALUE  0xDEADBEEFu
 
 int main(void) {
@@ -46,7 +46,7 @@ int main(void) {
     } else {
         printf("NO MATCH (expected 0x%08x): either \"Marker Test\" wasn't pressed yet on the\n"
                "loaded core, or the deployed build's marker target has drifted from\n"
-               "0x20000000 -- run ddram-marker-scan to find out where it actually went.\n",
+               "0x30000000 -- run ddram-marker-scan to find out where it actually went.\n",
                MARKER_VALUE);
     }
 
