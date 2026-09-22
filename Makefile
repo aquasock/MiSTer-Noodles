@@ -103,8 +103,8 @@ $(ARMMARKER): tools/ddram_marker_check.c | build/arm
 $(ARMSCAN): tools/ddram_marker_scan.c | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ $<
 
-$(ARMLINK): tools/link_push.c | build/arm
-	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ $<
+$(ARMLINK): tools/link_push.c lib/noodles_link.c lib/noodles_link.h | build/arm
+	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ tools/link_push.c lib/noodles_link.c
 
 $(ARMSLOTDUMP): tools/link_slot_dump.c | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ $<
@@ -123,8 +123,8 @@ $(HOSTMARKER): tools/ddram_marker_check.c | build/host
 $(HOSTSCAN): tools/ddram_marker_scan.c | build/host
 	$(HOSTCC) $(CFLAGS) -o $@ $<
 
-$(HOSTLINK): tools/link_push.c | build/host
-	$(HOSTCC) $(CFLAGS) -o $@ $<
+$(HOSTLINK): tools/link_push.c lib/noodles_link.c lib/noodles_link.h | build/host
+	$(HOSTCC) $(CFLAGS) -o $@ tools/link_push.c lib/noodles_link.c
 
 $(HOSTSLOTDUMP): tools/link_slot_dump.c | build/host
 	$(HOSTCC) $(CFLAGS) -o $@ $<
