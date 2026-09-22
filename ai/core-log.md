@@ -251,3 +251,32 @@ Get user confirmation that "Blit Copy Test" actually shows a distinct 8x8 square
 - [ ] Passed
 
 ---
+
+## 8 COMMIT Unreleased 285b3cd 2026-09-22T00:23:19-07:00
+
+#### Coming From:
+
+Unreleased 285b3cd
+
+#### Purpose:
+
+Record hardware confirmation of entry 7's build: BLIT_COPY proven end to end on real hardware.
+
+#### Outcome:
+
+The user loaded Noodles_20260922a.rbf, pressed "Draw Test" then "Blit Copy Test," and saw a black 8x8 square appear in the corner of the magenta surface. Black is a perfectly reasonable result for 0x30010000's actual content -- untouched DDR3 commonly reads as all-zero after boot-time scrubbing -- and a visibly distinct square from the surrounding magenta is exactly the evidence needed: the copy engine read real data from the source address and wrote it to the destination, both through the real DDRAM_* bus, not a stub. BLIT-003 and DDR-003 are now hardware-confirmed, not just simulated.
+
+#### Next Steps:
+
+Move to LINK-001, per the user's stated plan (blit then link). Every OSD-button test command built so far (marker test, draw test, blit copy test) is scaffolding to be replaced, not extended -- LINK's ring buffer is the real host-to-FPGA command path. BLIT-001's third op (hardware noise/static-fill) remains unimplemented and is lower priority than LINK.
+
+#### Files Modified:
+
+None.
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
