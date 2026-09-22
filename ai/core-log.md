@@ -815,3 +815,37 @@ The other gap sprite_demo's entry flagged -- BLIT_COPY's ~8.2-cycles/pixel throu
 - [x] Passed
 
 ---
+
+## 25 COMMIT Unreleased 7f1e84e 2026-09-22T10:18:47-07:00
+
+#### Coming From:
+
+Unreleased 821c046
+
+#### Purpose:
+
+The user asked directly: "can we load 10 at once and bounce them all around to stress the core?" -- combine LINK-006's asset loading with sprite_demo's animate/composite/present pattern, but with N independent sprites per frame instead of one, to find out whether the ring/fence/present hold up under real multi-sprite load, not just a single sprite.
+
+#### Outcome:
+
+Factored the BMP-parsing logic out of tools/load_bmp.c into tools/bmp_loader.h (noodles_bmp_load(), returning a tightly-packed width*4-pitch buffer) once a second real caller needed it, rather than duplicating it -- load_bmp.c itself was rewritten onto the shared loader as part of this, switching its own source pitch from the wasteful full-screen NOODLES_BUFFER_PITCH to a tight width*4. Generated a real checked-in sprite asset (assets/sprite.bmp, a 48x48 magenta-colorkeyed smiley, PIL-generated) since none existed yet, and added tools/stress_demo.c: uploads that sprite once via noodles_link_upload(), then runs the same clear/composite/present loop as sprite_demo.c but for N independently-bouncing instances per frame (random start position and velocity, same edge-bounce logic as sprite_demo, each BLIT_COPY_KEY individually fence-waited like every other demo here). Verified on real hardware at count=10, run=15s: 30.0fps steady average across the whole run (451, then 450, then 450 frames across three separate runs), no ring-full errors, no fence timeouts, no degradation over time. The very first invocation (immediately after the fresh deploy, before any rerun) showed a real visual artifact the user described as NES-style sprite flicker not tied to a scanline -- ghosted images at sprites' previous positions -- which did NOT reproduce on two subsequent reruns of the identical binary with identical arguments, confirmed clean both by console output and by the user watching live, and a third run the user screen-recorded played perfectly throughout. No code change was made in response since nothing about the artifact was pinned down: it could be a one-off from whatever state (front_sel, FB_EN gating, or the capture device's own signal resync) existed at the exact moment of that first run, immediately following a redeploy. Recorded here as an observed-but-unreproduced anomaly, not a fixed bug -- if it recurs, the next useful step is a hardware capture synced to command timestamps, not another guess.
+
+#### Next Steps:
+
+10 sprites did not stress the core in any measurable way (rock-solid 30fps, no backpressure) -- the natural next step if more stress is wanted is a higher count (the tool supports up to MAX_SPRITES=64 without code changes) to find where, if anywhere, this design's serial fence-wait-per-command pattern actually becomes a bottleneck. The one-off flicker artifact remains unexplained; watch for it recurring under any condition (higher count, longer run, right after a fresh core load/redeploy specifically) since a reproducible trigger would be the first real lead.
+
+#### Files Modified:
+
+- tools/bmp_loader.h
+- tools/load_bmp.c
+- tools/stress_demo.c
+- assets/sprite.bmp
+- Makefile
+- scripts/deploy.sh
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
