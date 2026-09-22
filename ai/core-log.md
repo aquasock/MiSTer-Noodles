@@ -383,3 +383,32 @@ LINK-001 is now proven working end to end on real hardware, not just on paper --
 - [x] Passed
 
 ---
+
+## 12 COMMIT Unreleased 3929105 2026-09-22T06:48:57-07:00
+
+#### Coming From:
+
+Unreleased 6d1396a
+
+#### Purpose:
+
+Investigate and fix the previous entry's open loose end: a link-pushed cyan fill displayed as yellow despite correct raw bytes in memory.
+
+#### Outcome:
+
+Not a data-path bug -- BLIT-002 already establishes `color` is written verbatim with no format conversion, so the question was purely which byte order FB_FORMAT expects. emu_ports.vh documents FB_FORMAT bit[4]=0 as RGB byte order in ascending memory address, and since both DDRAM_DIN and the ARM host's uint32_t are little-endian, that puts R in the LOW byte of the 32-bit color word, not the high byte a 0xRRGGBB hex literal suggests. tools/link_push.c's cyan (0x0000FFFF) was R=0xFF,G=0xFF,B=0x00 under this order -- yellow, exactly what was observed. The OSD "Draw Test" button's magenta (0x00FF00FF) never exposed this because R=0xFF,G=0x00,B=0xFF is palindromic under an R/B swap, so it displays correctly regardless of which byte-order assumption is used -- pure coincidence, not evidence the format was ever verified. Documented as BLIT-004 in core-reference.md. Corrected link_push.c's cyan to 0x00FFFF00 and verified on real hardware: memory readback shows the corrected raw bytes and the user confirmed the display now shows true cyan.
+
+#### Next Steps:
+
+LINK-001 is now proven correct end to end on real hardware, including color, closing out the loose end from the previous entry. No host-side color-packing helper exists yet (BLIT-004's consequence) -- worth adding once a real host-side API/library is started, so callers stop needing to hand-derive this byte order themselves. BLIT-001's third op (hardware noise/static-fill) and that host-side API/library remain the two open items from BLIT-001's original milestone.
+
+#### Files Modified:
+
+- tools/link_push.c
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
