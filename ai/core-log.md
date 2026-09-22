@@ -946,3 +946,32 @@ None.
 - [ ] Passed
 
 ---
+
+## 29 COMMIT Unreleased d3cb985 2026-09-22T11:02:00-07:00
+
+#### Coming From:
+
+Unreleased d3cb985
+
+#### Purpose:
+
+Repeat the 64-sprite stress workload after the user visually confirmed the first run was clean.
+
+#### Outcome:
+
+The MiSTer completed `stress-demo assets/sprite.bmp 64 15` again, rendering 216 frames in 15.0 seconds at 14.4 fps average. The process reported no ring-full or fence-timeout errors. The user had already confirmed the preceding run looked good; this repeat produced the same stable console behavior, with no new visual issue reported.
+
+#### Next Steps:
+
+Treat the three-edge PRESENT margin as hardware-validated for the tested 64-sprite workload unless a later run reproduces ghosting. Continue with broader workload or feature work as directed.
+
+#### Files Modified:
+
+None.
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
