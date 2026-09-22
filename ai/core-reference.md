@@ -81,7 +81,7 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 | What are SOLID_FILL's exact fields? | BLIT component records | BLIT-002 |
 | How does a write actually reach DDRAM_*? | DDR component records | DDR-001 |
 | What DDR3 addresses are actually safe to write? | SURF component records | SURF-003 |
-| Does DDRAM_ADDR=0 really mean physical 0x20000000? | DDR component records | DDR-002 (unconfirmed) |
+| What does a DDRAM_ADDR value actually target physically? | DDR component records | DDR-002 |
 
 ---
 
@@ -99,7 +99,7 @@ CMDQ-001: "v1 command slot is a fixed 32-byte / 256-bit record, plain uint32 fie
 BLIT-002: "SOLID_FILL (opcode 1) fields: dst_addr, dst_pitch, width, height, color"
 DDR-001: "DDRAM_* is a standard Avalon-MM master port; v1 adapter does single-word (burstcnt=1), write-only, 4-byte-into-8-byte-word transfers"
 SURF-003: "Safe FPGA-writable DDR3 window is Linux physical [0x20000000,0x40000000); the first 32MB of it is Main_MiSTer's own 'Core's fb' region"
-DDR-002 (PROPOSED): "DDRAM_ADDR is assumed window-relative (word 0 = physical 0x20000000) -- inferred, not confirmed, needs an empirical hardware check"
+DDR-002: "DDRAM_ADDR is a direct, unwindowed physical word address (word N = byte N*8) -- confirmed on hardware; word 0 is physical 0x0, not 0x20000000"
 ```
 
 ---
@@ -209,11 +209,11 @@ DDR-002 (PROPOSED): "DDRAM_ADDR is assumed window-relative (word 0 = physical 0x
 - record_id: DDR-002
   kind: INTERFACE
   component_id: DDR
-  title: "DDRAM_ADDR zero-point (unconfirmed, needs empirical check)"
-  status: PROPOSED
+  title: "DDRAM_ADDR is a direct, unwindowed physical word address"
+  status: DECIDED
   decided_date: 2026-09-21
-  decision: "Working assumption: DDRAM_ADDR is window-relative, not an absolute Linux physical address -- DDRAM_ADDR word 0 is assumed to correspond to Linux physical byte address 0x20000000, the start of the FPGA-reserved window (SURF-003). This follows from Main_MiSTer's fpga_mem(x) = 0x20000000 | (x & 0x1FFFFFFF) masking pattern and standard Altera/Intel F2H SDRAM bridge behavior, but is not confirmed by anything readable in our vendored sys/sysmem.sv, which is Qsys-generated boilerplate with no base-address documentation."
-  consequence: "This record stays PROPOSED, not DECIDED, on purpose: per this file's own operating rules, a PROPOSED record is not binding, and nothing should be implemented against a guessed physical address without checking it first. The planned check is the smallest possible real-hardware test: from the FPGA, write one recognizable marker word to DDRAM_ADDR=0 (via the DDR-001 adapter); from Linux userspace, read physical address 0x20000000 via /dev/mem and confirm the marker landed there. Only after that passes should this be promoted to DECIDED and used for an actual surface or the LINK ring buffer."
+  decision: "Checked on real hardware (QMTech MiSTer, DE10-Nano-compatible). The original working assumption -- that DDRAM_ADDR was window-relative, with word 0 corresponding to physical 0x20000000 -- was wrong. rtl/ddram_marker_test.sv, first built targeting DDRAM_ADDR=0 (byte address 0x0), wrote its marker word to physical 0x00000000: confirmed by a full 1GB /dev/mem scan (tools/ddram_marker_scan.c) that found the marker at exactly phys 0x0 and nowhere in the SURF-003 reserved region. DDRAM_ADDR is a direct physical word address with no base offset or window translation: word N corresponds to byte address N*8 in the same address space Linux itself uses, including its own live RAM. Main_MiSTer's fpga_mem(x) = 0x20000000 | (x & 0x1FFFFFFF) macro is purely a software convention for Main's own use of the reserved region -- it does not describe any hardware bridge address translation, and does not apply to a core's own DDRAM_ADDR value."
+  consequence: "DDR-001's adapter math (word_addr = byte_addr>>3) was already correct and needed no change -- what was wrong was treating an address like 0x0 as safely inside the reserved window. Every address a core puts on DDRAM_ADDR, directly or via BLIT-002's dst_addr, must be a real absolute physical address already known to be safe (i.e. inside SURF-003's [0x20000000,0x40000000) window, and preferably its 0x20000000-0x21FFFFFF Core's-fb sub-window) -- there is no offset that makes a small or zero-based address safe. ddram_marker_test now targets 0x20000000 directly and this has not yet been re-verified against real hardware (next step). One stray word was written to live physical address 0x0 during this discovery; the system remained stable, but a reboot before relying on this build for anything else is the clean way to clear that uncertainty rather than assume it was harmless."
 ```
 
 ---
