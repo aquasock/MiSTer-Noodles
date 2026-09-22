@@ -144,3 +144,42 @@ Reboot the board to clear the stray word at physical 0x0 before relying on it fo
 - [x] Passed
 
 ---
+
+## 5 COMMIT Unreleased 1c39477 2026-09-21T23:59:22-07:00
+
+#### Coming From:
+
+Unreleased 2fee444
+
+#### Purpose:
+
+Wire a real SOLID_FILL command end to end (CMDQ->BLIT->DDRAM_*->MISTER_FB->HDMI) and check a sibling project for platform knowledge before deploying.
+
+#### Outcome:
+
+Added rtl/cmd_test_trigger.sv (CMDQ-002), a generic one-shot "present this fixed command to CMDQ until accepted" module, same shape as ddram_marker_test but through CMDQ's real command interface. Wired it into Noodles.sv as a new "Draw Test" OSD button firing one hardcoded SOLID_FILL (64x64, 32bpp, magenta) through CMDQ->BLIT, with FB_EN/FB_BASE/FB_STRIDE/FB_WIDTH/FB_HEIGHT/FB_FORMAT (OUT-003) scanning that surface out via MISTER_FB, gated on a "draw ever completed" latch. Also fixed CE_PIXEL, previously hardcoded to 0 -- checking sys/sys_top.v and sys/video_mixer.sv showed the framework's OSD/mixer chain needs a real toggling pixel enable regardless of whether the picture comes from MISTER_FB or a core's own raster output. Verified the whole trigger-to-pixel path in simulation first (sim/tb_cmd_trigger.cpp); `make sim` passes all four testbenches.
+
+Before deploying, per the user's request checked aquasock/MiSTer-Raster -- a much more mature sibling MiSTer core, same author, with real hardware-accepted releases -- rather than re-deriving platform facts from scratch. That project's own hardware history (commit 53f322905, "Move H262 frame store out of scaler DDR region") showed physical byte address 0x20000000, which SURF-003 had treated as the safe start of the FPGA-reserved window and which this project had already used for the marker test, the Draw Test surface, and FB_BASE, actually collides with MiSTer's own system video scaler RAM base. That project moved to 0x30000000 after hitting this collision and has used it safely across many subsequent hardware-accepted releases (through v0.9.5). Recorded as SURF-004 and fixed everywhere in this project before the corrected build was ever deployed with FB_EN enabled -- the earlier build with FB_EN=0 (entry 4) never actually displayed anything from 0x20000000, so no visible corruption occurred, but continuing to that address would have been a real risk once FB_EN went live. `quartus_sh --flow compile Noodles` completed cleanly with the corrected addresses: 0 errors, 57 warnings, and unlike the previous two builds, no "Timing requirements not met" critical warning this time (all positive slack, including the pll_hdmi internal node that was marginally negative before). Deployed to the QMTech MiSTer as Noodles_20260921d.rbf; not yet tested on hardware.
+
+Saved two persistent-memory records (mister-raster-sibling, check-prior-projects-first) so future sessions check the user's prior MiSTer projects for hard-won platform facts before re-deriving them.
+
+#### Next Steps:
+
+Load Noodles_20260921d.rbf, press "Draw Test," and confirm both that the disk LED / screen actually shows a 64x64 magenta square (proving MISTER_FB scan-out works end to end for the first time) and that ddram_marker_check (now targeting 0x30000000) reports PASS. If the picture doesn't appear, the likely suspects are CE_PIXEL's untuned rate, FB_STRIDE/FB_FORMAT byte-order assumptions (never confirmed against MISTER_FB specifically, only inferred from the old /dev/fb0 spike work), or video mode negotiation. LINK-001's ring buffer remains unbuilt; CMDQ-002's hardcoded command is still the only way to reach CMDQ.
+
+#### Files Modified:
+
+- Noodles.sv
+- rtl/cmd_test_trigger.sv
+- sim/cmd_trigger_dut.sv
+- sim/tb_cmd_trigger.cpp
+- tools/ddram_marker_check.c
+- Makefile
+- files.qip
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
