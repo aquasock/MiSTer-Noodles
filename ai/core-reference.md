@@ -82,8 +82,8 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 | How does a write actually reach DDRAM_*? | DDR component records | DDR-001 |
 | What DDR3 addresses are actually safe to write? | SURF component records | SURF-003 |
 | What does a DDRAM_ADDR value actually target physically? | DDR component records | DDR-002 |
-| Where does today's hardcoded test command come from? | CMDQ component records | CMDQ-002 |
-| What surface does the OSD's Draw Test actually display? | OUT component records | OUT-003 |
+| What surface does MISTER_FB scan-out actually display? | OUT component records | OUT-003 |
+| Why were the OSD test buttons (Marker/Draw/Blit Copy Test) removed? | CMDQ component records | CMDQ-003 |
 | Is any address inside SURF-003's window actually unsafe? | SURF component records | SURF-004 |
 | What are BLIT_COPY's exact fields? | BLIT component records | BLIT-003 |
 | How does a read reach DDRAM_*? | DDR component records | DDR-003 |
@@ -112,8 +112,9 @@ BLIT-002: "SOLID_FILL (opcode 1) fields: dst_addr, dst_pitch, width, height, col
 DDR-001: "DDRAM_* is a standard Avalon-MM master port; v1 adapter does single-word (burstcnt=1), write-only, 4-byte-into-8-byte-word transfers"
 SURF-003: "Safe FPGA-writable DDR3 window is Linux physical [0x20000000,0x40000000); the first 32MB of it is Main_MiSTer's own 'Core's fb' region"
 DDR-002: "DDRAM_ADDR is a direct, unwindowed physical word address (word N = byte N*8) -- confirmed on hardware; word 0 is physical 0x0, not 0x20000000"
-CMDQ-002: "'Draw Test' OSD button fires one hardcoded SOLID_FILL through CMDQ -- temporary stand-in for LINK's ring buffer"
-OUT-003: "Draw Test's surface: 64x64, 32bpp, pitch 256, base 0x30000000; FB_EN gated on the fill having completed at least once"
+CMDQ-002: "SUPERSEDED by CMDQ-003 -- 'Draw Test' OSD button and rtl/cmd_test_trigger.sv no longer exist"
+OUT-003: "MISTER_FB surface: 64x64, 32bpp, pitch 256, base 0x30000000; FB_EN gated on a fill having completed at least once"
+CMDQ-003: "OSD test scaffolding (Marker/Draw/Blit Copy Test) retired once LINK-004/LINK-005 proved the real ring-buffer path end to end; CMDQ's command front end is link_ring-only again"
 SURF-004: "Physical 0x20000000 itself is unsafe -- MiSTer's own system video scaler uses it; 0x30000000 is the proven-safe address (per aquasock/MiSTer-Raster's hardware-learned fix)"
 BLIT-003: "BLIT_COPY (opcode 2) reuses dst_addr/pitch/width/height, adds src_addr (word 6) and src_pitch (word 7) where SOLID_FILL had reserved words"
 DDR-003: "Generic single-outstanding read port added to the DDRAM adapter (ddram_write_adapter.sv -> ddram_adapter.sv), muxed onto the shared physical bus alongside the write port"
@@ -243,10 +244,20 @@ LINK-005: "rtl/link_fence.sv publishes a monotonic done-count to DRAM (HEADER_AD
   kind: INTERFACE
   component_id: CMDQ
   title: "Draw Test hardcoded command"
-  status: DECIDED
+  status: SUPERSEDED
   decided_date: 2026-09-21
   decision: "The OSD's 'Draw Test' button (Noodles.sv, rtl/cmd_test_trigger.sv) fires exactly one fixed SOLID_FILL command through CMDQ on each press, encoded per CMDQ-001's slot layout: opcode=1, dst_addr=0x30000000, dst_pitch=256, width=64, height=64, color=0x00FF00FF (magenta), reserved words zero. cmd_test_trigger is a generic one-shot 'present this fixed command to CMDQ until accepted' module, not specific to this command."
   consequence: "This is explicitly a stand-in for LINK-001's still-unbuilt ring buffer, not a step toward it architecturally -- CMDQ has no other way to receive a command today. Every field is hardcoded in Noodles.sv; changing what gets drawn means editing and resynthesizing the core, not sending a different command. sim/cmd_trigger_dut.sv and sim/tb_cmd_trigger.cpp verify this exact command end to end (CMDQ decode through BLIT's pixel writes) and must be kept identical to Noodles.sv's DRAW_TEST_COMMAND if either changes."
+
+- record_id: CMDQ-003
+  kind: ARCHITECTURE
+  component_id: CMDQ
+  title: "OSD test scaffolding retired -- CMDQ-002's rtl/cmd_test_trigger.sv, ddram_marker_test.sv, and their OSD buttons removed"
+  status: DECIDED
+  decided_date: 2026-09-22
+  supersedes: "CMDQ-002"
+  decision: "Marker Test (status[1]), Draw Test (status[2], CMDQ-002), and Blit Copy Test (status[3]) -- the three OSD buttons that fed CMDQ hardcoded commands or wrote a fixed diagnostic word directly -- are removed, along with rtl/cmd_test_trigger.sv, rtl/ddram_marker_test.sv, tools/ddram_marker_check.c, tools/ddram_marker_scan.c, and the OSD CONF_STR entries. They existed as a known-good fallback while LINK-001's ring buffer was still being brought up and hardware-debugged (DDR-002 through DDR-005's history in core-log.md); LINK-004/LINK-005 proved the real host-driven path correct end to end on real hardware, including completion signaling, removing the reason to keep a second, hardcoded command path alive. CMDQ's command front end is back down to a single real client (link_ring, no mux); the write-port mux dropped from 5-way to 4-way (blit_copy, link_ring, blit, link_fence). sim/cmd_trigger_dut.sv+tb_cmd_trigger.cpp were deleted outright (sim/tb_solid_fill.cpp already covers CMDQ+BLIT without a trigger wrapper); sim/marker_test_dut.sv+tb_marker_test.cpp were deleted outright (nothing else tested ddram_marker_test specifically, and it no longer exists to test). sim/cmd_copy_trigger_dut.sv+tb_cmd_copy_trigger.cpp were NOT simply deleted -- they were the only coverage for CMDQ+blit_copy+ddram_adapter's read AND write sides together, a real, still-live path (BLIT_COPY remains a real opcode LINK can dispatch); replaced with sim/engine_copy_dut.sv+tb_blit_copy.cpp, same coverage, cmd_valid/cmd_data driven directly by the testbench instead of through cmd_test_trigger."
+  consequence: "OUT-003's surface parameters (64x64, 32bpp, base 0x30000000, stride 256, FB_EN gated on a fill having completed) remain accurate and unchanged -- only its prose's 'Draw Test' framing is now historical, since FB_EN's gate was already keyed on blit_done generically (any command source), not on that specific button, before this record. CMDQ-002 is SUPERSEDED by this record: the module and command it named no longer exist in the build. Anyone needing a quick, no-host, single-button way to fire a test command no longer has one -- link-push (LINK-004) is now the only way to exercise CMDQ, which is by design (it is the real path), not an accidental loss of a debugging convenience nothing currently needs."
 
 - record_id: OUT-003
   kind: INTERFACE
