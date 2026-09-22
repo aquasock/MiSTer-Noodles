@@ -7,7 +7,7 @@ module present_dut #(
     input  logic reset,
 
     input  logic fb_vbl,
-    input  logic fb_base_latched,
+    input  logic fb_retired,
 
     input  logic start,
     output logic busy,
@@ -20,7 +20,7 @@ module present_dut #(
         .clk      (clk),
         .reset    (reset),
         .fb_vbl   (fb_vbl),
-        .fb_base_latched(fb_base_latched),
+        .fb_retired(fb_retired),
         .start    (start),
         .busy     (busy),
         .done     (done),

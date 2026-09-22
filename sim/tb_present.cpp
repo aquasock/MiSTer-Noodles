@@ -50,7 +50,7 @@ int main(int argc, char **argv) {
 
     dut.reset = 1;
     dut.fb_vbl = 0;
-    dut.fb_base_latched = 0;
+    dut.fb_retired = 0;
     dut.start = 0;
     for (int i = 0; i < 4; ++i) tb.Tick();
     dut.reset = 0;
@@ -70,7 +70,7 @@ int main(int argc, char **argv) {
     if (dut.front_sel != 1 || !dut.busy || dut.done)
         return Fail("flip did not wait for a fresh vblank edge");
 
-    dut.fb_base_latched = 1;
+    dut.fb_retired = 1;
     tb.Tick();
     if (!dut.busy || dut.done)
         return Fail("acknowledgement completed PRESENT too early");
@@ -93,7 +93,7 @@ int main(int argc, char **argv) {
     tb.Tick();
     if (dut.front_sel != 0 || !dut.busy)
         return Fail("second flip did not occur at the fresh edge");
-    dut.fb_base_latched = 0;
+    dut.fb_retired = 0;
     tb.Tick();
     FreshVbl(tb, dut);
     tb.Tick();
@@ -115,7 +115,7 @@ int main(int argc, char **argv) {
         tb.Tick();
         if (dut.front_sel != expected)
             return Fail("repeated flip toggled incorrectly");
-        dut.fb_base_latched = dut.fb_base_latched ? 0 : 1;
+        dut.fb_retired = dut.fb_retired ? 0 : 1;
         tb.Tick();
         if (i & 1) FreshVbl(tb, dut);
         else {

@@ -101,7 +101,7 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 | How does real image/asset data (not a SOLID_FILL rect) get into a surface? | LINK component records | LINK-006 |
 | Is it safe to pipeline several commands (including a PRESENT) without fence-waiting each one individually? | LINK component records | LINK-007 |
 | Does OUT-004's single-vblank-edge PRESENT margin actually hold under heavy per-frame draw load? | OUT component records | OUT-005 |
-| When is a PRESENT framebuffer base actually accepted by scanout? | OUT component records | OUT-006 |
+| When has ascal reached its output-domain frame retirement boundary? | OUT component records | OUT-007 |
 
 ---
 
@@ -123,7 +123,8 @@ DDR-002: "DDRAM_ADDR is a direct, unwindowed physical word address (word N = byt
 CMDQ-002: "SUPERSEDED by CMDQ-003 -- 'Draw Test' OSD button and rtl/cmd_test_trigger.sv no longer exist"
 OUT-003: "MISTER_FB surface: 64x64, 32bpp, pitch 256, base 0x30000000; FB_EN gated on a fill having completed at least once"
 OUT-004: "PRESENT (opcode 4): vblank-synced double-buffer flip between BUFFER_A (0x30000000) and BUFFER_B (0x30008000); noodles_link_back_buffer()/noodles_present_and_wait() are the host API"
-OUT-006: "PRESENT waits for ascal's synchronized framebuffer-base-latched acknowledgement, then one additional fresh FB_VBL edge before completing"
+OUT-006: "SUPERSEDED by OUT-007 -- base-latch acknowledgement alone was insufficient"
+OUT-007: "PRESENT waits for ascal's synchronized output-domain retirement acknowledgement, then one additional fresh FB_VBL edge before completing"
 CMDQ-003: "OSD test scaffolding (Marker/Draw/Blit Copy Test) retired once LINK-004/LINK-005 proved the real ring-buffer path end to end; CMDQ's command front end is link_ring-only again"
 SURF-004: "Physical 0x20000000 itself is unsafe -- MiSTer's own system video scaler uses it; 0x30000000 is the proven-safe address (per aquasock/MiSTer-Raster's hardware-learned fix)"
 SURF-005: "Surfaces sized up to 640x480 (StarCraft/OpenBW-scale, was 64x64 bring-up size); BUFFER_A/BUFFER_B moved to 2MB-aligned slots at 0x31000000/0x31200000"
@@ -447,6 +448,16 @@ OUT-005: "OUT-004's single-fresh-vblank-edge PRESENT margin is not reliably suff
   supersedes: "OUT-005"
   decision: "rtl/present.sv still flips front_sel only on a fresh rising edge of FB_VBL, but it no longer treats a fixed count of FB_VBL edges as evidence that scanout accepted the new surface. sys/ascal.vhd toggles an acknowledgement in its avl_clk domain at the existing assignment of avl_o_offset0/avl_o_offset1 from o_fb_base; sys/sys_top.v synchronizes that toggle into clk_sys and exposes it to the core as FB_BASE_LATCHED. PRESENT captures the acknowledgement level when it starts, waits for the level to change after flipping front_sel, and then waits one additional fresh FB_VBL edge before pulsing done. The post-ack edge is retained because accepting the new base and retiring all outstanding output-buffer activity are distinct events until hardware proves otherwise."
   consequence: "The host-side PRESENT fence now cannot complete before the scaler has observed the requested framebuffer base, eliminating the previous fixed-delay assumption while retaining a conservative two-buffer design. FB_EN remains asserted from reset while FB_FORCE_BLANK keeps output hidden until the first PRESENT completes; this is required because ascal only latches o_fb_base while framebuffer mode is enabled. FB_BASE_LATCHED is a synchronized toggle-level indication, not a pulse; future scanout handshakes must preserve the same phase-safe cross-clock pattern. Simulation must cover acknowledgement before and after FB_VBL, arbitrary phase, and repeated toggles; hardware validation remains required to determine whether the one-edge post-ack margin is sufficient for OUT-005's ghosting workload."
+
+- record_id: OUT-007
+  kind: INTERFACE
+  component_id: OUT
+  title: "PRESENT waits for ascal's output-domain frame retirement acknowledgement"
+  status: DECIDED
+  decided_date: 2026-09-22
+  supersedes: "OUT-006"
+  decision: "sys/ascal.vhd exports a toggle from its output-clock process at the internal output VS boundary where buffered scanout advances to the next frame. sys/sys_top.v synchronizes that toggle into clk_sys and exposes it as FB_RETIRED. rtl/present.sv flips front_sel only on a fresh FB_VBL edge, captures the synchronized retirement level, waits for it to change, and then waits one additional fresh FB_VBL edge before pulsing done. The earlier FB_BASE_LATCHED acknowledgement remains wired for diagnosis but is not used for PRESENT completion."
+  consequence: "PRESENT completion now follows ascal's output-domain frame boundary rather than the Avalon-domain base-latch event, while retaining two-buffer operation and a conservative post-ack interval. FB_RETIRED is a synchronized toggle-level indication, not a pulse. Hardware validation remains required to determine whether this output-domain boundary is late enough to prevent OUT-005 ghosting."
 
 ## 6. Record template
 

@@ -254,6 +254,9 @@ ENTITY ascal IS
 
 		-- Toggles when the Avalon-domain reader latches o_fb_base.
 		o_fb_base_latched  : OUT   std_logic := '0';
+		-- Toggles at the output-domain VS boundary where buffered scanout
+		-- advances to the next frame.
+		o_fb_retired       : OUT std_logic := '0';
 
 		------------------------------------
 		reset_na           : IN    std_logic
@@ -1158,9 +1161,11 @@ ARCHITECTURE rtl OF ascal IS
 	END FUNCTION;
 
 	SIGNAL fb_base_latched_toggle : std_logic := '0';
+	SIGNAL fb_retired_toggle : std_logic := '0';
 BEGIN
 
 	o_fb_base_latched <= fb_base_latched_toggle;
+	o_fb_retired <= fb_retired_toggle;
 
 	-----------------------------------------------------------------------------
 	i_reset_na<='0'   WHEN reset_na='0' ELSE '1' WHEN rising_edge(i_clk);
@@ -1892,6 +1897,7 @@ BEGIN
 			o_readdataack_sync<='0';
 			o_readdataack_sync2<='0';
 			o_readdataack<='0';
+			fb_retired_toggle<='0';
 
 		ELSIF rising_edge(o_clk) THEN
 			------------------------------------------------------
@@ -1949,6 +1955,9 @@ BEGIN
 			IF o_vsv(1)='1' AND o_vsv(0)='0' AND o_bufup0='1' THEN
 				o_obuf0<=buf_next(o_obuf0,o_ibuf0,o_freeze);
 				o_bufup0<='0';
+			END IF;
+			IF o_vsv(1)='1' AND o_vsv(0)='0' THEN
+				fb_retired_toggle<=NOT fb_retired_toggle;
 			END IF;
 			IF o_vsv(1)='1' AND o_vsv(0)='0' AND o_bufup1='1' THEN
 				o_obuf1<=buf_next(o_obuf1,o_ibuf1,o_freeze);

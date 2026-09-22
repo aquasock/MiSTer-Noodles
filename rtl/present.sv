@@ -17,15 +17,15 @@
 // the double-buffer address layout.
 
 module present #(
-    // Keep one fresh video boundary after ascal accepts the new base so
-    // outstanding output-buffer activity has a complete interval to retire.
+    // Keep one fresh video boundary after ascal reports its output-domain
+    // retirement boundary so outstanding activity has an extra interval.
     parameter integer RETIRE_VBLANKS = 1
 ) (
     input  logic clk,
     input  logic reset,
 
     input  logic fb_vbl,
-    input  logic fb_base_latched,
+    input  logic fb_retired,
 
     input  logic start,
     output logic busy,
@@ -61,7 +61,7 @@ module present #(
                     if (start) begin
                         busy      <= 1'b1;
                         vbl_count <= 0;
-                        ack_baseline <= fb_base_latched;
+                        ack_baseline <= fb_retired;
                         state     <= WAIT_VBL;
                     end
                 end
@@ -80,7 +80,7 @@ module present #(
                 end
 
                 WAIT_ACK: begin
-                    if (fb_base_latched != ack_baseline) begin
+                    if (fb_retired != ack_baseline) begin
                         vbl_count <= 0;
                         if (RETIRE_VBLANKS == 0)
                             state <= FINISH;

@@ -213,7 +213,7 @@ present present
 	.clk       (clk_sys),
 	.reset     (reset),
 	.fb_vbl    (FB_VBL),
-	.fb_base_latched(FB_BASE_LATCHED),
+	.fb_retired(FB_RETIRED),
 	.start     (present_start),
 	.busy      (present_busy),
 	.done      (present_done),

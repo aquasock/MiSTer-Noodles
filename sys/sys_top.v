@@ -703,7 +703,9 @@ wire [127:0] vbuf_writedata;
 wire  [15:0] vbuf_byteenable;
 wire         vbuf_write;
 wire         ascal_fb_base_latched;
+wire         ascal_fb_retired;
 reg  [1:0]   ascal_fb_base_latched_sync;
+reg  [1:0]   ascal_fb_retired_sync;
 
 wire  [23:0] hdmi_data;
 wire         hdmi_vs, hdmi_hs, hdmi_de, hdmi_vbl, hdmi_brd;
@@ -829,7 +831,8 @@ wire         bob_deint;
 		.avl_write        (vbuf_write),
 		.avl_read         (vbuf_read),
 		.avl_byteenable   (vbuf_byteenable),
-		.o_fb_base_latched(ascal_fb_base_latched)
+		.o_fb_base_latched(ascal_fb_base_latched),
+		.o_fb_retired     (ascal_fb_retired)
 	);
 `endif
 
@@ -838,6 +841,13 @@ always @(posedge clk_sys or posedge reset) begin
 		ascal_fb_base_latched_sync <= 2'b00;
 	else
 		ascal_fb_base_latched_sync <= {ascal_fb_base_latched_sync[0], ascal_fb_base_latched};
+end
+
+always @(posedge clk_sys or posedge reset) begin
+	if (reset)
+		ascal_fb_retired_sync <= 2'b00;
+	else
+		ascal_fb_retired_sync <= {ascal_fb_retired_sync[0], ascal_fb_retired};
 end
 
 reg        LFB_EN     = 0;
@@ -1806,6 +1816,7 @@ emu emu
 	.FB_STRIDE(fb_stride),
 	.FB_VBL(fb_vbl),
 	.FB_BASE_LATCHED(ascal_fb_base_latched_sync[1]),
+	.FB_RETIRED(ascal_fb_retired_sync[1]),
 	.FB_LL(lowlat),
 	.FB_FORCE_BLANK(fb_force_blank),
 
