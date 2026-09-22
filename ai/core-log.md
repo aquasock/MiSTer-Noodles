@@ -887,7 +887,7 @@ No fix for OUT-005 is implemented. Two directions identified but not attempted, 
 
 ---
 
-## 27 COMMIT Unreleased ??? 2026-09-22T12:00:00-07:00
+## 27 COMMIT Unreleased d3cb985 2026-09-22T12:00:00-07:00
 
 #### Coming From:
 
@@ -899,24 +899,22 @@ Measure and mitigate OUT-005 by adding a conservative multi-vblank retirement ma
 
 #### Outcome:
 
-The current handoff identifies a real timing gap between `rtl/present.sv`'s `FB_VBL` edge and ascal's independently synchronized `avl_o_vs`/internal output-buffer retirement. This cycle will first preserve that diagnosis, then change PRESENT to wait for multiple fresh `FB_VBL` rising edges after a flip request before reporting completion, with the edge count explicit and covered by the existing PRESENT testbench. The resulting core and stress toolchain will be rebuilt, deployed, and exercised at the previously problematic sprite counts so the mitigation is judged by repeated hardware runs rather than by simulation alone.
+The current handoff identified a real timing gap between `rtl/present.sv`'s `FB_VBL` edge and ascal's independently synchronized `avl_o_vs`/internal output-buffer retirement. PRESENT now has an explicit three-edge retirement margin: the first fresh `FB_VBL` edge flips `front_sel`, while completion remains busy until two additional fresh edges have passed. The isolated PRESENT testbench covers delayed completion, starts during an already-high blank, and repeated flips. `make sim` passes all six testbenches, and `quartus_sh --flow compile Noodles` completes with 0 errors; the fitted design reports 6,319 ALMs and no timing violation.
 
 #### Next Steps:
 
-Inspect the ascal configuration and PRESENT timing assumptions, implement the smallest parameterized multi-edge wait that fits the existing interface, extend `sim/tb_present.cpp` for delayed completion and repeated flips, run `make sim` and a full Quartus compile, then deploy and repeat the 10/30/50/64-sprite stress cases. If ghosting persists, leave the mitigation evidence in the log and continue from the ascal `avl_o_vs`/buffer state path instead of treating the heuristic as a proof of correctness.
+Deploy the built core and rerun `stress-demo` at 10, 30, 50, and 64 sprites for repeated 15-second trials, recording frame rate and whether ghosting recurs. If the artifact persists, retain this margin as an empirical result and continue from ascal's `avl_o_vs`/output-buffer state path instead of treating the heuristic as a proof of correctness.
 
 #### Files Modified:
 
 - rtl/present.sv
+- rtl/present.sv
 - sim/present_dut.sv
 - sim/tb_present.cpp
-- Noodles.sv
-- Makefile
-- scripts/deploy.sh
 
 #### Status:
 
-- [ ] Built
+- [x] Built
 - [ ] Passed
 
 ---
