@@ -19,10 +19,12 @@ ARMTOG      := build/arm/fbterm-toggle
 ARMLINK     := build/arm/link-push
 ARMSLOTDUMP := build/arm/link-slot-dump
 ARMMEMSCAN  := build/arm/mem-scan
+ARMCOPYPUSH := build/arm/blit-copy-push
 HOSTBIN     := build/host/misterpet-spike
 HOSTLINK    := build/host/link-push
 HOSTSLOTDUMP:= build/host/link-slot-dump
 HOSTMEMSCAN := build/host/mem-scan
+HOSTCOPYPUSH:= build/host/blit-copy-push
 
 HOST    ?= mister.local
 DEST    ?= /media/fat/pet
@@ -38,7 +40,7 @@ LINK_FENCE_SIM    := $(SIM_DIR)/link_fence/Vlink_fence_dut
 
 .PHONY: all host deploy sim clean
 
-all: $(ARMBIN) $(ARMTOG) $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN)
+all: $(ARMBIN) $(ARMTOG) $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH)
 
 sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(BLIT_COPY_SIM) $(LINK_RING_SIM) $(LINK_FENCE_SIM)
 	$(SOLID_FILL_SIM)
@@ -94,7 +96,10 @@ $(ARMSLOTDUMP): tools/link_slot_dump.c | build/arm
 $(ARMMEMSCAN): tools/mem_scan.c | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ $<
 
-host: $(HOSTBIN) $(HOSTLINK) $(HOSTSLOTDUMP) $(HOSTMEMSCAN)
+$(ARMCOPYPUSH): tools/blit_copy_push.c lib/noodles_link.c lib/noodles_link.h | build/arm
+	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ tools/blit_copy_push.c lib/noodles_link.c
+
+host: $(HOSTBIN) $(HOSTLINK) $(HOSTSLOTDUMP) $(HOSTMEMSCAN) $(HOSTCOPYPUSH)
 
 $(HOSTBIN): src/spike_fb.c | build/host
 	$(HOSTCC) $(CFLAGS) -o $@ $< $(LDLIBS)
@@ -107,6 +112,9 @@ $(HOSTSLOTDUMP): tools/link_slot_dump.c | build/host
 
 $(HOSTMEMSCAN): tools/mem_scan.c | build/host
 	$(HOSTCC) $(CFLAGS) -o $@ $<
+
+$(HOSTCOPYPUSH): tools/blit_copy_push.c lib/noodles_link.c lib/noodles_link.h | build/host
+	$(HOSTCC) $(CFLAGS) -o $@ tools/blit_copy_push.c lib/noodles_link.c
 
 build/arm build/host:
 	mkdir -p $@
