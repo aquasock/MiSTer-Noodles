@@ -1,8 +1,9 @@
-# MiSTer-Pet
+# MiSTer-Noodles
 #
 #   make            cross-build the spike for the MiSTer (static, armv7/Cortex-A9)
 #   make host       native build for poking at it on the desktop (--fake/--ppm)
 #   make deploy HOST=192.168.1.x
+#   make sim        Verilator simulation of the RTL engine (CMDQ/BLIT)
 #   make clean
 
 CROSS   ?= arm-linux-gnueabihf-
@@ -20,9 +21,27 @@ HOSTBIN := build/host/misterpet-spike
 HOST    ?= mister.local
 DEST    ?= /media/fat/pet
 
-.PHONY: all host deploy clean
+VERILATOR      ?= verilator
+SIM_DIR        := build/sim
+SIM_TOP        := engine_dut
+SIM_SOURCES    := rtl/cmdq.sv rtl/blit.sv sim/engine_dut.sv
+SIM_TB         := sim/tb_solid_fill.cpp
+SOLID_FILL_SIM := $(SIM_DIR)/V$(SIM_TOP)
+
+.PHONY: all host deploy sim clean
 
 all: $(ARMBIN) $(ARMTOG)
+
+sim: $(SOLID_FILL_SIM)
+	$<
+
+$(SOLID_FILL_SIM): $(SIM_SOURCES) $(SIM_TB) | $(SIM_DIR)
+	$(VERILATOR) --cc --exe --build --Mdir $(SIM_DIR) --top-module $(SIM_TOP) \
+		--Wall --Wno-fatal -Wno-DECLFILENAME \
+		$(SIM_SOURCES) $(SIM_TB) -o V$(SIM_TOP)
+
+$(SIM_DIR):
+	mkdir -p $@
 
 $(ARMBIN): src/spike_fb.c | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ $< $(LDLIBS)
