@@ -42,7 +42,7 @@ Wire CMDQ and BLIT into Noodles.sv for real: design and implement the DDRAM writ
 
 ---
 
-## 34 COMMIT Unreleased ??? 2026-09-22T12:48:15-07:00
+## 34 COMMIT Unreleased 8ff9bfa 2026-09-22T12:48:15-07:00
 
 #### Coming From:
 
@@ -54,11 +54,11 @@ Replace the insufficient ascal framebuffer-base acknowledgement with an output-d
 
 #### Outcome:
 
-The implementation will export a toggle from ascal's output-clock frame-boundary logic when its internal output-buffer state reaches the next output VS transition, synchronize that toggle into `clk_sys`, and have PRESENT wait for this retirement event after flipping the front buffer. The existing base-latch acknowledgement will remain available for diagnosis but will no longer define PRESENT completion. Simulation will cover arbitrary phase relationships and repeated flips, followed by a full Quartus compile and repeated 64-sprite hardware trials.
+Exported a toggle from ascal's output-clock process at its internal output VS boundary, synchronized that toggle into `clk_sys` as `FB_RETIRED`, and changed PRESENT to wait for this output-domain event after flipping the front buffer. The earlier base-latch acknowledgement remains wired for diagnosis but no longer defines PRESENT completion. `make sim` passes all six testbenches and `quartus_sh --flow compile Noodles` completes with 0 errors and 57 warnings.
 
 #### Next Steps:
 
-Implement the output-domain toggle and synchronized core signal without adding a third surface, validate all simulations and Quartus timing, deploy the corrected RBF, and determine whether the 64-sprite ghosting frequency changes.
+Deploy the corrected RBF and repeat the 64-sprite workload for multiple trials, recording whether the output-domain retirement event changes the ghosting frequency.
 
 #### Files Modified:
 
@@ -72,7 +72,7 @@ Implement the output-domain toggle and synchronized core signal without adding a
 
 #### Status:
 
-- [ ] Built
+- [x] Built
 - [ ] Passed
 
 ---
