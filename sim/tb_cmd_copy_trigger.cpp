@@ -65,14 +65,19 @@ public:
         }
 
         if (we) {
-            uint64_t &word = words_[addr];
-            if (words_.find(addr) == words_.end()) word = kFillPattern;
+            // NOTE: words_[addr] would insert a zero-valued entry via
+            // operator[] before a find()==end() check could ever see a
+            // missing key -- look up first, so a first-touch word starts
+            // from the fill pattern rather than silent zero.
+            auto it = words_.find(addr);
+            uint64_t word = (it != words_.end()) ? it->second : kFillPattern;
             for (int i = 0; i < 8; ++i) {
                 if (be & (1u << i)) {
                     uint64_t byte = (din >> (8 * i)) & 0xFF;
                     word = (word & ~(0xFFull << (8 * i))) | (byte << (8 * i));
                 }
             }
+            words_[addr] = word;
             ++writes_;
         } else if (rd && pending_read_countdown_ == 0 && !dout_ready_) {
             pending_read_addr_ = addr;

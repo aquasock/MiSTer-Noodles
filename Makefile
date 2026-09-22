@@ -18,9 +18,11 @@ ARMBIN     := build/arm/misterpet-spike
 ARMTOG     := build/arm/fbterm-toggle
 ARMMARKER  := build/arm/ddram-marker-check
 ARMSCAN    := build/arm/ddram-marker-scan
+ARMLINK    := build/arm/link-push
 HOSTBIN    := build/host/misterpet-spike
 HOSTMARKER := build/host/ddram-marker-check
 HOSTSCAN   := build/host/ddram-marker-scan
+HOSTLINK   := build/host/link-push
 
 HOST    ?= mister.local
 DEST    ?= /media/fat/pet
@@ -33,17 +35,19 @@ DDRAM_ADAPTER_SIM := $(SIM_DIR)/ddram_adapter/Vengine_ddram_dut
 MARKER_TEST_SIM   := $(SIM_DIR)/marker_test/Vmarker_test_dut
 CMD_TRIGGER_SIM   := $(SIM_DIR)/cmd_trigger/Vcmd_trigger_dut
 CMD_COPY_SIM      := $(SIM_DIR)/cmd_copy_trigger/Vcmd_copy_trigger_dut
+LINK_RING_SIM     := $(SIM_DIR)/link_ring/Vlink_ring_dut
 
 .PHONY: all host deploy sim clean
 
-all: $(ARMBIN) $(ARMTOG) $(ARMMARKER) $(ARMSCAN)
+all: $(ARMBIN) $(ARMTOG) $(ARMMARKER) $(ARMSCAN) $(ARMLINK)
 
-sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(MARKER_TEST_SIM) $(CMD_TRIGGER_SIM) $(CMD_COPY_SIM)
+sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(MARKER_TEST_SIM) $(CMD_TRIGGER_SIM) $(CMD_COPY_SIM) $(LINK_RING_SIM)
 	$(SOLID_FILL_SIM)
 	$(DDRAM_ADAPTER_SIM)
 	$(MARKER_TEST_SIM)
 	$(CMD_TRIGGER_SIM)
 	$(CMD_COPY_SIM)
+	$(LINK_RING_SIM)
 
 $(SOLID_FILL_SIM): rtl/cmdq.sv rtl/blit.sv sim/engine_dut.sv sim/tb_solid_fill.cpp
 	@mkdir -p $(dir $@)
@@ -75,6 +79,12 @@ $(CMD_COPY_SIM): rtl/cmd_test_trigger.sv rtl/cmdq.sv rtl/blit.sv rtl/blit_copy.s
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
 		rtl/cmd_test_trigger.sv rtl/cmdq.sv rtl/blit.sv rtl/blit_copy.sv rtl/ddram_adapter.sv sim/cmd_copy_trigger_dut.sv sim/tb_cmd_copy_trigger.cpp -o $(notdir $@)
 
+$(LINK_RING_SIM): rtl/link_ring.sv rtl/ddram_adapter.sv sim/link_ring_dut.sv sim/tb_link_ring.cpp
+	@mkdir -p $(dir $@)
+	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module link_ring_dut \
+		--Wall --Wno-fatal -Wno-DECLFILENAME \
+		rtl/link_ring.sv rtl/ddram_adapter.sv sim/link_ring_dut.sv sim/tb_link_ring.cpp -o $(notdir $@)
+
 $(ARMBIN): src/spike_fb.c | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ $< $(LDLIBS)
 	@$(CROSS)size $@ 2>/dev/null || true
@@ -89,7 +99,10 @@ $(ARMMARKER): tools/ddram_marker_check.c | build/arm
 $(ARMSCAN): tools/ddram_marker_scan.c | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ $<
 
-host: $(HOSTBIN) $(HOSTMARKER) $(HOSTSCAN)
+$(ARMLINK): tools/link_push.c | build/arm
+	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ $<
+
+host: $(HOSTBIN) $(HOSTMARKER) $(HOSTSCAN) $(HOSTLINK)
 
 $(HOSTBIN): src/spike_fb.c | build/host
 	$(HOSTCC) $(CFLAGS) -o $@ $< $(LDLIBS)
@@ -98,6 +111,9 @@ $(HOSTMARKER): tools/ddram_marker_check.c | build/host
 	$(HOSTCC) $(CFLAGS) -o $@ $<
 
 $(HOSTSCAN): tools/ddram_marker_scan.c | build/host
+	$(HOSTCC) $(CFLAGS) -o $@ $<
+
+$(HOSTLINK): tools/link_push.c | build/host
 	$(HOSTCC) $(CFLAGS) -o $@ $<
 
 build/arm build/host:

@@ -53,13 +53,19 @@
 // surface's corner -- the source is never pre-filled by anything, so its
 // content is whatever happened to already be in that DDR3, not a chosen
 // color; the point is proving the real read+write path on hardware, not a
-// pretty picture. Both buttons feed the same single CMDQ instance through a
-// small priority mux, since only one hardcoded test command exists per
-// button and CMDQ only accepts one at a time anyway.
-// This is all still hardcoded test commands, not LINK's ring buffer -- see
-// LINK-001's still-open consequence and CMDQ-002.
-// See OUT-001/OUT-002, SURF-001/SURF-002/SURF-003/SURF-004, BLIT-002/BLIT-003
-// and DDR-001/DDR-002/DDR-003.
+// pretty picture.
+//
+// LINK-001's ring buffer (rtl/link_ring.sv, LINK-002/LINK-003) is now wired
+// in too: tools/link_push.c is a real ARM host process pushing a SOLID_FILL
+// (cyan, distinct from the OSD "Draw Test" button's magenta) directly into
+// shared DDR3, no OSD involved. All three command sources -- draw_test,
+// copy_test, and link_ring -- feed the same single CMDQ instance through a
+// small priority mux, since CMDQ only accepts one command at a time anyway;
+// the OSD buttons stay in place as a known-good fallback during LINK's own
+// bring-up, per the plan recorded in core-log.md, not because they're
+// meant to coexist with LINK long-term.
+// See OUT-001/OUT-002, SURF-001/SURF-002/SURF-003/SURF-004, BLIT-002/BLIT-003,
+// LINK-001/LINK-002/LINK-003 and DDR-001/DDR-002/DDR-003/DDR-004.
 
 module emu
 (
@@ -191,13 +197,46 @@ cmd_test_trigger #(
 	.cmd_ready(copytest_cmd_ready)
 );
 
-// Priority mux feeding CMDQ's single command front end -- stands in for
-// LINK's not-yet-built ring buffer, which will replace this entirely.
+// LINK-001/LINK-002/LINK-003: the real host-driven command path.
+// tools/link_push.c writes commands and write_ptr directly into shared
+// DDR3; link_ring polls and fetches them here. Only polls/fetches while
+// CMDQ is idle (cmd_ready), which is what keeps its reads from ever
+// contending with blit_copy's (DDR-003's single-outstanding assumption).
+wire         link_cmd_valid, link_cmd_ready;
+wire [255:0] link_cmd_data;
+wire [31:0]  link_wr_addr, link_wr_data, link_rd_addr, link_rd_data;
+wire         link_wr_en, link_wr_ready, link_rd_en, link_rd_ready, link_rd_valid;
+
+link_ring link_ring
+(
+	.clk      (clk_sys),
+	.reset    (reset),
+	.rd_addr  (link_rd_addr),
+	.rd_en    (link_rd_en),
+	.rd_ready (link_rd_ready),
+	.rd_data  (link_rd_data),
+	.rd_valid (link_rd_valid),
+	.wr_addr  (link_wr_addr),
+	.wr_data  (link_wr_data),
+	.wr_en    (link_wr_en),
+	.wr_ready (link_wr_ready),
+	.cmd_data (link_cmd_data),
+	.cmd_valid(link_cmd_valid),
+	.cmd_ready(link_cmd_ready)
+);
+
+// Priority mux feeding CMDQ's single command front end. The OSD buttons
+// stay ahead of link_ring in priority purely so a deliberate button press
+// during bring-up is never starved by a busy ring -- arbitrary otherwise,
+// since a human pressing a button and a host process pushing to the ring
+// are never expected to race in practice.
 wire        cmd_sel_draw = draw_cmd_valid;
-wire [255:0] engine_cmd_data  = cmd_sel_draw ? draw_cmd_data  : copytest_cmd_data;
-wire         engine_cmd_valid = cmd_sel_draw ? draw_cmd_valid : copytest_cmd_valid;
-assign draw_cmd_ready     = cmd_sel_draw ? engine_cmd_ready : 1'b0;
-assign copytest_cmd_ready = cmd_sel_draw ? 1'b0             : engine_cmd_ready;
+wire        cmd_sel_copytest = !cmd_sel_draw && copytest_cmd_valid;
+wire [255:0] engine_cmd_data  = cmd_sel_draw ? draw_cmd_data  : cmd_sel_copytest ? copytest_cmd_data  : link_cmd_data;
+wire         engine_cmd_valid = cmd_sel_draw ? draw_cmd_valid : cmd_sel_copytest ? copytest_cmd_valid : link_cmd_valid;
+assign draw_cmd_ready     = cmd_sel_draw     ? engine_cmd_ready : 1'b0;
+assign copytest_cmd_ready = cmd_sel_copytest ? engine_cmd_ready : 1'b0;
+assign link_cmd_ready     = (cmd_sel_draw || cmd_sel_copytest) ? 1'b0 : engine_cmd_ready;
 
 cmdq cmdq
 (
@@ -297,22 +336,41 @@ ddram_marker_test #(
 	.wr_ready(marker_wr_ready)
 );
 
-// 3-way priority mux into the DDRAM adapter's write port: marker_test,
-// blit's fill writes, blit_copy's copy writes. None of the three can ever
-// be simultaneously active by construction of CMDQ's own single-engine
-// dispatch (blit and blit_copy) plus marker_test's independent OSD trigger,
-// so this priority is a tie-breaker, not load-bearing arbitration -- same
-// caveat as DDR-003's read/write mux. blit_copy is also the adapter's only
-// reader; its read port connects straight through, no mux needed.
+// 4-way priority mux into the DDRAM adapter's write port: marker_test,
+// blit's fill writes, blit_copy's copy writes, link_ring's writes (INIT +
+// read_ptr writeback). None can ever be simultaneously active by
+// construction of CMDQ's own single-engine dispatch (blit and blit_copy),
+// marker_test's independent OSD trigger, and link_ring only writing while
+// idle/finishing a dispatch, so this priority is a tie-breaker, not
+// load-bearing arbitration -- same caveat as DDR-003's read/write mux.
 wire        wr_sel_marker = marker_wr_en;
 wire        wr_sel_copy   = !wr_sel_marker && copy_wr_en;
-wire [31:0] adapter_wr_addr = wr_sel_marker ? marker_wr_addr : wr_sel_copy ? copy_wr_addr : engine_wr_addr;
-wire [31:0] adapter_wr_data = wr_sel_marker ? marker_wr_data : wr_sel_copy ? copy_wr_data : engine_wr_data;
-wire        adapter_wr_en   = wr_sel_marker ? marker_wr_en   : wr_sel_copy ? copy_wr_en   : engine_wr_en;
+wire        wr_sel_link   = !wr_sel_marker && !wr_sel_copy && link_wr_en;
+wire [31:0] adapter_wr_addr = wr_sel_marker ? marker_wr_addr : wr_sel_copy ? copy_wr_addr : wr_sel_link ? link_wr_addr : engine_wr_addr;
+wire [31:0] adapter_wr_data = wr_sel_marker ? marker_wr_data : wr_sel_copy ? copy_wr_data : wr_sel_link ? link_wr_data : engine_wr_data;
+wire        adapter_wr_en   = wr_sel_marker ? marker_wr_en   : wr_sel_copy ? copy_wr_en   : wr_sel_link ? link_wr_en   : engine_wr_en;
 wire        adapter_wr_ready;
 assign marker_wr_ready = wr_sel_marker ? adapter_wr_ready : 1'b0;
 assign copy_wr_ready   = wr_sel_copy   ? adapter_wr_ready : 1'b0;
-assign engine_wr_ready = (wr_sel_marker || wr_sel_copy) ? 1'b0 : adapter_wr_ready;
+assign link_wr_ready   = wr_sel_link   ? adapter_wr_ready : 1'b0;
+assign engine_wr_ready = (wr_sel_marker || wr_sel_copy || wr_sel_link) ? 1'b0 : adapter_wr_ready;
+
+// 2-way priority mux into the DDRAM adapter's read port: blit_copy and
+// link_ring. LINK-003's cmd_ready gating keeps these from ever actually
+// contending (see DDR-003's consequence) -- response data/valid are simply
+// broadcast to both, since only whichever one is actually mid-request will
+// be in a state that reacts to it.
+wire        rd_sel_link = link_rd_en;
+wire [31:0] adapter_rd_addr = rd_sel_link ? link_rd_addr : copy_rd_addr;
+wire        adapter_rd_en   = rd_sel_link ? link_rd_en   : copy_rd_en;
+wire        adapter_rd_ready, adapter_rd_valid;
+wire [31:0] adapter_rd_data;
+assign link_rd_ready = rd_sel_link ? adapter_rd_ready : 1'b0;
+assign copy_rd_ready = rd_sel_link ? 1'b0 : adapter_rd_ready;
+assign link_rd_data  = adapter_rd_data;
+assign link_rd_valid = adapter_rd_valid;
+assign copy_rd_data  = adapter_rd_data;
+assign copy_rd_valid = adapter_rd_valid;
 
 ddram_adapter ddram_adapter
 (
@@ -321,11 +379,11 @@ ddram_adapter ddram_adapter
 	.wr_data         (adapter_wr_data),
 	.wr_en           (adapter_wr_en),
 	.wr_ready        (adapter_wr_ready),
-	.rd_addr         (copy_rd_addr),
-	.rd_en           (copy_rd_en),
-	.rd_ready        (copy_rd_ready),
-	.rd_data         (copy_rd_data),
-	.rd_valid        (copy_rd_valid),
+	.rd_addr         (adapter_rd_addr),
+	.rd_en           (adapter_rd_en),
+	.rd_ready        (adapter_rd_ready),
+	.rd_data         (adapter_rd_data),
+	.rd_valid        (adapter_rd_valid),
 	.ddram_clk       (DDRAM_CLK),
 	.ddram_busy      (DDRAM_BUSY),
 	.ddram_burstcnt  (DDRAM_BURSTCNT),
