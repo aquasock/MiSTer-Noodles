@@ -87,6 +87,9 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 | Is any address inside SURF-003's window actually unsafe? | SURF component records | SURF-004 |
 | What are BLIT_COPY's exact fields? | BLIT component records | BLIT-003 |
 | How does a read reach DDRAM_*? | DDR component records | DDR-003 |
+| Does polling for LINK steal video scan-out bandwidth? | DDR component records | DDR-004 |
+| Where does the ring buffer live in memory? | LINK component records | LINK-002 |
+| How does CMDQ actually find and fetch a queued command? | LINK component records | LINK-003 |
 
 ---
 
@@ -110,6 +113,9 @@ OUT-003: "Draw Test's surface: 64x64, 32bpp, pitch 256, base 0x30000000; FB_EN g
 SURF-004: "Physical 0x20000000 itself is unsafe -- MiSTer's own system video scaler uses it; 0x30000000 is the proven-safe address (per aquasock/MiSTer-Raster's hardware-learned fix)"
 BLIT-003: "BLIT_COPY (opcode 2) reuses dst_addr/pitch/width/height, adds src_addr (word 6) and src_pitch (word 7) where SOLID_FILL had reserved words"
 DDR-003: "Generic single-outstanding read port added to the DDRAM adapter (ddram_write_adapter.sv -> ddram_adapter.sv), muxed onto the shared physical bus alongside the write port"
+DDR-004: "DDRAM_* (ram1) is a separate physical F2H SDRAM port from MISTER_FB's own vbuf scan-out port and ram2's audio/palette port -- no Avalon-level contention"
+LINK-002: "64-slot ring buffer at phys 0x30020000 (header: write_ptr +0, read_ptr +8) / 0x30021000 (slots), reusing CMDQ-001's 32-byte slot format"
+LINK-003: "link_ring.sv polls write_ptr only while CMDQ is idle (cmd_ready), fetches via 8 sequential reads, dispatches to CMDQ, writes back read_ptr"
 ```
 
 ---
@@ -269,6 +275,33 @@ DDR-003: "Generic single-outstanding read port added to the DDRAM adapter (ddram
   decided_date: 2026-09-22
   decision: "rtl/ddram_write_adapter.sv is replaced by rtl/ddram_adapter.sv, which adds a generic read port (rd_addr/rd_en/rd_ready/rd_data/rd_valid) alongside the existing write port, muxed onto the one physical DDRAM_* bus (ADDR/BURSTCNT/RD/WE are shared fields -- only one of a read or a write request can be presented in a given cycle). Read protocol mirrors the write side's Avalon-MM shape: rd_en/rd_addr held stable until rd_ready is sampled (word_addr=byte_addr>>3, same as writes), then some cycles later rd_valid pulses once with rd_data holding the selected 32-bit half of the 64-bit DDRAM_DOUT word (addr[2] selects half, same convention as DDRAM_BE on writes). This is deliberately simpler than aquasock/MiSTer-Raster's DDR arbiter (mpeg2_h262_ddram_arbiter.sv), which tracks multiple concurrent outstanding reads per client with a descriptor queue tagging each response's owner -- this project has exactly one reader (BLIT-003's copy engine) with exactly one outstanding read at a time, so no response-ownership tracking is needed yet."
   consequence: "If a second concurrent DDR3 reader is ever added (e.g. a future BLIT op needing two source reads in flight, or LINK's CMDQ polling running concurrently with an in-flight BLIT read), this single-outstanding assumption breaks and the descriptor-queue pattern from MiSTer-Raster's arbiter is the proven design to reuse rather than re-deriving response-ownership tracking from scratch. Read and write requests share one mux into the adapter; today's only clients (marker_test, blit's fill writes, blit_copy's read+write) never contend for it simultaneously by construction of their own FSMs, not because the adapter enforces it -- a future concurrent client would need real arbitration, not just another mux input."
+
+- record_id: DDR-004
+  kind: INTERFACE
+  component_id: DDR
+  title: "DDRAM_* is a separate physical port from MISTER_FB's own scan-out"
+  status: DECIDED
+  decided_date: 2026-09-22
+  decision: "Read from sys/sys_top.v: sysmem_lite exposes three independent physical DDR3 access ports -- ram1 (64-bit, mapped straight to the core's own DDRAM_* pins, what this project's adapter uses), ram2 (64-bit, driven by ddr_svc for ALSA audio and the 8bpp palette), and vbuf (128-bit, wider, feeding the framework's own HDMI framebuffer/ascal scan-out). These are separate Avalon-MM ports into the memory controller, not one shared bus this core's own reads/writes contend with at the Avalon level."
+  consequence: "CMDQ's future ring-buffer polling (LINK-003) does not need to be throttled to protect MISTER_FB's video scan-out bandwidth -- they are different hardware ports, so the earlier concern (raised before OUT-002/OUT-003 were ever tested) does not apply. The underlying DDR3 chip and its controller are still shared by all three ports plus HPS/Linux, so this is not a claim of zero contention at the physical DRAM level, only that there is no Avalon-level arbitration this core's polling needs to cooperate with."
+
+- record_id: LINK-002
+  kind: INTERFACE
+  component_id: LINK
+  title: "Ring buffer memory layout"
+  status: DECIDED
+  decided_date: 2026-09-22
+  decision: "LINK-001's command list is a fixed-size ring of 64 slots, each CMDQ-001's existing 32-byte format, unchanged. Header at physical 0x30020000: write_ptr (host-writable slot index, FPGA reads) at +0, read_ptr (FPGA-writable slot index, host reads) at +8 -- a different 8-byte DDRAM word than write_ptr, so the two fields never share a read/write hazard on the same word. The slot array starts at physical 0x30021000 (4KB past the header, generously aligned), 64*32=2048 bytes. Both pointers are plain slot indices 0-63, wrapping mod 64 (a power of 2, so wrap is a 6-bit mask, not a compare)."
+  consequence: "A full ring (write_ptr catching up to read_ptr from behind) is indistinguishable from an empty one (write_ptr==read_ptr) with this design -- the host must never let write_ptr advance to equal read_ptr except when genuinely empty, i.e. must track its own count and stop producing at 63 outstanding commands, not 64. No record yet defines the host-side API that enforces this; it is a real constraint whoever writes that API must respect, not something CMDQ can protect itself against from the FPGA side."
+
+- record_id: LINK-003
+  kind: INTERFACE
+  component_id: LINK
+  title: "Polling and dispatch protocol"
+  status: DECIDED
+  decided_date: 2026-09-22
+  decision: "rtl/link_ring.sv polls LINK-002's write_ptr continuously whenever CMDQ's cmd_ready is asserted (CMDQ idle, no engine busy) -- DDR-004 established this does not contend with video scan-out bandwidth, so no throttling is applied. On a mismatch with its own registered read_ptr, it fetches the 32-byte slot at slot_base+read_ptr*32 via 8 sequential 4-byte reads over the shared read port (DDR-003), presents the assembled 256 bits to CMDQ exactly as the OSD test triggers already do (cmd_valid/cmd_data, held until cmd_ready), then on acceptance advances read_ptr mod 64 and writes it back to the header before resuming polling. Gating all polling/fetching on cmd_ready -- not polling continuously regardless of engine state -- keeps DDR-003's single-outstanding-read assumption valid without needing real arbitration between blit_copy's reads and link_ring's: whenever an engine is busy (mid-copy, potentially mid-read), cmd_ready is low and link_ring issues no reads at all."
+  consequence: "This makes LINK's own dispatch latency depend entirely on how long the currently-running command takes -- a slow future BLIT op would delay LINK from even checking for the next command, not just from starting it. That is an acceptable v1 tradeoff for a simple, provably-non-contending design, not a permanent limit; a future record can revisit if it becomes a real bottleneck. rtl/link_ring.sv is CMDQ's third command source, joining (and eventually replacing) the OSD test triggers through the same priority-mux pattern already used for draw_test/copy_test."
 ```
 
 ---
