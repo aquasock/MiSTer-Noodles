@@ -431,7 +431,8 @@ ARCHITECTURE rtl OF ascal IS
 	SIGNAL avl_reset_na : std_logic;
 	SIGNAL avl_o_vs_sync,avl_o_vs : std_logic;
 	SIGNAL avl_fb_ena : std_logic;
-	SIGNAL avl_read_busy,avl_retire_pending : std_logic;
+	SIGNAL avl_read_outstanding : natural RANGE 0 TO 8;
+	SIGNAL avl_retire_pending : std_logic;
 	SIGNAL fb_boundary_toggle,fb_boundary_sync,fb_boundary_sync2,fb_boundary_seen : std_logic;
 
 	FUNCTION buf_next(a,b : natural RANGE 0 TO 2; freeze : std_logic := '0') RETURN natural IS
@@ -1695,7 +1696,7 @@ BEGIN
 			avl_readack<='0';
 			fb_base_latched_toggle<='0';
 			fb_retired_toggle<='0';
-			avl_read_busy<='0';
+			avl_read_outstanding<=0;
 			avl_retire_pending<='0';
 			fb_boundary_sync<='0';
 			fb_boundary_sync2<='0';
@@ -1707,7 +1708,7 @@ BEGIN
 			IF fb_boundary_sync2/=fb_boundary_seen THEN
 				fb_boundary_seen<=fb_boundary_sync2;
 				avl_retire_pending<='1';
-			ELSIF avl_retire_pending='1' AND avl_read_busy='0' AND
+			ELSIF avl_retire_pending='1' AND avl_read_outstanding=0 AND
 					avl_readdatavalid='0' AND avl_state=sIDLE THEN
 				fb_retired_toggle<=NOT fb_retired_toggle;
 				avl_retire_pending<='0';
@@ -1811,7 +1812,6 @@ BEGIN
 						avl_state<=sIDLE;
 						avl_read_i<='0';
 						avl_readack<=NOT avl_readack;
-						avl_read_busy<='1';
 					END IF;
 			END CASE;
 
@@ -1821,12 +1821,18 @@ BEGIN
 			IF avl_readdatavalid='1' THEN
 				avl_wr<='1';
 				avl_wad<=(avl_wad+1) MOD (2*BLEN);
-				IF (avl_wad MOD BLEN)=BLEN-1 THEN
-					avl_read_busy<='0';
-				END IF;
 				IF (avl_wad MOD BLEN)=BLEN-2 THEN
 					avl_readdataack<=NOT avl_readdataack;
 				END IF;
+			END IF;
+			IF avl_readdatavalid='1' AND (avl_wad MOD BLEN)=BLEN-1 AND
+					avl_read_outstanding>0 THEN
+				IF NOT (avl_read_i='1' AND avl_waitrequest='0') THEN
+					avl_read_outstanding<=avl_read_outstanding-1;
+				END IF;
+			ELSIF avl_read_i='1' AND avl_waitrequest='0' AND
+					avl_read_outstanding<8 THEN
+				avl_read_outstanding<=avl_read_outstanding+1;
 			END IF;
 
 			IF avl_o_vs_sync='0' AND avl_o_vs='1' THEN
