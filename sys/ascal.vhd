@@ -1162,6 +1162,7 @@ ARCHITECTURE rtl OF ascal IS
 
 	SIGNAL fb_base_latched_toggle : std_logic := '0';
 	SIGNAL fb_retired_toggle : std_logic := '0';
+	SIGNAL fb_retire_pending : std_logic := '0';
 BEGIN
 
 	o_fb_base_latched <= fb_base_latched_toggle;
@@ -1898,6 +1899,7 @@ BEGIN
 			o_readdataack_sync2<='0';
 			o_readdataack<='0';
 			fb_retired_toggle<='0';
+			fb_retire_pending<='0';
 
 		ELSIF rising_edge(o_clk) THEN
 			------------------------------------------------------
@@ -1957,7 +1959,14 @@ BEGIN
 				o_bufup0<='0';
 			END IF;
 			IF o_vsv(1)='1' AND o_vsv(0)='0' THEN
+				fb_retire_pending<='1';
+			ELSIF fb_retire_pending='1' AND o_state=sDISP AND
+					o_copy=sWAIT AND o_readlev=0 AND o_copylev=0 THEN
+				-- The output frame boundary has passed and both scaler
+				-- prefetch/copy queues are idle; only now is the old
+				-- framebuffer no longer owned by scanout.
 				fb_retired_toggle<=NOT fb_retired_toggle;
+				fb_retire_pending<='0';
 			END IF;
 			IF o_vsv(1)='1' AND o_vsv(0)='0' AND o_bufup1='1' THEN
 				o_obuf1<=buf_next(o_obuf1,o_ibuf1,o_freeze);
