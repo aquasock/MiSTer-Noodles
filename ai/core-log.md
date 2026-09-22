@@ -515,3 +515,34 @@ The only item left from BLIT-001's original three-op milestone is the third op (
 - [x] Passed
 
 ---
+
+## 16 COMMIT Unreleased 9cf69fa 2026-09-22T07:50:58-07:00
+
+#### Coming From:
+
+Unreleased 9c88aa7
+
+#### Purpose:
+
+Prove BLIT_COPY over the real LINK ring-buffer path, which until now had only ever been exercised via the retired OSD button and simulation.
+
+#### Outcome:
+
+Added tools/blit_copy_push.c: pushes a SOLID_FILL to fill an out-of-view source rect with a caller-chosen color, waits for LINK-005's fence to confirm it landed, then pushes a BLIT_COPY of that region into the visible surface and waits for the fence again. Color is a command-line argument rather than hardcoded, at the user's request, specifically so a repeated run can be told apart from a stale leftover frame at a glance rather than by guessing. No RTL changes were needed -- purely ARM-side, built on the existing lib/noodles_link.h library. Verified on real hardware across two separate runs with different colors: fence advanced twice per run (source fill, then copy) and the visible surface showed the correct color both times -- purple (r=0x80,g=0x00,b=0xff) on the first run, teal (r=0x00,g=0xff,b=0xaa) on the second, confirming the copy tracks live source content rather than some cached or coincidental result. No core-reference.md changes: this is a verification event, not a new decision or contract -- BLIT-003 and LINK-004/LINK-005 already covered the semantics being confirmed here.
+
+#### Next Steps:
+
+Both items proposed as "what's next" after the OSD cleanup are now resolved in the cheaper-first order the user chose: BLIT_COPY is proven over LINK, and BLIT-001's third op (hardware noise/static-fill, ported from the Menu core's procedural static generator) remains the one open item from that milestone's original three-op scope.
+
+#### Files Modified:
+
+- tools/blit_copy_push.c
+- Makefile
+- scripts/deploy.sh
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
