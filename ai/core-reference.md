@@ -469,6 +469,16 @@ OUT-005: "OUT-004's single-fresh-vblank-edge PRESENT margin is not reliably suff
   decision: "sys/ascal.vhd records the output-domain frame boundary as pending and toggles FB_RETIRED only after the boundary has passed and both o_readlev and o_copylev are zero in the idle display state. This keeps the existing synchronized toggle interface and two-buffer ownership model while preventing the unconditional VS-boundary acknowledgement from claiming retirement early."
   consequence: "PRESENT no longer completes from the raw output VS boundary alone. The condition is still limited by ascal's counter semantics: because the output process resets these counters at VS, delayed Avalon responses may remain unrepresented, so hardware validation and any further instrumentation must establish whether this is sufficient."
 
+- record_id: OUT-009
+  kind: INTERFACE
+  component_id: OUT
+  title: "PRESENT retirement acknowledgement accounts for outstanding Avalon framebuffer bursts"
+  status: DECIDED
+  decided_date: 2026-09-22
+  supersedes: "OUT-008"
+  decision: "sys/ascal.vhd synchronizes the output-domain frame-boundary toggle into avl_clk, tracks each accepted framebuffer read until its final avl_readdatavalid beat, and toggles FB_RETIRED only after the boundary has been observed with no Avalon response outstanding."
+  consequence: "The retirement handshake now covers delayed memory responses that are invisible to the output-domain read and copy counters. It remains a two-buffer design and retains the existing synchronized toggle interface; hardware validation must determine whether ascal's internal buffer transition introduces any additional ownership interval."
+
 ## 6. Record template
 
 ```yaml

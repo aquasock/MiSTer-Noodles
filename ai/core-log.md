@@ -42,6 +42,35 @@ Wire CMDQ and BLIT into Noodles.sv for real: design and implement the DDRAM writ
 
 ---
 
+## 37 COMMIT Unreleased 491f8fb 2026-09-22T13:15:00-07:00
+
+#### Coming From:
+
+Unreleased 4d32cc8
+
+#### Purpose:
+
+Make framebuffer retirement wait for the Avalon read response that completes each scaler burst.
+
+#### Outcome:
+
+The current acknowledgement can still be early because `o_readlev` and `o_copylev` are reset at the output VS boundary while delayed Avalon data may remain in flight. The proposed change will track accepted Avalon read bursts through their final `avl_readdatavalid` beat, synchronize the output boundary into the Avalon domain, and emit `FB_RETIRED` only after the boundary has been observed with no response outstanding.
+
+#### Next Steps:
+
+Implement the cross-domain boundary marker and Avalon response-busy tracking without adding a framebuffer, then run simulation, a full Quartus compile, and repeated hardware trials before deciding whether the ownership evidence is sufficient.
+
+#### Files Modified:
+
+- sys/ascal.vhd
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
+
 ## 36 COMMIT Unreleased ae7d9c4 2026-09-22T12:59:49-07:00
 
 #### Coming From:
@@ -54,11 +83,11 @@ Instrument ascal's framebuffer read ownership to establish a retirement acknowle
 
 #### Outcome:
 
-The output-domain retirement event is now deferred until after the frame boundary and until ascal reports both its read-prefetch and copy pipelines idle. This preserves the two-buffer design and changes only `sys/ascal.vhd`; `make sim` passes all six testbenches and the full Quartus compile completes with 0 errors and 57 warnings. Hardware validation is still pending.
+The output-domain retirement event is now deferred until after the frame boundary is synchronized into the Avalon domain and all accepted read bursts have completed their final `avl_readdatavalid` beat. This preserves the two-buffer design and changes only `sys/ascal.vhd`; `make sim` passes all six testbenches and the full Quartus compile completes with 0 errors and 57 warnings. Hardware validation is still pending.
 
 #### Next Steps:
 
-Deploy the compiled RBF and repeat the 64-sprite workload at least ten times; if flicker remains, instrument the Avalon response lifetime directly because the output-domain counters may be reset at the boundary before delayed responses arrive.
+Deploy the compiled RBF and repeat the 64-sprite workload at least ten times; if flicker remains, inspect ascal's buffer-selection transition because this build directly accounts for delayed Avalon burst responses.
 
 #### Files Modified:
 
