@@ -886,3 +886,37 @@ No fix for OUT-005 is implemented. Two directions identified but not attempted, 
 - [ ] Passed (LINK-007's fix verified; OUT-005's underlying issue is NOT resolved)
 
 ---
+
+## 27 COMMIT Unreleased ??? 2026-09-22T12:00:00-07:00
+
+#### Coming From:
+
+Unreleased a7c893c
+
+#### Purpose:
+
+Measure and mitigate OUT-005 by adding a conservative multi-vblank retirement margin to PRESENT and validating it in simulation and on the stress workload.
+
+#### Outcome:
+
+The current handoff identifies a real timing gap between `rtl/present.sv`'s `FB_VBL` edge and ascal's independently synchronized `avl_o_vs`/internal output-buffer retirement. This cycle will first preserve that diagnosis, then change PRESENT to wait for multiple fresh `FB_VBL` rising edges after a flip request before reporting completion, with the edge count explicit and covered by the existing PRESENT testbench. The resulting core and stress toolchain will be rebuilt, deployed, and exercised at the previously problematic sprite counts so the mitigation is judged by repeated hardware runs rather than by simulation alone.
+
+#### Next Steps:
+
+Inspect the ascal configuration and PRESENT timing assumptions, implement the smallest parameterized multi-edge wait that fits the existing interface, extend `sim/tb_present.cpp` for delayed completion and repeated flips, run `make sim` and a full Quartus compile, then deploy and repeat the 10/30/50/64-sprite stress cases. If ghosting persists, leave the mitigation evidence in the log and continue from the ascal `avl_o_vs`/buffer state path instead of treating the heuristic as a proof of correctness.
+
+#### Files Modified:
+
+- rtl/present.sv
+- sim/present_dut.sv
+- sim/tb_present.cpp
+- Noodles.sv
+- Makefile
+- scripts/deploy.sh
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
