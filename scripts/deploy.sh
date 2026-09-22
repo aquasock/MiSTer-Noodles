@@ -5,7 +5,7 @@ set -e
 
 HOST="${1:-${MISTER_HOST:-mister.local}}"
 DEST="${DEST:-/media/fat/pet}"
-BINS="build/arm/link-push build/arm/link-slot-dump build/arm/mem-scan build/arm/blit-copy-push build/arm/solid-fill-push build/arm/blit-copy-key-push build/arm/bench"
+BINS="build/arm/link-push build/arm/link-slot-dump build/arm/mem-scan build/arm/blit-copy-push build/arm/solid-fill-push build/arm/blit-copy-key-push build/arm/bench build/arm/present-demo"
 
 for b in $BINS; do [ -f "$b" ] || { echo "missing $b -- run make first" >&2; exit 1; }; done
 
@@ -31,3 +31,7 @@ echo "  $DEST/blit-copy-key-push"
 echo
 echo "benchmark the real end-to-end command path (push -> dispatch -> execute -> fence):"
 echo "  $DEST/bench"
+echo
+echo "prove OUT-004 double buffering: cycles through solid colors, filling the"
+echo "current back buffer and presenting -- should look clean, no tearing:"
+echo "  $DEST/present-demo [seconds_per_color]"

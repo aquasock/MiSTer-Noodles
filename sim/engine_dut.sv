@@ -44,7 +44,12 @@ module engine_dut (
         .copy_height    (),
         /* verilator lint_on PINCONNECTEMPTY */
         .copy_busy      (1'b0),
-        .copy_done      (1'b0)
+        .copy_done      (1'b0),
+        /* verilator lint_off PINCONNECTEMPTY */
+        .present_start  (),
+        /* verilator lint_on PINCONNECTEMPTY */
+        .present_busy   (1'b0),
+        .present_done   (1'b0)
     );
 
     blit blit_i (

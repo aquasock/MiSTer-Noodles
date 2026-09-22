@@ -67,7 +67,12 @@ module engine_copy_dut (
         .copy_key_enable(copy_key_enable),
         .copy_key_value (copy_key_value),
         .copy_busy      (copy_busy),
-        .copy_done      (copy_done)
+        .copy_done      (copy_done),
+        /* verilator lint_off PINCONNECTEMPTY */
+        .present_start  (),
+        /* verilator lint_on PINCONNECTEMPTY */
+        .present_busy   (1'b0),
+        .present_done   (1'b0)
     );
 
     // FILL's write port is never driven in this DUT (blit_start never fires

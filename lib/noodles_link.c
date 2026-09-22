@@ -2,11 +2,13 @@
 // this file is just LINK-002/LINK-003's wire format (previously hand-rolled
 // identically in tools/link_push.c) factored out into something reusable.
 
+#define _POSIX_C_SOURCE 199309L
 #include "noodles_link.h"
 
 #include <fcntl.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <time.h>
 #include <unistd.h>
 
 #define NOODLES_HEADER_ADDR 0x30020000u
@@ -18,6 +20,7 @@
 #define NOODLES_OP_SOLID_FILL 1u
 #define NOODLES_OP_BLIT_COPY 2u
 #define NOODLES_OP_BLIT_COPY_KEY 3u
+#define NOODLES_OP_PRESENT 4u
 
 int noodles_link_open(noodles_link_t *link) {
     memset(link, 0, sizeof(*link));
@@ -97,4 +100,26 @@ uint32_t noodles_link_submitted_count(const noodles_link_t *link) { return link-
 
 uint32_t noodles_link_done_count(const noodles_link_t *link) {
     return link->header[3];  // +12 bytes = index 3 of a uint32_t array
+}
+
+int noodles_present_and_wait(noodles_link_t *link) {
+    const uint32_t command[8] = {NOODLES_OP_PRESENT, 0, 0, 0, 0, 0, 0, 0};
+    uint32_t done_before = noodles_link_done_count(link);
+    if (noodles_push_command(link, command) != 0) return -1;  // ring full
+
+    // Vblank-synced on the FPGA side (present.sv), so this can legitimately
+    // take up to roughly one frame -- poll rather than a single short wait.
+    struct timespec delay = {.tv_sec = 0, .tv_nsec = 1000000};  // 1ms
+    for (int i = 0; i < 200; ++i) {
+        if (noodles_link_done_count(link) > done_before) {
+            link->presents_completed += 1;
+            return 0;
+        }
+        nanosleep(&delay, NULL);
+    }
+    return 1;  // fence never caught up -- should not happen in practice
+}
+
+uint32_t noodles_link_back_buffer(const noodles_link_t *link) {
+    return (link->presents_completed % 2 == 0) ? NOODLES_BUFFER_B_ADDR : NOODLES_BUFFER_A_ADDR;
 }

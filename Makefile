@@ -20,6 +20,7 @@ ARMCOPYPUSH := build/arm/blit-copy-push
 ARMFILLPUSH := build/arm/solid-fill-push
 ARMKEYPUSH  := build/arm/blit-copy-key-push
 ARMBENCH    := build/arm/bench
+ARMPRESENT  := build/arm/present-demo
 HOSTLINK    := build/host/link-push
 HOSTSLOTDUMP:= build/host/link-slot-dump
 HOSTMEMSCAN := build/host/mem-scan
@@ -27,6 +28,7 @@ HOSTCOPYPUSH:= build/host/blit-copy-push
 HOSTFILLPUSH:= build/host/solid-fill-push
 HOSTKEYPUSH := build/host/blit-copy-key-push
 HOSTBENCH   := build/host/bench
+HOSTPRESENT := build/host/present-demo
 
 HOST    ?= mister.local
 DEST    ?= /media/fat/pet
@@ -39,17 +41,19 @@ DDRAM_ADAPTER_SIM := $(SIM_DIR)/ddram_adapter/Vengine_ddram_dut
 BLIT_COPY_SIM     := $(SIM_DIR)/blit_copy/Vengine_copy_dut
 LINK_RING_SIM     := $(SIM_DIR)/link_ring/Vlink_ring_dut
 LINK_FENCE_SIM    := $(SIM_DIR)/link_fence/Vlink_fence_dut
+PRESENT_SIM       := $(SIM_DIR)/present/Vpresent_dut
 
 .PHONY: all host deploy sim clean
 
-all: $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH)
+all: $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT)
 
-sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(BLIT_COPY_SIM) $(LINK_RING_SIM) $(LINK_FENCE_SIM)
+sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(BLIT_COPY_SIM) $(LINK_RING_SIM) $(LINK_FENCE_SIM) $(PRESENT_SIM)
 	$(SOLID_FILL_SIM)
 	$(DDRAM_ADAPTER_SIM)
 	$(BLIT_COPY_SIM)
 	$(LINK_RING_SIM)
 	$(LINK_FENCE_SIM)
+	$(PRESENT_SIM)
 
 $(SOLID_FILL_SIM): rtl/cmdq.sv rtl/blit.sv sim/engine_dut.sv sim/tb_solid_fill.cpp
 	@mkdir -p $(dir $@)
@@ -81,6 +85,12 @@ $(LINK_FENCE_SIM): rtl/link_fence.sv sim/link_fence_dut.sv sim/tb_link_fence.cpp
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
 		rtl/link_fence.sv sim/link_fence_dut.sv sim/tb_link_fence.cpp -o $(notdir $@)
 
+$(PRESENT_SIM): rtl/present.sv sim/present_dut.sv sim/tb_present.cpp
+	@mkdir -p $(dir $@)
+	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module present_dut \
+		--Wall --Wno-fatal -Wno-DECLFILENAME \
+		rtl/present.sv sim/present_dut.sv sim/tb_present.cpp -o $(notdir $@)
+
 $(ARMLINK): tools/link_push.c lib/noodles_link.c lib/noodles_link.h | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ tools/link_push.c lib/noodles_link.c
 
@@ -102,7 +112,10 @@ $(ARMKEYPUSH): tools/blit_copy_key_push.c lib/noodles_link.c lib/noodles_link.h 
 $(ARMBENCH): tools/bench.c lib/noodles_link.c lib/noodles_link.h | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ tools/bench.c lib/noodles_link.c
 
-host: $(HOSTLINK) $(HOSTSLOTDUMP) $(HOSTMEMSCAN) $(HOSTCOPYPUSH) $(HOSTFILLPUSH) $(HOSTKEYPUSH) $(HOSTBENCH)
+$(ARMPRESENT): tools/present_demo.c lib/noodles_link.c lib/noodles_link.h | build/arm
+	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ tools/present_demo.c lib/noodles_link.c
+
+host: $(HOSTLINK) $(HOSTSLOTDUMP) $(HOSTMEMSCAN) $(HOSTCOPYPUSH) $(HOSTFILLPUSH) $(HOSTKEYPUSH) $(HOSTBENCH) $(HOSTPRESENT)
 
 $(HOSTLINK): tools/link_push.c lib/noodles_link.c lib/noodles_link.h | build/host
 	$(HOSTCC) $(CFLAGS) -o $@ tools/link_push.c lib/noodles_link.c
@@ -125,10 +138,13 @@ $(HOSTKEYPUSH): tools/blit_copy_key_push.c lib/noodles_link.c lib/noodles_link.h
 $(HOSTBENCH): tools/bench.c lib/noodles_link.c lib/noodles_link.h | build/host
 	$(HOSTCC) $(CFLAGS) -o $@ tools/bench.c lib/noodles_link.c
 
+$(HOSTPRESENT): tools/present_demo.c lib/noodles_link.c lib/noodles_link.h | build/host
+	$(HOSTCC) $(CFLAGS) -o $@ tools/present_demo.c lib/noodles_link.c
+
 build/arm build/host:
 	mkdir -p $@
 
-deploy: $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH)
+deploy: $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT)
 	scripts/deploy.sh $(HOST)
 
 clean:

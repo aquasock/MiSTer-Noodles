@@ -22,11 +22,15 @@
 // (rtl/link_ring.sv, LINK-002/LINK-003): a host process (lib/noodles_link.h,
 // LINK-004) writes commands directly into shared DDR3 and link_ring polls,
 // fetches, and dispatches them -- no OSD involved. CMDQ dispatches to BLIT
-// (SOLID_FILL, BLIT-002) or blit_copy (BLIT_COPY, BLIT-003), both driving
-// the real DDRAM_* pins via ddram_adapter (DDR-001/DDR-003). LINK-005's
-// completion fence (rtl/link_fence.sv) publishes a done-count back to DRAM
-// so the host can tell when a specific command actually finished, not just
-// got dispatched.
+// (SOLID_FILL, BLIT-002), blit_copy (BLIT_COPY/BLIT_COPY_KEY, BLIT-003/
+// BLIT-006), or present (PRESENT, OUT-004's double-buffer flip). BLIT/
+// blit_copy drive the real DDRAM_* pins via ddram_adapter (DDR-001/DDR-003);
+// present touches no DDRAM_* at all, it only flips which of two fixed
+// surfaces FB_BASE points at, synced to the framework's vertical blank so
+// the flip never happens mid-scan-out. LINK-005's completion fence
+// (rtl/link_fence.sv) publishes a done-count back to DRAM so the host can
+// tell when a specific command -- a draw OR a present -- actually finished,
+// not just got dispatched.
 //
 // This used to also carry three OSD test buttons (Marker Test, Draw Test,
 // Blit Copy Test) that fed CMDQ hardcoded commands directly, as a
@@ -48,8 +52,9 @@
 // releases have used safely since. Nothing here should ever target an
 // address outside that without a new record explaining why it's safe.
 //
-// See OUT-001/OUT-002, SURF-001/SURF-002/SURF-003/SURF-004, BLIT-002/BLIT-003,
-// LINK-001 through LINK-005, and DDR-001 through DDR-005.
+// See OUT-001/OUT-002/OUT-004, SURF-001/SURF-002/SURF-003/SURF-004,
+// BLIT-002/BLIT-003/BLIT-006, LINK-001 through LINK-005, and DDR-001
+// through DDR-005.
 
 module emu
 (
@@ -102,15 +107,17 @@ always @(posedge clk_sys or posedge reset)
 assign LED_POWER = {1'b1, link_dispatch_ever};
 assign BUTTONS = 0;
 
-// draw_done_ever gates FB_EN so nothing is displayed until a fill has
-// actually completed once -- otherwise the screen would show whatever
-// happened to be in memory at boot. Keyed on blit_done (BLIT's own
-// completion), not any particular command source, so a link_ring-dispatched
-// fill unblanks the display on its own.
-reg draw_done_ever;
+// present_done_ever gates FB_EN so nothing is displayed until a frame has
+// actually been presented once -- otherwise the screen would show whatever
+// happened to be in memory at boot, or a partially-drawn back buffer before
+// its first flip. Keyed on present_done (OUT-004), not blit_done/copy_done
+// directly -- with double buffering, a completed draw only means the BACK
+// buffer changed; nothing should appear on screen until that buffer has
+// actually become front via a PRESENT command.
+reg present_done_ever;
 always @(posedge clk_sys or posedge reset)
-	if (reset) draw_done_ever <= 1'b0;
-	else if (blit_done) draw_done_ever <= 1'b1;
+	if (reset) present_done_ever <= 1'b0;
+	else if (present_done) present_done_ever <= 1'b1;
 
 // LED_USER: latches solid the first time blit_start fires for any reason --
 // a basic "has the fill engine ever run" health indicator. Was originally
@@ -121,19 +128,26 @@ always @(posedge clk_sys or posedge reset)
 	if (reset) blit_start_ever <= 1'b0;
 	else if (blit_start) blit_start_ever <= 1'b1;
 
-// MISTER_FB scan-out (OUT-002): a fixed 64x64, 32bpp (FB_FORMAT[2:0]=3'b110)
-// surface at 0x30000000 -- NOT 0x20000000, see SURF-004: MiSTer's own
-// system video scaler uses physical byte 0x20000000 as its RAM base, a real
-// collision hit and fixed by the MiSTer-Raster project on this exact
-// platform. 0x30000000 is the address that project has used safely across
-// many hardware-accepted releases since.
-assign FB_EN = draw_done_ever;
+// MISTER_FB scan-out (OUT-002) + double buffering (OUT-004): two fixed
+// 64x64, 32bpp (FB_FORMAT[2:0]=3'b110) surfaces -- BUFFER_A at 0x30000000
+// (NOT 0x20000000, see SURF-004: MiSTer's own system video scaler uses
+// physical byte 0x20000000 as its RAM base, a real collision the
+// MiSTer-Raster project hit and fixed on this exact platform), BUFFER_B at
+// 0x30008000 (32KB past BUFFER_A -- clear of its 16KB footprint with room
+// to spare, and clear of the 0x30010000+ region several host-side tools use
+// as off-screen scratch). front_sel (from present.sv, flipped by PRESENT)
+// selects which one FB_BASE currently points at; the host draws into
+// whichever one is NOT currently front.
+localparam logic [31:0] BUFFER_A_ADDR = 32'h3000_0000;
+localparam logic [31:0] BUFFER_B_ADDR = 32'h3000_8000;
+
+assign FB_EN = present_done_ever;
 assign FB_FORMAT = {2'b00, 3'b110};
 assign FB_WIDTH = 12'd64;
 assign FB_HEIGHT = 12'd64;
-assign FB_BASE = 32'h3000_0000;
+assign FB_BASE = front_sel ? BUFFER_B_ADDR : BUFFER_A_ADDR;
 assign FB_STRIDE = 14'd256;
-assign FB_FORCE_BLANK = ~draw_done_ever;
+assign FB_FORCE_BLANK = ~present_done_ever;
 
 ///////////////////////   ENGINE   /////////////////////////////////
 
@@ -180,15 +194,35 @@ link_ring link_ring
 	.cmd_ready(link_cmd_ready)
 );
 
-// LINK-005: completion fence. blit_done/copy_done fire once per command
-// that ACTUALLY finished executing (link_ring's own read_ptr only tracks
-// dispatch acceptance -- see LINK-003/LINK-005), ORed here since either one
-// completing a command means "one more command is done" from the host's
-// point of view; CMDQ never runs both at once. link_fence has no idea which
-// engine ran or what command it was -- it is a pure counter, deliberately
-// dumber than link_ring, so it never needs touching if link_ring's own FSM
-// changes again.
-wire cmd_done_pulse = blit_done || copy_done;
+// OUT-004: double-buffer flip. present.sv owns front_sel (which of
+// BUFFER_A/BUFFER_B is currently scanned out) and only changes it synced to
+// FB_VBL, the framework's vertical blank signal -- safe to sample directly
+// with no cross-clock synchronizer since CLK_VIDEO (this core's own output,
+// tied to clk_sys below) is what the framework uses to generate it in the
+// first place, so present.sv's own clk IS that same domain.
+wire present_start, present_busy, present_done;
+wire front_sel;
+
+present present
+(
+	.clk       (clk_sys),
+	.reset     (reset),
+	.fb_vbl    (FB_VBL),
+	.start     (present_start),
+	.busy      (present_busy),
+	.done      (present_done),
+	.front_sel (front_sel)
+);
+
+// LINK-005: completion fence. blit_done/copy_done/present_done fire once
+// per command that ACTUALLY finished executing (link_ring's own read_ptr
+// only tracks dispatch acceptance -- see LINK-003/LINK-005), ORed here
+// since any one completing means "one more command is done" from the
+// host's point of view; CMDQ never runs more than one at once. link_fence
+// has no idea which engine ran or what command it was -- it is a pure
+// counter, deliberately dumber than link_ring, so it never needs touching
+// if link_ring's own FSM changes again.
+wire cmd_done_pulse = blit_done || copy_done || present_done;
 
 wire [31:0] fence_wr_addr, fence_wr_data;
 wire        fence_wr_en, fence_wr_ready;
@@ -229,7 +263,10 @@ cmdq cmdq
 	.copy_key_enable(copy_key_enable),
 	.copy_key_value(copy_key_value),
 	.copy_busy     (copy_busy),
-	.copy_done     (copy_done)
+	.copy_done     (copy_done),
+	.present_start (present_start),
+	.present_busy  (present_busy),
+	.present_done  (present_done)
 );
 
 blit blit

@@ -1,10 +1,12 @@
 // CMDQ: command processor. Decodes one 32-byte command slot at a time,
 // presented on a simple valid/ready front end, and dispatches it to BLIT
-// (SOLID_FILL) or blit_copy (BLIT_COPY / BLIT_COPY_KEY -- both dispatch to
-// the same engine, differing only in whether colorkey transparency is on).
+// (SOLID_FILL), blit_copy (BLIT_COPY / BLIT_COPY_KEY -- both dispatch to
+// the same engine, differing only in whether colorkey transparency is on),
+// or present (PRESENT, the double-buffer flip -- OUT-004).
 //
 // ai/core-reference.md CMDQ-001 defines the command slot layout this module
-// decodes; BLIT-002/BLIT-003/BLIT-006 define what each opcode's fields mean.
+// decodes; BLIT-002/BLIT-003/BLIT-006 define what each BLIT opcode's fields
+// mean; OUT-004 defines PRESENT's.
 
 module cmdq #(
     parameter int ADDR_WIDTH = 32,
@@ -38,7 +40,11 @@ module cmdq #(
     output logic                  copy_key_enable,
     output logic [DATA_WIDTH-1:0] copy_key_value,
     input  logic                  copy_busy,
-    input  logic                  copy_done
+    input  logic                  copy_done,
+
+    output logic                  present_start,
+    input  logic                  present_busy,
+    input  logic                  present_done
 );
 
     // Command slot layout (32 bytes / 256 bits), all fields plain uint32:
@@ -54,6 +60,7 @@ module cmdq #(
     localparam logic [7:0] OP_SOLID_FILL    = 8'h01;
     localparam logic [7:0] OP_BLIT_COPY     = 8'h02;
     localparam logic [7:0] OP_BLIT_COPY_KEY = 8'h03;
+    localparam logic [7:0] OP_PRESENT       = 8'h04;
 
     wire [7:0]  op          = cmd_data[7:0];
     wire [31:0] c_dst_addr  = cmd_data[63:32];
@@ -67,14 +74,17 @@ module cmdq #(
     typedef enum logic {IDLE, WAIT_DONE} state_t;
     state_t state;
 
-    logic active_copy;
-    wire  engine_busy = active_copy ? copy_busy : blit_busy;
-    wire  engine_done = active_copy ? copy_done : blit_done;
+    typedef enum logic [1:0] {ENGINE_BLIT, ENGINE_COPY, ENGINE_PRESENT} engine_t;
+    engine_t active_engine;
+    wire engine_busy = (active_engine == ENGINE_COPY)    ? copy_busy :
+                        (active_engine == ENGINE_PRESENT) ? present_busy : blit_busy;
+    wire engine_done = (active_engine == ENGINE_COPY)    ? copy_done :
+                        (active_engine == ENGINE_PRESENT) ? present_done : blit_done;
 
     always_ff @(posedge clk or posedge reset) begin
         if (reset) begin
             state          <= IDLE;
-            active_copy    <= 1'b0;
+            active_engine  <= ENGINE_BLIT;
             blit_start     <= 1'b0;
             blit_dst_addr  <= '0;
             blit_dst_pitch <= '0;
@@ -90,15 +100,17 @@ module cmdq #(
             copy_height    <= '0;
             copy_key_enable<= 1'b0;
             copy_key_value <= '0;
+            present_start  <= 1'b0;
         end else begin
-            blit_start <= 1'b0;
-            copy_start <= 1'b0;
+            blit_start    <= 1'b0;
+            copy_start    <= 1'b0;
+            present_start <= 1'b0;
 
             unique case (state)
                 IDLE: begin
                     // An unrecognized opcode is accepted and dropped: only
-                    // three opcodes exist until a later milestone adds more.
-                    if (cmd_valid && !blit_busy && !copy_busy) begin
+                    // four opcodes exist until a later milestone adds more.
+                    if (cmd_valid && !blit_busy && !copy_busy && !present_busy) begin
                         if (op == OP_SOLID_FILL) begin
                             blit_dst_addr  <= c_dst_addr;
                             blit_dst_pitch <= c_dst_pitch;
@@ -106,7 +118,7 @@ module cmdq #(
                             blit_height    <= c_height;
                             blit_color     <= c_color;
                             blit_start     <= 1'b1;
-                            active_copy    <= 1'b0;
+                            active_engine  <= ENGINE_BLIT;
                             state          <= WAIT_DONE;
                         end else if (op == OP_BLIT_COPY || op == OP_BLIT_COPY_KEY) begin
                             copy_dst_addr  <= c_dst_addr;
@@ -118,8 +130,12 @@ module cmdq #(
                             copy_key_enable<= (op == OP_BLIT_COPY_KEY);
                             copy_key_value <= c_color;
                             copy_start     <= 1'b1;
-                            active_copy    <= 1'b1;
+                            active_engine  <= ENGINE_COPY;
                             state          <= WAIT_DONE;
+                        end else if (op == OP_PRESENT) begin
+                            present_start <= 1'b1;
+                            active_engine <= ENGINE_PRESENT;
+                            state         <= WAIT_DONE;
                         end
                     end
                 end

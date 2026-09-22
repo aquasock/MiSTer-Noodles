@@ -28,6 +28,15 @@
 extern "C" {
 #endif
 
+// OUT-004's two fixed double-buffer surfaces -- 64x64, 32bpp, pitch 256.
+// Buffer A is front (visible) immediately after an FPGA reset/core load;
+// see noodles_link_back_buffer() for which one to draw into right now.
+#define NOODLES_BUFFER_A_ADDR 0x30000000u
+#define NOODLES_BUFFER_B_ADDR 0x30008000u
+#define NOODLES_BUFFER_PITCH 256u
+#define NOODLES_BUFFER_WIDTH 64u
+#define NOODLES_BUFFER_HEIGHT 64u
+
 typedef struct {
     int fd;
     void *map;
@@ -36,6 +45,7 @@ typedef struct {
     volatile uint32_t *slots;
     uint32_t write_ptr;         // host's own tracked copy; the FPGA never writes this field
     uint32_t submitted;         // count of commands pushed through THIS handle since open()
+    uint32_t presents_completed;  // count of PRESENT flips CONFIRMED done (OUT-004)
 } noodles_link_t;
 
 // Opens /dev/mem and maps LINK-002's header+slot region. Returns 0 on
@@ -108,6 +118,25 @@ uint32_t noodles_link_submitted_count(const noodles_link_t *link);
 // return value is >= the noodles_link_submitted_count() value observed
 // right after that command's push call returned.
 uint32_t noodles_link_done_count(const noodles_link_t *link);
+
+// PRESENT (opcode 4, OUT-004): the double-buffer flip. Pushes the command
+// and BLOCKS until LINK-005's fence confirms the flip actually happened --
+// vblank-synced on the FPGA side, so this can take up to roughly one frame.
+// Returns 0 on success, -1 if the ring was full when pushing, 1 if the
+// fence never caught up (should not happen in practice). On success,
+// updates the handle's back-buffer tracking, so the NEXT
+// noodles_link_back_buffer() call reflects the new state -- do not call
+// this and keep drawing into the buffer you just presented; it is now
+// the front buffer, being scanned out live.
+int noodles_present_and_wait(noodles_link_t *link);
+
+// Returns the buffer address the host should currently draw into (the back
+// buffer, i.e. the one NOT being scanned out right now). Starts as
+// NOODLES_BUFFER_B_ADDR (buffer A is front after an FPGA reset/core load)
+// and alternates each time noodles_present_and_wait() confirms a flip.
+// Draw a full frame's worth of commands at this address, then call
+// noodles_present_and_wait() before reading this again.
+uint32_t noodles_link_back_buffer(const noodles_link_t *link);
 
 #ifdef __cplusplus
 }
