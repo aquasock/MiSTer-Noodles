@@ -123,3 +123,20 @@ int noodles_present_and_wait(noodles_link_t *link) {
 uint32_t noodles_link_back_buffer(const noodles_link_t *link) {
     return (link->presents_completed % 2 == 0) ? NOODLES_BUFFER_B_ADDR : NOODLES_BUFFER_A_ADDR;
 }
+
+int noodles_link_upload(noodles_link_t *link, uint32_t dst_addr, const void *data,
+                         size_t size_bytes) {
+    long page = sysconf(_SC_PAGESIZE);
+    uint32_t aligned_addr = dst_addr & ~(uint32_t)(page - 1);
+    size_t offset = dst_addr - aligned_addr;
+    size_t map_span = offset + size_bytes;
+    map_span = (map_span + (size_t)page - 1) & ~((size_t)page - 1);  // round up to a page
+
+    void *map = mmap(NULL, map_span, PROT_WRITE, MAP_SHARED, link->fd, aligned_addr);
+    if (map == MAP_FAILED) return -1;
+
+    memcpy((char *)map + offset, data, size_bytes);
+
+    munmap(map, map_span);
+    return 0;
+}

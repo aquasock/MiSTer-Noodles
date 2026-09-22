@@ -139,6 +139,19 @@ int noodles_present_and_wait(noodles_link_t *link);
 // noodles_present_and_wait() before reading this again.
 uint32_t noodles_link_back_buffer(const noodles_link_t *link);
 
+// Writes size_bytes of data directly into DDR3 at dst_addr via mmap+memcpy
+// -- bypasses the ring buffer and every BLIT engine entirely. This is how
+// real asset data (a decoded image, a sprite sheet) gets into a surface:
+// loading and decoding an asset is inherently host-side work, and DDR-002
+// already established DDRAM_* addresses are direct, unwindowed physical
+// addresses, so a plain /dev/mem mmap of dst_addr just works -- no command
+// needed. dst_addr does not need to be page-aligned. Once uploaded, use
+// noodles_push_blit_copy()/noodles_push_blit_copy_key() to composite it
+// onto a buffer, exactly like any other source region. Returns 0 on
+// success, -1 on failure (check errno).
+int noodles_link_upload(noodles_link_t *link, uint32_t dst_addr, const void *data,
+                         size_t size_bytes);
+
 #ifdef __cplusplus
 }
 #endif

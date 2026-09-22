@@ -5,7 +5,7 @@ set -e
 
 HOST="${1:-${MISTER_HOST:-mister.local}}"
 DEST="${DEST:-/media/fat/pet}"
-BINS="build/arm/link-push build/arm/link-slot-dump build/arm/mem-scan build/arm/blit-copy-push build/arm/solid-fill-push build/arm/blit-copy-key-push build/arm/bench build/arm/present-demo build/arm/sprite-demo"
+BINS="build/arm/link-push build/arm/link-slot-dump build/arm/mem-scan build/arm/blit-copy-push build/arm/solid-fill-push build/arm/blit-copy-key-push build/arm/bench build/arm/present-demo build/arm/sprite-demo build/arm/load-bmp"
 
 for b in $BINS; do [ -f "$b" ] || { echo "missing $b -- run make first" >&2; exit 1; }; done
 
@@ -39,3 +39,7 @@ echo
 echo "the real target: a sprite bouncing around the screen continuously,"
 echo "the full per-frame game-loop pattern (clear, composite, present):"
 echo "  $DEST/sprite-demo [seconds]"
+echo
+echo "load a real 24-bit uncompressed BMP and display it (noodles_link_upload,"
+echo "mmap+memcpy straight into DDR3, no ring/BLIT engine involved):"
+echo "  $DEST/load-bmp <file.bmp> [x] [y]"
