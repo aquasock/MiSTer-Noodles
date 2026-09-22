@@ -3,11 +3,10 @@
 // used since LINK-001's first hardware proof, now going through the actual
 // library instead of hand-rolled mmap code (LINK-004).
 //
-// Default command is SOLID_FILL of the same visible 64x64 surface
-// (0x30000000, pitch 256) the OSD "Draw Test" button fills, but a
-// different color (cyan, not magenta) -- so success is visually
-// unambiguous: cyan means the FPGA picked this up via the ring, not the
-// leftover OSD path.
+// Fills the current back buffer (OUT-004) with cyan and presents it, so
+// success is visually unambiguous and the result actually shows up --
+// with double buffering, a fill alone never appears on screen until it's
+// been presented.
 //
 // Usage, as root on the MiSTer:
 //   ./link_push
@@ -25,44 +24,42 @@ int main(void) {
         return 1;
     }
 
-    uint32_t write_ptr_before = link.write_ptr;
-    uint32_t done_before = noodles_link_done_count(&link);
+    uint32_t back = noodles_link_back_buffer(&link);
     uint32_t color = noodles_rgb(0x00, 0xFF, 0xFF);  // cyan
+    uint32_t done_before = noodles_link_done_count(&link);
 
-    if (noodles_push_solid_fill(&link, 0x30000000u, 256, 64, 64, color) != 0) {
-        fprintf(stderr, "ring full (write_ptr=%u) -- refusing to push\n", write_ptr_before);
+    if (noodles_push_solid_fill(&link, back, NOODLES_BUFFER_PITCH, NOODLES_BUFFER_WIDTH,
+                                 NOODLES_BUFFER_HEIGHT, color) != 0) {
+        fprintf(stderr, "ring full -- refusing to push\n");
         noodles_link_close(&link);
         return 1;
     }
 
-    printf("pushed SOLID_FILL (cyan) into slot %u; write_ptr %u -> %u (fence was %u)\n",
-           write_ptr_before, write_ptr_before, link.write_ptr, done_before);
-
     // Poll LINK-005's fence briefly to show the FPGA actually finishing the
-    // command, not just accepting it -- a real fill completes in
-    // microseconds, so this loop is expected to succeed almost immediately.
-    //
-    // This deliberately checks done_count > done_before, NOT
-    // noodles_link_submitted_count() -- this program opens a fresh handle
-    // on every invocation, so its own submitted count always starts at 1
-    // regardless of how many commands earlier invocations pushed this same
-    // FPGA session. Comparing a per-handle submitted count against the
-    // FPGA's session-lifetime done_count is only valid within ONE long-lived
-    // handle (the intended use, e.g. a game process open for its whole
-    // run) -- across separate short-lived processes like this one, only
-    // "did the fence move past what it already was" is a meaningful check.
+    // fill before presenting it.
     struct timespec delay = {.tv_sec = 0, .tv_nsec = 1000000};  // 1ms
-    for (int i = 0; i < 100; ++i) {
-        uint32_t done_now = noodles_link_done_count(&link);
-        if (done_now > done_before) {
-            printf("fence confirms completion: done_count %u -> %u\n", done_before, done_now);
-            noodles_link_close(&link);
-            return 0;
+    int filled = 0;
+    for (int i = 0; i < 200; ++i) {
+        if (noodles_link_done_count(&link) > done_before) {
+            filled = 1;
+            break;
         }
         nanosleep(&delay, NULL);
     }
+    if (!filled) {
+        fprintf(stderr, "fill never completed\n");
+        noodles_link_close(&link);
+        return 1;
+    }
 
-    fprintf(stderr, "fence never advanced past %u after 100ms\n", done_before);
+    int rc = noodles_present_and_wait(&link);
+    if (rc != 0) {
+        fprintf(stderr, "present failed (rc=%d)\n", rc);
+        noodles_link_close(&link);
+        return 1;
+    }
+
+    printf("filled back buffer 0x%08x with cyan and presented it\n", back);
     noodles_link_close(&link);
-    return 1;
+    return 0;
 }

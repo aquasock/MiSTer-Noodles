@@ -28,14 +28,15 @@
 extern "C" {
 #endif
 
-// OUT-004's two fixed double-buffer surfaces -- 64x64, 32bpp, pitch 256.
-// Buffer A is front (visible) immediately after an FPGA reset/core load;
-// see noodles_link_back_buffer() for which one to draw into right now.
-#define NOODLES_BUFFER_A_ADDR 0x30000000u
-#define NOODLES_BUFFER_B_ADDR 0x30008000u
-#define NOODLES_BUFFER_PITCH 256u
-#define NOODLES_BUFFER_WIDTH 64u
-#define NOODLES_BUFFER_HEIGHT 64u
+// OUT-004's two fixed double-buffer surfaces -- 640x480, 32bpp, pitch 2560
+// (SURF-005). Buffer A is front (visible) immediately after an FPGA
+// reset/core load; see noodles_link_back_buffer() for which one to draw
+// into right now.
+#define NOODLES_BUFFER_A_ADDR 0x31000000u
+#define NOODLES_BUFFER_B_ADDR 0x31200000u
+#define NOODLES_BUFFER_PITCH 2560u
+#define NOODLES_BUFFER_WIDTH 640u
+#define NOODLES_BUFFER_HEIGHT 480u
 
 typedef struct {
     int fd;

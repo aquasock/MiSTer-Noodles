@@ -22,9 +22,16 @@
 
 #include "../lib/noodles_link.h"
 
-#define VISIBLE_ADDR 0x30000000u
-#define SRC_ADDR 0x30010000u
-#define PITCH 256
+// Benchmark destination/source are fixed scratch addresses, not the real
+// double-buffer surfaces (OUT-004) -- this tool never presents anything,
+// it only measures raw command throughput, so visibility doesn't matter.
+// DST_ADDR reuses NOODLES_BUFFER_A_ADDR's slot (2MB, comfortably more than
+// any size tested here); SRC_ADDR is BLIT_COPY(_KEY)'s own 2MB scratch
+// slot, shared with blit_copy_push.c/blit_copy_key_push.c since these
+// tools are never run concurrently.
+#define DST_ADDR NOODLES_BUFFER_A_ADDR
+#define SRC_ADDR 0x31400000u
+#define PITCH NOODLES_BUFFER_PITCH
 
 static double now_s(void) {
     struct timespec ts;
@@ -56,13 +63,13 @@ static void run_bench(noodles_link_t *link, const char *label, op_t op, uint16_t
         do {
             switch (op) {
                 case OP_FILL:
-                    rc = noodles_push_solid_fill(link, VISIBLE_ADDR, PITCH, w, h, color);
+                    rc = noodles_push_solid_fill(link, DST_ADDR, PITCH, w, h, color);
                     break;
                 case OP_COPY:
-                    rc = noodles_push_blit_copy(link, VISIBLE_ADDR, PITCH, SRC_ADDR, PITCH, w, h);
+                    rc = noodles_push_blit_copy(link, DST_ADDR, PITCH, SRC_ADDR, PITCH, w, h);
                     break;
                 default:
-                    rc = noodles_push_blit_copy_key(link, VISIBLE_ADDR, PITCH, SRC_ADDR, PITCH, w,
+                    rc = noodles_push_blit_copy_key(link, DST_ADDR, PITCH, SRC_ADDR, PITCH, w,
                                                      h, colorkey);
                     break;
             }

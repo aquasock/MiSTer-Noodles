@@ -63,6 +63,13 @@ module emu
 
 ///////// Default values for ports not used in this core /////////
 
+// OUT-004/SURF-005: the two double-buffer surfaces' fixed addresses,
+// declared up front since both the LED_DISK regression check below and
+// FB_BASE's own mux need them. See the MISTER_FB scan-out comment further
+// down for the full sizing/placement rationale.
+localparam logic [31:0] BUFFER_A_ADDR = 32'h3100_0000;
+localparam logic [31:0] BUFFER_B_ADDR = 32'h3120_0000;
+
 assign ADC_BUS  = 'Z;
 assign USER_OUT = '1;
 assign {UART_RTS, UART_TXD, UART_DTR} = 0;
@@ -85,13 +92,16 @@ assign AUDIO_MIX = 0;
 // LED_DISK: standing regression check for the read-mux bug DDR-005 fixed
 // (rtl/link_ring.sv's rd_active, see the comment there and the write-port
 // mux comment below for the full story). Latches solid if blit_start EVER
-// fires with blit_dst_addr not equal to the one address every hardware
-// test so far has used (0x30000000) -- should stay OFF; if it ever lights,
-// something reintroduced dst_addr corruption between link_ring and CMDQ.
+// fires with blit_dst_addr not equal to EITHER double-buffer surface
+// (OUT-004 -- a legitimate SOLID_FILL can target whichever one is
+// currently back, not just a single fixed address) -- should stay OFF; if
+// it ever lights, something reintroduced dst_addr corruption between
+// link_ring and CMDQ.
 reg dst_addr_wrong_ever;
 always @(posedge clk_sys or posedge reset)
 	if (reset) dst_addr_wrong_ever <= 1'b0;
-	else if (blit_start && blit_dst_addr != 32'h3000_0000) dst_addr_wrong_ever <= 1'b1;
+	else if (blit_start && blit_dst_addr != BUFFER_A_ADDR && blit_dst_addr != BUFFER_B_ADDR)
+		dst_addr_wrong_ever <= 1'b1;
 
 assign LED_DISK = dst_addr_wrong_ever;
 
@@ -129,24 +139,23 @@ always @(posedge clk_sys or posedge reset)
 	else if (blit_start) blit_start_ever <= 1'b1;
 
 // MISTER_FB scan-out (OUT-002) + double buffering (OUT-004): two fixed
-// 64x64, 32bpp (FB_FORMAT[2:0]=3'b110) surfaces -- BUFFER_A at 0x30000000
-// (NOT 0x20000000, see SURF-004: MiSTer's own system video scaler uses
-// physical byte 0x20000000 as its RAM base, a real collision the
-// MiSTer-Raster project hit and fixed on this exact platform), BUFFER_B at
-// 0x30008000 (32KB past BUFFER_A -- clear of its 16KB footprint with room
-// to spare, and clear of the 0x30010000+ region several host-side tools use
-// as off-screen scratch). front_sel (from present.sv, flipped by PRESENT)
-// selects which one FB_BASE currently points at; the host draws into
-// whichever one is NOT currently front.
-localparam logic [31:0] BUFFER_A_ADDR = 32'h3000_0000;
-localparam logic [31:0] BUFFER_B_ADDR = 32'h3000_8000;
-
+// 640x480, 32bpp (FB_FORMAT[2:0]=3'b110) surfaces (BUFFER_A_ADDR/
+// BUFFER_B_ADDR, declared up top) -- SURF-005 sized this up from the
+// original 64x64 bring-up surface to something StarCraft/OpenBW-scale.
+// Each buffer is ~1.17MB (640*480*4); the two sit in their own 2MB-aligned
+// slots for generous headroom, well clear of each other and of LINK-002's
+// ring (header+slots, a few KB, at 0x30020000+). NOT based at 0x20000000,
+// see SURF-004: MiSTer's own system video scaler uses physical byte
+// 0x20000000 as its RAM base, a real collision the MiSTer-Raster project
+// hit and fixed on this exact platform. front_sel (from present.sv,
+// flipped by PRESENT) selects which buffer FB_BASE currently points at;
+// the host draws into whichever one is NOT front.
 assign FB_EN = present_done_ever;
 assign FB_FORMAT = {2'b00, 3'b110};
-assign FB_WIDTH = 12'd64;
-assign FB_HEIGHT = 12'd64;
+assign FB_WIDTH = 12'd640;
+assign FB_HEIGHT = 12'd480;
 assign FB_BASE = front_sel ? BUFFER_B_ADDR : BUFFER_A_ADDR;
-assign FB_STRIDE = 14'd256;
+assign FB_STRIDE = 14'd2560;
 assign FB_FORCE_BLANK = ~present_done_ever;
 
 ///////////////////////   ENGINE   /////////////////////////////////

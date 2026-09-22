@@ -3,11 +3,11 @@
 // CMDQ-003) OSD "Blit Copy Test" button and simulation, never actually
 // pushed through link_ring on real hardware.
 //
-// Two commands, in order: SOLID_FILL an out-of-view source rect with a
-// distinct color via link_push, then BLIT_COPY that exact region into the
-// visible 64x64 surface. If the destination ends up matching the source
-// color, BLIT_COPY genuinely read what SOLID_FILL wrote and copied it --
-// not just "accepted a command and did something".
+// Three commands, in order: SOLID_FILL an out-of-view source rect with a
+// distinct color, BLIT_COPY that exact region into the current back buffer
+// (OUT-004), then PRESENT it. If the displayed surface ends up matching
+// the source color, BLIT_COPY genuinely read what SOLID_FILL wrote and
+// copied it -- not just "accepted a command and did something".
 //
 // Usage, as root on the MiSTer:
 //   ./blit_copy_push [r_hex] [g_hex] [b_hex]
@@ -22,14 +22,13 @@
 
 #include "../lib/noodles_link.h"
 
-#define VISIBLE_ADDR 0x30000000u
-#define SOURCE_ADDR 0x30010000u  // arbitrary safe address, out of the visible surface
-#define PITCH 256                // 64px * 4B
-#define SIZE 64
+// Own 2MB-aligned scratch slot, clear of both double-buffer surfaces
+// (0x31000000/0x31200000, each 2MB) and of LINK-002's ring (0x30020000+).
+#define SOURCE_ADDR 0x31400000u
 
 static int wait_for_fence(noodles_link_t *link, uint32_t done_before, const char *what) {
     struct timespec delay = {.tv_sec = 0, .tv_nsec = 1000000};  // 1ms
-    for (int i = 0; i < 200; ++i) {
+    for (int i = 0; i < 2000; ++i) {
         uint32_t done_now = noodles_link_done_count(link);
         if (done_now > done_before) {
             printf("%s: fence %u -> %u\n", what, done_before, done_now);
@@ -37,7 +36,7 @@ static int wait_for_fence(noodles_link_t *link, uint32_t done_before, const char
         }
         nanosleep(&delay, NULL);
     }
-    fprintf(stderr, "%s: fence never advanced past %u after 200ms\n", what, done_before);
+    fprintf(stderr, "%s: fence never advanced past %u after 2s\n", what, done_before);
     return 1;
 }
 
@@ -53,9 +52,11 @@ int main(int argc, char **argv) {
     }
 
     uint32_t color = noodles_rgb(r, g, b);
+    uint32_t back = noodles_link_back_buffer(&link);
 
     uint32_t done_before = noodles_link_done_count(&link);
-    if (noodles_push_solid_fill(&link, SOURCE_ADDR, PITCH, SIZE, SIZE, color) != 0) {
+    if (noodles_push_solid_fill(&link, SOURCE_ADDR, NOODLES_BUFFER_PITCH, NOODLES_BUFFER_WIDTH,
+                                 NOODLES_BUFFER_HEIGHT, color) != 0) {
         fprintf(stderr, "ring full pushing source fill\n");
         noodles_link_close(&link);
         return 1;
@@ -66,7 +67,9 @@ int main(int argc, char **argv) {
     }
 
     done_before = noodles_link_done_count(&link);
-    if (noodles_push_blit_copy(&link, VISIBLE_ADDR, PITCH, SOURCE_ADDR, PITCH, SIZE, SIZE) != 0) {
+    if (noodles_push_blit_copy(&link, back, NOODLES_BUFFER_PITCH, SOURCE_ADDR,
+                                NOODLES_BUFFER_PITCH, NOODLES_BUFFER_WIDTH,
+                                NOODLES_BUFFER_HEIGHT) != 0) {
         fprintf(stderr, "ring full pushing blit copy\n");
         noodles_link_close(&link);
         return 1;
@@ -76,9 +79,15 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    if (noodles_present_and_wait(&link) != 0) {
+        fprintf(stderr, "present failed\n");
+        noodles_link_close(&link);
+        return 1;
+    }
+
     noodles_link_close(&link);
-    printf("done -- visible surface at 0x%08x should now be solid r=%02x g=%02x b=%02x (0x%08x),\n"
-           "copied from source at 0x%08x by BLIT_COPY, not written there directly.\n",
-           VISIBLE_ADDR, r, g, b, color, SOURCE_ADDR);
+    printf("done -- display should now be solid r=%02x g=%02x b=%02x (0x%08x),\n"
+           "copied into back buffer 0x%08x from source at 0x%08x by BLIT_COPY, then presented.\n",
+           r, g, b, color, back, SOURCE_ADDR);
     return 0;
 }
