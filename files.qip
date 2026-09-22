@@ -1,7 +1,6 @@
 set_global_assignment -name QIP_FILE rtl/pll.qip
 set_global_assignment -name SDC_FILE Noodles.sdc
 set_global_assignment -name SYSTEMVERILOG_FILE Noodles.sv
-
-# rtl/cmdq.sv and rtl/blit.sv are written and Verilator-simulated (`make sim`)
-# but not yet instantiated by Noodles.sv, so they are intentionally not built
-# into the Quartus project yet -- see the note at the top of Noodles.sv.
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cmdq.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/blit.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/ddram_write_adapter.sv

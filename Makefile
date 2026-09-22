@@ -21,27 +21,31 @@ HOSTBIN := build/host/misterpet-spike
 HOST    ?= mister.local
 DEST    ?= /media/fat/pet
 
-VERILATOR      ?= verilator
-SIM_DIR        := build/sim
-SIM_TOP        := engine_dut
-SIM_SOURCES    := rtl/cmdq.sv rtl/blit.sv sim/engine_dut.sv
-SIM_TB         := sim/tb_solid_fill.cpp
-SOLID_FILL_SIM := $(SIM_DIR)/V$(SIM_TOP)
+VERILATOR ?= verilator
+SIM_DIR   := build/sim
+
+SOLID_FILL_SIM   := $(SIM_DIR)/solid_fill/Vengine_dut
+DDRAM_ADAPTER_SIM:= $(SIM_DIR)/ddram_adapter/Vengine_ddram_dut
 
 .PHONY: all host deploy sim clean
 
 all: $(ARMBIN) $(ARMTOG)
 
-sim: $(SOLID_FILL_SIM)
-	$<
+sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM)
+	$(SOLID_FILL_SIM)
+	$(DDRAM_ADAPTER_SIM)
 
-$(SOLID_FILL_SIM): $(SIM_SOURCES) $(SIM_TB) | $(SIM_DIR)
-	$(VERILATOR) --cc --exe --build --Mdir $(SIM_DIR) --top-module $(SIM_TOP) \
+$(SOLID_FILL_SIM): rtl/cmdq.sv rtl/blit.sv sim/engine_dut.sv sim/tb_solid_fill.cpp
+	@mkdir -p $(dir $@)
+	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module engine_dut \
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
-		$(SIM_SOURCES) $(SIM_TB) -o V$(SIM_TOP)
+		rtl/cmdq.sv rtl/blit.sv sim/engine_dut.sv sim/tb_solid_fill.cpp -o $(notdir $@)
 
-$(SIM_DIR):
-	mkdir -p $@
+$(DDRAM_ADAPTER_SIM): rtl/cmdq.sv rtl/blit.sv rtl/ddram_write_adapter.sv sim/engine_ddram_dut.sv sim/tb_ddram_adapter.cpp
+	@mkdir -p $(dir $@)
+	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module engine_ddram_dut \
+		--Wall --Wno-fatal -Wno-DECLFILENAME \
+		rtl/cmdq.sv rtl/blit.sv rtl/ddram_write_adapter.sv sim/engine_ddram_dut.sv sim/tb_ddram_adapter.cpp -o $(notdir $@)
 
 $(ARMBIN): src/spike_fb.c | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ $< $(LDLIBS)
