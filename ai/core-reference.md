@@ -90,6 +90,7 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 | Does polling for LINK steal video scan-out bandwidth? | DDR component records | DDR-004 |
 | Where does the ring buffer live in memory? | LINK component records | LINK-002 |
 | How does CMDQ actually find and fetch a queued command? | LINK component records | LINK-003 |
+| Why does a shared read port need a "who's mid-request" signal, not just rd_en? | DDR/LINK component records | DDR-005 |
 
 ---
 
@@ -114,6 +115,7 @@ SURF-004: "Physical 0x20000000 itself is unsafe -- MiSTer's own system video sca
 BLIT-003: "BLIT_COPY (opcode 2) reuses dst_addr/pitch/width/height, adds src_addr (word 6) and src_pitch (word 7) where SOLID_FILL had reserved words"
 DDR-003: "Generic single-outstanding read port added to the DDRAM adapter (ddram_write_adapter.sv -> ddram_adapter.sv), muxed onto the shared physical bus alongside the write port"
 DDR-004: "DDRAM_* (ram1) is a separate physical F2H SDRAM port from MISTER_FB's own vbuf scan-out port and ram2's audio/palette port -- no Avalon-level contention"
+DDR-005: "A shared read-port mux must select on a REQ+WAIT-spanning signal (link_ring's new rd_active), not a requester's own rd_en, or it silently hands a pending response's byte-half-select to the wrong (idle) client -- found via a link-pushed dst_addr reading back as opcode's own value"
 LINK-002: "64-slot ring buffer at phys 0x30020000 (header: write_ptr +0, read_ptr +8) / 0x30021000 (slots), reusing CMDQ-001's 32-byte slot format"
 LINK-003: "link_ring.sv polls write_ptr only while CMDQ is idle (cmd_ready), fetches via 8 sequential reads, dispatches to CMDQ, writes back read_ptr"
 ```
@@ -284,6 +286,15 @@ LINK-003: "link_ring.sv polls write_ptr only while CMDQ is idle (cmd_ready), fet
   decided_date: 2026-09-22
   decision: "Read from sys/sys_top.v: sysmem_lite exposes three independent physical DDR3 access ports -- ram1 (64-bit, mapped straight to the core's own DDRAM_* pins, what this project's adapter uses), ram2 (64-bit, driven by ddr_svc for ALSA audio and the 8bpp palette), and vbuf (128-bit, wider, feeding the framework's own HDMI framebuffer/ascal scan-out). These are separate Avalon-MM ports into the memory controller, not one shared bus this core's own reads/writes contend with at the Avalon level."
   consequence: "CMDQ's future ring-buffer polling (LINK-003) does not need to be throttled to protect MISTER_FB's video scan-out bandwidth -- they are different hardware ports, so the earlier concern (raised before OUT-002/OUT-003 were ever tested) does not apply. The underlying DDR3 chip and its controller are still shared by all three ports plus HPS/Linux, so this is not a claim of zero contention at the physical DRAM level, only that there is no Avalon-level arbitration this core's polling needs to cooperate with."
+
+- record_id: DDR-005
+  kind: INTERFACE
+  component_id: DDR
+  title: "A shared read-port mux must track who has a response pending, not just who is currently requesting"
+  status: DECIDED
+  decided_date: 2026-09-22
+  decision: "Noodles.sv's 2-way read-port mux (link_ring vs blit_copy, feeding the one shared ddram_adapter per DDR-003) originally keyed its selector on rd_en alone (`rd_sel_link = link_rd_en`). rd_en is a requester's one-shot REQ-phase pulse -- link_ring's own rd_en is (state==POLL_REQ)||(state==FETCH_REQ), dropping the instant a request is accepted and the requester moves to its WAIT phase. But the response (rd_valid/rd_data) arrives during that WAIT phase, sometimes many cycles later. With rd_en as the selector, the mux fell through to the OTHER client's (idle, address 0) signals for the entire WAIT window, so by the time rd_valid actually pulsed, ddram_adapter's byte-half-select (`rd_addr[2] ? dout[63:32] : dout[31:0]`) used the wrong client's (idle) address bit instead of the real requester's pinned one. Found on real hardware: a link-pushed SOLID_FILL's dst_addr field (word_idx=1, upper half of the same aligned DDRAM word as word_idx=0/opcode) consistently read back as opcode's own raw value (1) -- the lower half of that same word -- because copy_rd_addr's idle value (0, bit[2]=0) selected the wrong half at the moment link_ring's response landed. CMDQ/BLIT never saw this as an error: blit_start still fired (a valid-looking, just wrong, dst_addr) and blit_done still fired (once width/height happened to also read correctly), so the failure was silent -- no busy/stuck state, no dropped command, just a write that landed at physical address 1 instead of 0x30000000 and was never found by a memory scan of the address it was expected at. Fixed by giving link_ring a new rd_active output (POLL_REQ||POLL_WAIT||FETCH_REQ||FETCH_WAIT -- the same REQ+WAIT span rd_addr itself was already pinned across) and using that, not rd_en, as the mux selector."
+  consequence: "Any future shared-port mux between two request/response clients on this DDRAM adapter must select on a signal spanning the full REQ+WAIT lifetime of a pending transaction, never on the requester's own rd_en/wr_en (which by design only pulses during the REQ phase). This bug was invisible to `make sim`'s link_ring testbench (sim/link_ring_dut.sv) because that DUT wires link_ring directly to its own ddram_adapter instance with no second client and no mux at all -- it never exercised the failure mode that only exists once a real mux with an idle-but-present second client is in the loop. Simulation coverage for shared-bus arbitration bugs requires a testbench that actually includes the mux and a plausible idle second client, not just the module in isolation; no such testbench exists yet for this specific mux, so this class of bug could recur for BLIT-003's own read requests if ddram_adapter ever gains a third client without the same rd_active-style pattern."
 
 - record_id: LINK-002
   kind: INTERFACE
