@@ -675,3 +675,45 @@ The ~8x SOLID_FILL-vs-BLIT_COPY gap is fully explained by DDR-003's single-outst
 - [x] Passed
 
 ---
+
+## 21 COMMIT Unreleased 3741062 2026-09-22T09:21:02-07:00
+
+#### Coming From:
+
+Unreleased 511f55e
+
+#### Purpose:
+
+Add double buffering, prioritized ahead of the BLIT_COPY throughput gap and resolution scale-up as the more fundamental prerequisite: any real-time animated content would tear visibly drawing directly into the live-scanned-out surface, regardless of sprite count or resolution.
+
+#### Outcome:
+
+Added rtl/present.sv: owns a single front_sel register selecting which of two fixed 64x64/32bpp surfaces (BUFFER_A at 0x30000000, BUFFER_B at 0x30008000) FB_BASE currently points at, flipped only on a fresh FB_VBL rising edge so a flip request arriving mid-blank waits for the next blanking interval rather than risking a change too close to when active video resumes -- deliberately conservative (worst case ~2 frames' latency) rather than depending on undocumented assumptions about ascal's own prefetch timing. Confirmed FB_VBL needs no cross-clock synchronizer before writing any RTL: this core's CLK_VIDEO output (already tied to clk_sys) is literally what sys_top.v uses to generate FB_VBL, so present.sv's own clock domain already matches. PRESENT (opcode 4) is CMDQ's third dispatch target; cmdq.sv's single active_copy bit became a 3-way active_engine selector (blit/copy/present), and the three other DUTs that instantiate cmdq directly (engine_dut, engine_ddram_dut, engine_copy_dut) needed their present ports tied off -- their own testbenches still passing unchanged confirmed the refactor didn't disturb blit/copy dispatch. present_done_ever (renamed from draw_done_ever) now gates FB_EN on the first PRESENT completing rather than the first draw, since a completed draw only changes the back buffer now. lib/noodles_link.h/.c gained noodles_link_back_buffer() and noodles_present_and_wait(), computing which buffer is back purely from the handle's own count of CONFIRMED presents -- no new DRAM-published state needed beyond the existing LINK-005 fence. sim/tb_present.cpp verifies present.sv in isolation, including the specific case that would have been easy to get wrong: a start pulse arriving while FB_VBL is already high must wait for a NEW rising edge, not flip immediately just because it happens to already be in a blanking interval. tools/present_demo.c cycles 6 solid colors through alternating buffers on real hardware; the buffer address alternated correctly every flip and the sequence displayed cleanly across two separate runs, confirmed visually by the user both times (the user asked for a second run before confirming, which came back identical to the first). `make sim` (6/6) and `quartus_sh --flow compile Noodles` (0 errors, 6,452 ALMs) both clean.
+
+#### Next Steps:
+
+Per the priority order agreed with the user (double buffering, then resolution, then BLIT_COPY throughput only if something concrete proves it's a bottleneck), resolution scale-up (64x64 -> something StarCraft/OpenBW-scale, e.g. 640x480) is next. Anything drawing today must be updated to the double-buffered pattern -- draw at noodles_link_back_buffer(), then noodles_present_and_wait(), then re-read back_buffer() for the next frame -- code written against the single-buffer examples in earlier entries (which drew directly at a fixed address) is now stale as a pattern to copy from, though those addresses/commands still work individually.
+
+#### Files Modified:
+
+- rtl/present.sv
+- rtl/cmdq.sv
+- Noodles.sv
+- sim/present_dut.sv
+- sim/tb_present.cpp
+- sim/engine_dut.sv
+- sim/engine_ddram_dut.sv
+- sim/engine_copy_dut.sv
+- lib/noodles_link.h
+- lib/noodles_link.c
+- tools/present_demo.c
+- Makefile
+- scripts/deploy.sh
+- files.qip
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
