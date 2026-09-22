@@ -42,6 +42,41 @@ Wire CMDQ and BLIT into Noodles.sv for real: design and implement the DDRAM writ
 
 ---
 
+## 36 COMMIT Unreleased ??? 2026-09-22T12:59:49-07:00
+
+#### Coming From:
+
+Unreleased 8ff9bfa
+
+#### Purpose:
+
+Instrument ascal's framebuffer read ownership to establish a retirement acknowledgement after scanout has stopped consuming the old surface.
+
+#### Outcome:
+
+The approved implementation will trace ascal's Avalon read request/response pipeline and output-buffer selection, then export a synchronized retirement event only after the output-domain boundary and any outstanding framebuffer read activity are clear. PRESENT will consume that evidence instead of another fixed timing heuristic. Simulation will exercise delayed read responses and repeated two-buffer flips, followed by a full Quartus build and repeated 64-sprite hardware trials.
+
+#### Next Steps:
+
+Locate the exact ascal read-pipeline idle condition, implement the smallest diagnostic/handshake change without adding a surface, validate simulation and timing, deploy the build, and compare repeated flicker results against the 4/10 baseline.
+
+#### Files Modified:
+
+- sys/ascal.vhd
+- sys/sys_top.v
+- sys/emu_ports.vh
+- rtl/present.sv
+- Noodles.sv
+- sim/present_dut.sv
+- sim/tb_present.cpp
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
+
 ## 35 COMMIT Unreleased 8ff9bfa 2026-09-22T12:59:17-07:00
 
 #### Coming From:
