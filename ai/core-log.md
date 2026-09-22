@@ -42,6 +42,35 @@ Wire CMDQ and BLIT into Noodles.sv for real: design and implement the DDRAM writ
 
 ---
 
+## 33 COMMIT Unreleased 3c8ba95 2026-09-22T12:47:46-07:00
+
+#### Coming From:
+
+Unreleased 3c8ba95
+
+#### Purpose:
+
+Hardware-test the ascal framebuffer-base acknowledgement against the recurring 64-sprite flicker.
+
+#### Outcome:
+
+After correcting the FB_EN/PRESENT deadlock, the user ran `stress-demo assets/sprite.bmp 64 15` on the acknowledgement build. PRESENT completed normally and the workload rendered 173 frames in 15.1 seconds at 11.5 fps, but visible flicker remained about as frequent as with the previous three-FB_VBL implementation. This validates that the acknowledgement reaches PRESENT but does not prove that ascal has retired all outstanding reads from the old surface; OUT-005 remains unresolved.
+
+#### Next Steps:
+
+Continue from ascal's output-domain buffer-retirement logic rather than the framebuffer-base latch: identify or export an acknowledgement after the old `o_obuf` data has stopped being consumed, synchronize that event into clk_sys, and retain two-buffer operation. Any replacement must be simulation-covered and rerun against repeated 64-sprite trials.
+
+#### Files Modified:
+
+- None.
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
+
 ## 32 COMMIT Unreleased 3c8ba95 2026-09-22T12:44:16-07:00
 
 #### Coming From:
