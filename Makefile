@@ -1,9 +1,9 @@
 # MiSTer-Noodles
 #
-#   make            cross-build the spike for the MiSTer (static, armv7/Cortex-A9)
-#   make host       native build for poking at it on the desktop (--fake/--ppm)
+#   make            cross-build the ARM-side host tools (static, armv7/Cortex-A9)
+#   make host       native build for poking at the tools on the desktop
 #   make deploy HOST=192.168.1.x
-#   make sim        Verilator simulation of the RTL engine (CMDQ/BLIT)
+#   make sim        Verilator simulation of the RTL engine (CMDQ/BLIT/LINK)
 #   make clean
 
 CROSS   ?= arm-linux-gnueabihf-
@@ -12,19 +12,17 @@ HOSTCC  ?= cc
 
 ARMFLAGS := -march=armv7-a -mtune=cortex-a9 -mfpu=neon -mfloat-abi=hard
 CFLAGS   := -std=c99 -O2 -Wall -Wextra -Wno-unused-parameter
-LDLIBS   := -lm
 
-ARMBIN      := build/arm/misterpet-spike
-ARMTOG      := build/arm/fbterm-toggle
 ARMLINK     := build/arm/link-push
 ARMSLOTDUMP := build/arm/link-slot-dump
 ARMMEMSCAN  := build/arm/mem-scan
 ARMCOPYPUSH := build/arm/blit-copy-push
-HOSTBIN     := build/host/misterpet-spike
+ARMFILLPUSH := build/arm/solid-fill-push
 HOSTLINK    := build/host/link-push
 HOSTSLOTDUMP:= build/host/link-slot-dump
 HOSTMEMSCAN := build/host/mem-scan
 HOSTCOPYPUSH:= build/host/blit-copy-push
+HOSTFILLPUSH:= build/host/solid-fill-push
 
 HOST    ?= mister.local
 DEST    ?= /media/fat/pet
@@ -40,7 +38,7 @@ LINK_FENCE_SIM    := $(SIM_DIR)/link_fence/Vlink_fence_dut
 
 .PHONY: all host deploy sim clean
 
-all: $(ARMBIN) $(ARMTOG) $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH)
+all: $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH)
 
 sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(BLIT_COPY_SIM) $(LINK_RING_SIM) $(LINK_FENCE_SIM)
 	$(SOLID_FILL_SIM)
@@ -79,14 +77,6 @@ $(LINK_FENCE_SIM): rtl/link_fence.sv sim/link_fence_dut.sv sim/tb_link_fence.cpp
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
 		rtl/link_fence.sv sim/link_fence_dut.sv sim/tb_link_fence.cpp -o $(notdir $@)
 
-$(ARMBIN): src/spike_fb.c | build/arm
-	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ $< $(LDLIBS)
-	@$(CROSS)size $@ 2>/dev/null || true
-	@file $@ 2>/dev/null || true
-
-$(ARMTOG): src/fbterm_toggle.c | build/arm
-	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ $<
-
 $(ARMLINK): tools/link_push.c lib/noodles_link.c lib/noodles_link.h | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ tools/link_push.c lib/noodles_link.c
 
@@ -99,10 +89,10 @@ $(ARMMEMSCAN): tools/mem_scan.c | build/arm
 $(ARMCOPYPUSH): tools/blit_copy_push.c lib/noodles_link.c lib/noodles_link.h | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ tools/blit_copy_push.c lib/noodles_link.c
 
-host: $(HOSTBIN) $(HOSTLINK) $(HOSTSLOTDUMP) $(HOSTMEMSCAN) $(HOSTCOPYPUSH)
+$(ARMFILLPUSH): tools/solid_fill_push.c lib/noodles_link.c lib/noodles_link.h | build/arm
+	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ tools/solid_fill_push.c lib/noodles_link.c
 
-$(HOSTBIN): src/spike_fb.c | build/host
-	$(HOSTCC) $(CFLAGS) -o $@ $< $(LDLIBS)
+host: $(HOSTLINK) $(HOSTSLOTDUMP) $(HOSTMEMSCAN) $(HOSTCOPYPUSH) $(HOSTFILLPUSH)
 
 $(HOSTLINK): tools/link_push.c lib/noodles_link.c lib/noodles_link.h | build/host
 	$(HOSTCC) $(CFLAGS) -o $@ tools/link_push.c lib/noodles_link.c
@@ -116,10 +106,13 @@ $(HOSTMEMSCAN): tools/mem_scan.c | build/host
 $(HOSTCOPYPUSH): tools/blit_copy_push.c lib/noodles_link.c lib/noodles_link.h | build/host
 	$(HOSTCC) $(CFLAGS) -o $@ tools/blit_copy_push.c lib/noodles_link.c
 
+$(HOSTFILLPUSH): tools/solid_fill_push.c lib/noodles_link.c lib/noodles_link.h | build/host
+	$(HOSTCC) $(CFLAGS) -o $@ tools/solid_fill_push.c lib/noodles_link.c
+
 build/arm build/host:
 	mkdir -p $@
 
-deploy: $(ARMBIN) $(ARMTOG)
+deploy: $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH)
 	scripts/deploy.sh $(HOST)
 
 clean:

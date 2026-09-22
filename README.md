@@ -1,123 +1,76 @@
 # MiSTer-Noodles
 
-A little character that lives on the MiSTer's menu background.
+A FPGA-accelerated 2D graphics engine for MiSTer, in the same vein as SDL:
+an ARM/Linux host process handles game logic and drives a content-agnostic
+2D "GPU" running in the FPGA fabric through a generic draw-command stream.
+It builds and runs as its own standalone MiSTer core -- independent of any
+other core, loaded and run the same way an emulator core is, not an overlay
+or extension of Menu.
 
-The MiSTer's black-and-white static is generated inside the FPGA by the Menu
-core and there is no way to composite over it from Linux -- when Main hands the
-scaler to the Linux framebuffer, the framebuffer *replaces* the core's video. So
-MiSTer-Noodles draws its own static (ported pixel-for-pixel from the Menu core's
-RTL) and puts the pet on top of it. See [docs/mister-framebuffer.md](docs/mister-framebuffer.md)
-for the full picture, including the `/dev/MiSTer_cmd` command set.
+## Architecture
 
-## Status
+- **LINK** -- the host/FPGA transport. A host process writes draw commands
+  into a 64-slot ring buffer in shared DDR3; `rtl/link_ring.sv` polls,
+  fetches, and dispatches them to CMDQ. A completion fence
+  (`rtl/link_fence.sv`) publishes back to DRAM once a command actually
+  finishes, not just once it's accepted.
+- **CMDQ** (`rtl/cmdq.sv`) -- decodes each 32-byte command slot and
+  dispatches it to the matching engine.
+- **BLIT** -- the draw engines. `rtl/blit.sv` implements `SOLID_FILL`;
+  `rtl/blit_copy.sv` implements `BLIT_COPY` (straight rect copy, no
+  scale/blend/format conversion). Both drive the real `DDRAM_*` pins
+  through `rtl/ddram_adapter.sv`.
+- **SURF** -- the surface memory model. Currently one fixed 64x64, 32bpp
+  surface at a hardcoded physical address, scanned out over HDMI via
+  `MISTER_FB`.
 
-Step 1 of the plan: `src/spike_fb.c`, a dependency-free spike that proves the
-display path on real hardware. No SDL yet -- SDL2 has no fbdev backend, so once
-the spike is confirmed it gets wrapped in SDL surfaces + SDL2_image sprites with
-this same mmap present path underneath.
+Every decision behind this shape -- the ring buffer's memory layout, the
+command slot format, the DDRAM addressing quirks that had to be found on
+real hardware, the host API -- is recorded in
+[ai/core-reference.md](ai/core-reference.md). That file is the
+authoritative source for anything that looks like an interface contract;
+[ai/core-log.md](ai/core-log.md) has the build-by-build history of how it
+got there.
 
-## Confirmed on hardware (DE10-Nano, kernel 5.15.1-MiSTer, 2026-08-30)
+## Host-side API
 
-`--info` against the real `/dev/fb0`:
-
-    fb: id="MiSTer_fb" 1920x1080 (virtual 1920x1080) 32 bpp
-    fb: line_length=7680 smem_len=8294400 smem_start=0x22001000 type=0 visual=2
-    fb: R off=16 len=8  G off=8 len=8  B off=0 len=8  A off=0 len=0
-
-`smem_start` is `FB_ADDR + 4096`, exactly the slot-0 offset from video.cpp:3491,
-which confirms the memory map in the notes. The device reports ARGB even though
-`/sys/module/MiSTer_fb/parameters/mode` says `rb=1`, so it is reporting the
-post-swap layout -- what actually lands on screen still needs the bar test.
-
-Static generator, measured on the Cortex-A9 with `--fake` (no framebuffer
-touched, so this is generator cost only, excluding the present memcpy):
-
-    320x240      327 fps
-    640x480       82 fps
-    1920x1080     12 fps
-
-The framebuffer's default mode is 1920x1080, where full-screen animated static
-cannot hold a frame rate. `fb_cmd1` at a small size is therefore required, not
-just convenient -- and 320x240 leaves roughly 10x headroom for the sprite layer.
-
-Still unverified, because both need the display: channel order as actually
-scanned out, and whether Main picks up the synthetic F9 from a uinput device
-created after boot.
+`lib/noodles_link.h`/`.c` is the real ARM-side library: open the ring,
+push a `SOLID_FILL` or `BLIT_COPY`, pack a color (note: the byte order is
+R in the low byte, not the `0xRRGGBB` reading a hex literal suggests --
+see BLIT-004), and check `noodles_link_done_count()` against a value read
+before the push to know when a specific command actually finished.
 
 ## Build
 
-    make          # static armv7 binary -> build/arm/misterpet-spike
-    make host     # native binary for offscreen testing
+    make          # cross-build the ARM-side host tools (static, armv7/Cortex-A9)
+    make host     # native build of the same tools, for testing off-device
+    make sim      # Verilator simulation of the RTL (CMDQ/BLIT/LINK)
+    make deploy HOST=192.168.1.42   # scp the tools to /media/fat/pet (root / "1")
+    make clean
 
-The cross build uses `arm-linux-gnueabihf-gcc` and links statically: the MiSTer's
-userland is glibc ~2.31, so a dynamically linked binary from a modern distro will
-not load there.
+The FPGA bitstream itself is a normal Quartus project (`Noodles.qpf`);
+`quartus_sh --flow compile Noodles` produces `output_files/Noodles.rbf` to
+load via the OSD or `/dev/MiSTer_cmd`'s `load_core`.
 
-## Try it without hardware
+## Try the host tools
 
-    ./build/host/misterpet-spike --fake 320x240 --seconds 2 --ppm /tmp/frame.ppm
+Once the core is loaded on real hardware:
 
-Renders the static and the pet offscreen and dumps the last frame.
+    build/arm/link-push                       # pushes one SOLID_FILL (cyan)
+    build/arm/blit-copy-push 80 00 ff         # fills a source rect, then BLIT_COPYs it into view
+    build/arm/solid-fill-push <addr> <pitch> <w> <h> <r> <g> <b>   # fill an arbitrary rect
 
-## Run it on the MiSTer
-
-    make deploy HOST=192.168.1.42        # scp to /media/fat/pet (root / "1")
-
-While the SD card is off limits, stage into RAM instead -- nothing touches
-/media/fat and it is gone on the next reboot:
-
-    HOST=10.10.0.30 scripts/stage.sh
-
-Main only hands the scaler to `/dev/fb0` on an F9 keypress (`menu.cpp:1365`,
-gated by `fb_terminal`, which defaults on). Either press F9 on the Menu core, or
-synthesise it -- `build/arm/fbterm-toggle` creates a uinput keyboard and taps
-F9, which is also how the boot daemon will do it. `scripts/hw-test.sh` drives
-the whole sequence and restores the previously loaded core afterwards:
-
-    MSH='ssh root@10.10.0.30' scripts/hw-test.sh pattern
-    MSH='ssh root@10.10.0.30' scripts/hw-test.sh pet
-
-Or step through it by hand. Over ssh:
-
-    /media/fat/pet/misterpet-spike --info
-
-Dumps what `/dev/fb0` actually is: resolution, bpp, stride, and the channel
-offsets. If bpp is not 32, ask Main for an 8888 buffer first.
-
-    /media/fat/pet/misterpet-spike --pattern --seconds 15
-
-Four vertical bars, red / green / blue / white left to right, with a black
-square in the top-left corner. If the colours come out in a different order the
-framebuffer is misreporting its channel offsets -- rerun with `--pack argb`,
-`--pack abgr`, etc. until they match, and note which one won.
-
-    /media/fat/pet/misterpet-spike --fbcmd 320 240 --scale 3 --seconds 30
-
-Asks Main for a 320x240 buffer (integer-upscaled and centred by the scaler),
-then animates the static with the pet bouncing across it, and prints the frame
-rate it managed. That number decides how much headroom there is for the real
-thing.
-
-Every run self-terminates after `--seconds` (default 20) and blanks the
-framebuffer on the way out, so a bad run cannot leave the screen stuck. Press F9
-again to give the display back to the Menu core.
-
-Useful extras: `--vt 3` moves to an unused VT and sets KD_GRAPHICS so a getty
-cannot scribble over the frame; `--fps N` caps the frame rate; `--keep` leaves
-the last frame on screen.
-
-## Boot integration
-
-`install/user-startup.sh.example` goes to `/media/fat/linux/user-startup.sh`.
-Nothing is installed into the rootfs -- MiSTer's Linux updates replace it.
+`link-slot-dump` and `mem-scan` are raw diagnostics for reading the ring
+buffer and scanning physical memory directly, useful when something isn't
+landing where expected.
 
 ## Layout
 
-    src/spike_fb.c       the spike: fb open/mmap/present, MiSTer static, sprite
-    src/fbterm_toggle.c  uinput F9 tap -- asks Main for the Linux framebuffer
-    docs/                research notes on the MiSTer video path
-    scripts/stage.sh     copy to /tmp on the MiSTer (RAM, no SD writes)
-    scripts/hw-test.sh   full on-hardware run, restores the core afterwards
-    scripts/deploy.sh    scp to /media/fat/pet
-    install/             user-startup.sh example
-# MiSTer-Noodles
+    Noodles.sv            top-level core glue (sys/ framework <-> the engine)
+    rtl/                  CMDQ, BLIT, BLIT_COPY, LINK, the DDRAM adapter
+    sim/                  Verilator testbenches for the RTL above
+    lib/                  noodles_link: the real ARM-side host API
+    tools/                host-side CLI tools built on lib/noodles_link
+    sys/                  vendored Template_MiSTer framework, unmodified
+    ai/                   core.md / core-reference.md / core-log.md -- this
+                           project's own architecture-decision and build log
