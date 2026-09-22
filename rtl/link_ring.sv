@@ -27,6 +27,7 @@ module link_ring #(
     // generic read port
     output logic [31:0] rd_addr,
     output logic         rd_en,
+    output logic         rd_active,  // high across the *_REQ/*_WAIT pair, not just *_REQ
     input  logic         rd_ready,
     input  logic [31:0]  rd_data,
     input  logic         rd_valid,
@@ -58,14 +59,35 @@ module link_ring #(
         SLOT_BASE_ADDR + (32'(read_ptr) << 5) + {27'd0, word_idx, 2'b00};
     wire [SLOT_INDEX_WIDTH-1:0] next_read_ptr = read_ptr + 1'b1;
 
+    // Explicit width-safe word_idx*32 (bit offset into slot_reg), matching
+    // slot_word_addr's own concatenation-based word_idx*4 above rather than
+    // a raw multiply inside an indexed part-select's base expression.
+    wire [7:0] slot_bit_offset = {word_idx, 5'b00000};
+
     // rd_addr must stay pinned to the address that was actually requested
     // for as long as a response can still be pending -- i.e. across the
     // *_REQ/*_WAIT pair together, not just during *_REQ. Getting this wrong
     // makes the adapter's byte-half-select use a different (stale) address
     // than the one the read was issued against once the requester moves to
     // its WAIT state.
-    assign rd_en   = (state == POLL_REQ) || (state == FETCH_REQ);
-    assign rd_addr = (state == POLL_REQ || state == POLL_WAIT) ? HEADER_ADDR : slot_word_addr;
+    //
+    // rd_active exists for the SAME reason but one level up: Noodles.sv's
+    // read-port mux between link_ring and blit_copy previously keyed its
+    // selector on rd_en alone, which drops as soon as the request is
+    // accepted (during *_REQ only) -- so by the time rd_valid actually
+    // arrives (during *_WAIT), the mux had already fallen through to
+    // blit_copy's idle address (0, bit[2]=0), making the shared
+    // ddram_adapter select the WRONG half of the 64-bit DDRAM word for
+    // link's own pending response. This is exactly how a link-pushed
+    // SOLID_FILL's dst_addr field was observed reading back as opcode's own
+    // raw value (1) on real hardware: word_idx=1 (dst_addr, upper half of
+    // the same aligned word as word_idx=0/opcode) got the lower half
+    // instead. rd_active spans the *_REQ/*_WAIT pair so the mux can stay
+    // pinned to link_ring for as long as ITS response can still be pending,
+    // mirroring rd_addr's own pinning above.
+    assign rd_en     = (state == POLL_REQ) || (state == FETCH_REQ);
+    assign rd_active = (state == POLL_REQ) || (state == POLL_WAIT) || (state == FETCH_REQ) || (state == FETCH_WAIT);
+    assign rd_addr   = (state == POLL_REQ || state == POLL_WAIT) ? HEADER_ADDR : slot_word_addr;
 
     // read_ptr is already advanced by the time WRITE_BACK runs (DISPATCH's
     // transition updates it), so wr_data is simply the current register --
@@ -118,7 +140,7 @@ module link_ring #(
 
                 FETCH_WAIT: begin
                     if (rd_valid) begin
-                        slot_reg[word_idx*32 +: 32] <= rd_data;
+                        slot_reg[slot_bit_offset +: 32] <= rd_data;
                         if (word_idx == 3'd7) begin
                             state <= DISPATCH;
                         end else begin

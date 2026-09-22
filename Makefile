@@ -19,10 +19,14 @@ ARMTOG     := build/arm/fbterm-toggle
 ARMMARKER  := build/arm/ddram-marker-check
 ARMSCAN    := build/arm/ddram-marker-scan
 ARMLINK    := build/arm/link-push
+ARMSLOTDUMP:= build/arm/link-slot-dump
+ARMMEMSCAN := build/arm/mem-scan
 HOSTBIN    := build/host/misterpet-spike
 HOSTMARKER := build/host/ddram-marker-check
 HOSTSCAN   := build/host/ddram-marker-scan
 HOSTLINK   := build/host/link-push
+HOSTSLOTDUMP:= build/host/link-slot-dump
+HOSTMEMSCAN := build/host/mem-scan
 
 HOST    ?= mister.local
 DEST    ?= /media/fat/pet
@@ -39,7 +43,7 @@ LINK_RING_SIM     := $(SIM_DIR)/link_ring/Vlink_ring_dut
 
 .PHONY: all host deploy sim clean
 
-all: $(ARMBIN) $(ARMTOG) $(ARMMARKER) $(ARMSCAN) $(ARMLINK)
+all: $(ARMBIN) $(ARMTOG) $(ARMMARKER) $(ARMSCAN) $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN)
 
 sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(MARKER_TEST_SIM) $(CMD_TRIGGER_SIM) $(CMD_COPY_SIM) $(LINK_RING_SIM)
 	$(SOLID_FILL_SIM)
@@ -102,7 +106,13 @@ $(ARMSCAN): tools/ddram_marker_scan.c | build/arm
 $(ARMLINK): tools/link_push.c | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ $<
 
-host: $(HOSTBIN) $(HOSTMARKER) $(HOSTSCAN) $(HOSTLINK)
+$(ARMSLOTDUMP): tools/link_slot_dump.c | build/arm
+	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ $<
+
+$(ARMMEMSCAN): tools/mem_scan.c | build/arm
+	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ $<
+
+host: $(HOSTBIN) $(HOSTMARKER) $(HOSTSCAN) $(HOSTLINK) $(HOSTSLOTDUMP) $(HOSTMEMSCAN)
 
 $(HOSTBIN): src/spike_fb.c | build/host
 	$(HOSTCC) $(CFLAGS) -o $@ $< $(LDLIBS)
@@ -114,6 +124,12 @@ $(HOSTSCAN): tools/ddram_marker_scan.c | build/host
 	$(HOSTCC) $(CFLAGS) -o $@ $<
 
 $(HOSTLINK): tools/link_push.c | build/host
+	$(HOSTCC) $(CFLAGS) -o $@ $<
+
+$(HOSTSLOTDUMP): tools/link_slot_dump.c | build/host
+	$(HOSTCC) $(CFLAGS) -o $@ $<
+
+$(HOSTMEMSCAN): tools/mem_scan.c | build/host
 	$(HOSTCC) $(CFLAGS) -o $@ $<
 
 build/arm build/host:

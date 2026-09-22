@@ -93,16 +93,17 @@ assign AUDIO_L = 0;
 assign AUDIO_R = 0;
 assign AUDIO_MIX = 0;
 
-// LED_DISK is otherwise unused -- diagnostic left in place from DDR-002's
-// bring-up: latches solid on once the marker write has actually completed
-// on the DDRAM_* bus (not just been requested), independent of where it
-// landed. Still useful for future low-level DDRAM_* debugging.
-reg marker_done_ever;
+// LED_DISK: diagnostic for the read-mux bug fixed in link_ring.sv/rd_active
+// (see the comment there and the write-port mux comment below for the full
+// story). Latches solid if blit_start EVER fires with blit_dst_addr not
+// equal to the one address every hardware test so far has used
+// (0x30000000) -- i.e. "the bug is still happening". Should stay OFF now.
+reg dst_addr_wrong_ever;
 always @(posedge clk_sys or posedge reset)
-	if (reset) marker_done_ever <= 1'b0;
-	else if (marker_done) marker_done_ever <= 1'b1;
+	if (reset) dst_addr_wrong_ever <= 1'b0;
+	else if (blit_start && blit_dst_addr != 32'h3000_0000) dst_addr_wrong_ever <= 1'b1;
 
-assign LED_DISK = marker_done_ever;
+assign LED_DISK = dst_addr_wrong_ever;
 
 // LED_POWER is otherwise unused -- diagnostic for LINK-001's first
 // hardware test: latches solid once link_ring has actually dispatched a
@@ -120,14 +121,33 @@ always @(posedge clk_sys or posedge reset)
 assign LED_POWER = {1'b1, link_dispatch_ever};
 assign BUTTONS = 0;
 
-// draw_done_ever gates FB_EN so nothing is displayed until "Draw Test" has
+// draw_done_ever gates FB_EN so nothing is displayed until a fill has
 // actually completed once -- otherwise the screen would show whatever
-// happened to be in memory at 0x20000000 at boot (possibly still
-// marker_test's stray value from DDR-002's bring-up).
+// happened to be in memory at boot. Keyed on blit_done (BLIT's own
+// completion), not draw_test's trigger-specific done, so a link_ring- or
+// blit_copy-driven fill also unblanks the display -- gating on the OSD
+// button's own done specifically would mean a link-only session (never
+// pressing "Draw Test") could never show anything even if everything else
+// worked.
 reg draw_done_ever;
 always @(posedge clk_sys or posedge reset)
 	if (reset) draw_done_ever <= 1'b0;
-	else if (draw_done) draw_done_ever <= 1'b1;
+	else if (blit_done) draw_done_ever <= 1'b1;
+
+// Diagnostic for LINK-001's continued bring-up: LED_POWER already confirmed
+// CMDQ accepted a link_ring-dispatched command (link_cmd_valid&&link_cmd_ready),
+// but the surface never actually changed (still reads back the OLD magenta
+// at 0x30000000 after a link-push, per hardware readback). CMDQ silently
+// drops any command whose opcode it doesn't recognize -- "accepted" isn't
+// the same as "recognized and started BLIT". Repurposes LED_USER's
+// heartbeat blink (not currently needed -- everything else already proves
+// the clock runs) to latch solid the first time blit_start fires for ANY
+// reason, so we can tell whether CMDQ's opcode decode ever actually saw a
+// valid SOLID_FILL from link_ring's reconstructed command data.
+reg blit_start_ever;
+always @(posedge clk_sys or posedge reset)
+	if (reset) blit_start_ever <= 1'b0;
+	else if (blit_start) blit_start_ever <= 1'b1;
 
 // MISTER_FB scan-out (OUT-002): a fixed 64x64, 32bpp (FB_FORMAT[2:0]=3'b110)
 // surface at 0x30000000 -- NOT 0x20000000, see SURF-004: MiSTer's own
@@ -219,7 +239,7 @@ cmd_test_trigger #(
 wire         link_cmd_valid, link_cmd_ready;
 wire [255:0] link_cmd_data;
 wire [31:0]  link_wr_addr, link_wr_data, link_rd_addr, link_rd_data;
-wire         link_wr_en, link_wr_ready, link_rd_en, link_rd_ready, link_rd_valid;
+wire         link_wr_en, link_wr_ready, link_rd_en, link_rd_active, link_rd_ready, link_rd_valid;
 
 link_ring link_ring
 (
@@ -227,6 +247,7 @@ link_ring link_ring
 	.reset    (reset),
 	.rd_addr  (link_rd_addr),
 	.rd_en    (link_rd_en),
+	.rd_active(link_rd_active),
 	.rd_ready (link_rd_ready),
 	.rd_data  (link_rd_data),
 	.rd_valid (link_rd_valid),
@@ -374,7 +395,17 @@ assign engine_wr_ready = (wr_sel_marker || wr_sel_copy || wr_sel_link) ? 1'b0 : 
 // contending (see DDR-003's consequence) -- response data/valid are simply
 // broadcast to both, since only whichever one is actually mid-request will
 // be in a state that reacts to it.
-wire        rd_sel_link = link_rd_en;
+//
+// Selector is link_rd_active (spans link_ring's *_REQ/*_WAIT pair), NOT
+// link_rd_en (high only during *_REQ) -- using rd_en here was a real bug
+// (found on real hardware): once link_ring moved from FETCH_REQ into
+// FETCH_WAIT to await a response, rd_en dropped, so this mux fell through
+// to copy_rd_addr (idle at 0) for the rest of the wait -- meaning by the
+// time rd_valid actually arrived, ddram_adapter's byte-half-select used
+// blit_copy's idle address's bit[2] instead of link's own pinned request
+// address, silently handing link_ring the WRONG half of the 64-bit DDRAM
+// word it had actually asked for.
+wire        rd_sel_link = link_rd_active;
 wire [31:0] adapter_rd_addr = rd_sel_link ? link_rd_addr : copy_rd_addr;
 wire        adapter_rd_en   = rd_sel_link ? link_rd_en   : copy_rd_en;
 wire        adapter_rd_ready, adapter_rd_valid;
@@ -481,8 +512,10 @@ assign VGA_R  = 8'd0;
 assign VGA_G  = 8'd0;
 assign VGA_B  = 8'd0;
 
-reg  [26:0] act_cnt;
-always @(posedge clk_sys) act_cnt <= act_cnt + 1'd1;
-assign LED_USER    = act_cnt[26]  ? act_cnt[25:18]  > act_cnt[7:0]  : act_cnt[25:18]  <= act_cnt[7:0];
+// LED_USER's heartbeat blink is temporarily replaced by blit_start_ever --
+// see the comment where that register is declared. Every other LED and the
+// HDMI output already prove the clock is alive, so the heartbeat itself
+// isn't currently informative.
+assign LED_USER = blit_start_ever;
 
 endmodule

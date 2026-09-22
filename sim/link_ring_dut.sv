@@ -25,13 +25,14 @@ module link_ring_dut (
 );
 
     logic [31:0] rd_addr, rd_data, wr_addr, wr_data;
-    logic        rd_en, rd_ready, rd_valid, wr_en, wr_ready;
+    logic        rd_en, rd_active, rd_ready, rd_valid, wr_en, wr_ready;
 
     link_ring #(.RING_SLOTS(4)) link_ring_i (
         .clk      (clk),
         .reset    (reset),
         .rd_addr  (rd_addr),
         .rd_en    (rd_en),
+        .rd_active(rd_active),
         .rd_ready (rd_ready),
         .rd_data  (rd_data),
         .rd_valid (rd_valid),

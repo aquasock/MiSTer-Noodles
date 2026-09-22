@@ -5,7 +5,7 @@ set -e
 
 HOST="${1:-${MISTER_HOST:-mister.local}}"
 DEST="${DEST:-/media/fat/pet}"
-BINS="build/arm/misterpet-spike build/arm/fbterm-toggle build/arm/ddram-marker-check build/arm/ddram-marker-scan build/arm/link-push"
+BINS="build/arm/misterpet-spike build/arm/fbterm-toggle build/arm/ddram-marker-check build/arm/ddram-marker-scan build/arm/link-push build/arm/link-slot-dump build/arm/mem-scan"
 
 for b in $BINS; do [ -f "$b" ] || { echo "missing $b -- run make first" >&2; exit 1; }; done
 
@@ -22,3 +22,7 @@ echo "  $DEST/ddram-marker-check"
 echo
 echo "to push a real host-driven command into LINK's ring buffer (no OSD needed):"
 echo "  $DEST/link-push"
+echo
+echo "diagnostics: dump a ring slot's raw words, or scan memory for a value:"
+echo "  $DEST/link-slot-dump [slot_index]"
+echo "  $DEST/mem-scan [base_hex] [size_bytes_hex] [target_value_hex]"
