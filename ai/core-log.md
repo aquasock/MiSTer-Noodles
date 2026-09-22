@@ -42,6 +42,35 @@ Wire CMDQ and BLIT into Noodles.sv for real: design and implement the DDRAM writ
 
 ---
 
+## 35 COMMIT Unreleased 8ff9bfa 2026-09-22T12:59:17-07:00
+
+#### Coming From:
+
+Unreleased 8ff9bfa
+
+#### Purpose:
+
+Measure the output-domain ascal retirement acknowledgement against repeated heavy-load flicker trials.
+
+#### Outcome:
+
+The user ran the deployed `FB_RETIRED` build ten times with `stress-demo assets/sprite.bmp 64 15`. Four runs still showed visible flicker, so the output-domain VS-boundary acknowledgement reduces neither the defect frequency nor the uncertainty enough to count as a fix. The handshake itself is operational because all runs completed, but the observed boundary still occurs before the old surface is demonstrably safe to reuse under this workload.
+
+#### Next Steps:
+
+Stop iterating on PRESENT acknowledgement timing alone and instrument ascal's actual output-buffer selection and memory-read activity, or change the scanout ownership model so the host never reuses a surface until direct evidence shows its last read has completed. Preserve the two-buffer constraint unless the FPGA scanout path is redesigned together with any additional buffer.
+
+#### Files Modified:
+
+- None.
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
+
 ## 34 COMMIT Unreleased 8ff9bfa 2026-09-22T12:48:15-07:00
 
 #### Coming From:
