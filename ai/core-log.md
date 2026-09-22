@@ -42,6 +42,36 @@ Wire CMDQ and BLIT into Noodles.sv for real: design and implement the DDRAM writ
 
 ---
 
+## 32 COMMIT Unreleased 3c8ba95 2026-09-22T12:44:16-07:00
+
+#### Coming From:
+
+Unreleased 398cd6c
+
+#### Purpose:
+
+Fix the PRESENT/ascal acknowledgement deadlock found during the first hardware run.
+
+#### Outcome:
+
+The first acknowledgement build could not complete even a one-frame PRESENT because FB_EN was gated on present completion, while ascal only latches o_fb_base with framebuffer mode enabled. FB_EN is now asserted from reset and FB_FORCE_BLANK remains active until the first PRESENT completes, allowing ascal to acknowledge the initial base without exposing uninitialized memory. `make sim` passes all six testbenches and the full Quartus compile completes with 0 errors and 57 warnings.
+
+#### Next Steps:
+
+Load the corrected RBF and rerun present-demo followed by repeated 64-sprite stress trials; the previous hardware result was a handshake deadlock and does not assess ghosting.
+
+#### Files Modified:
+
+- Noodles.sv
+- ai/core-reference.md
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
+
 ## 2 COMMIT Unreleased ecadd93 2026-09-21T23:04:52-07:00
 
 #### Coming From:
