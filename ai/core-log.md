@@ -1401,7 +1401,9 @@ Reload the deployed RBF, run consecutive short two-sprite overlap launches, and 
 
 - [x] Built
 - [x] Deployed
-- [ ] Passed
+- [x] Passed
+
+Hardware validation: after reloading the parity-fix RBF and deploying the extended-wait tool, ten four-second trials of the original 64 moving real-colorkey sprites completed at approximately 8 FPS with no visible flicker in any run. This confirms the deterministic odd/even launch failure is fixed.
 ## 44 COMMIT Unreleased present-wait-budget 2026-09-22T14:43:23-07:00
 
 #### Coming From:
