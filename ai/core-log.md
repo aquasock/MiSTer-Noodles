@@ -1,3 +1,34 @@
+## 41 COMMIT Unreleased fixed-colorkey-diagnostic 2026-09-22T14:27:29-07:00
+
+#### Coming From:
+
+Unreleased a6106cb
+
+#### Purpose:
+
+Separate moving/overlapping sprite behavior from the real colorkey copy path with a deterministic fixed-position workload.
+
+#### Outcome:
+
+Added a `fixed` stress-demo mode that clears the back buffer before each frame and places up to eight real colorkey sprites at deterministic inset coordinates (80/240/400/560 by 80 and 320), with no movement. The deployed eight-sprite, 15-second hardware run completed at 20 FPS. Visual inspection showed all eight sprites intact and no flicker. The earlier fixed-mode run was invalid because it inherited the orange checkerboard surface; that diagnostic flaw was corrected before this result.
+
+This establishes that the real colorkey copy path is stable for a cleared, fixed, non-overlapping workload. It does not yet isolate overlap, motion, or high command-count contention from the original 64-sprite failure.
+
+#### Next Steps:
+
+Run controlled fixed overlap and moving workloads, then compare sprite counts and overlap against the original intermittent 64-sprite case. Keep the framebuffer retirement changes unchanged until a copy-path-specific failure is reproduced.
+
+#### Files Modified:
+
+- tools/stress_demo.c
+- ai/core-log.md
+
+#### Status:
+
+- [x] Built
+- [x] Deployed
+- [x] Passed
+
 ## 1 COMMIT Unreleased 466cd9b 2026-09-21T22:32:51-07:00
 
 #### Coming From:

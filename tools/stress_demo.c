@@ -24,7 +24,7 @@
 //
 // Usage, as root on the MiSTer:
 //   ./stress-demo [sprite.bmp] [count] [seconds] [mode]
-// mode is "sprites" (default), "plain", "key-never", "key-all", "key-checker", "clear",
+// mode is "sprites" (default), "fixed", "plain", "key-never", "key-all", "key-checker", "clear",
 // "present", or "static". The latter
 // modes isolate framebuffer clearing and PRESENT/scanout from compositing.
 
@@ -121,19 +121,20 @@ int main(int argc, char **argv) {
     double run_seconds = (argc > 3) ? atof(argv[3]) : 15.0;
     const char *mode = (argc > 4) ? argv[4] : "sprites";
     int do_sprites = strcmp(mode, "sprites") == 0;
+    int do_fixed = strcmp(mode, "fixed") == 0;
     int do_plain = strcmp(mode, "plain") == 0;
     int do_key_never = strcmp(mode, "key-never") == 0;
     int do_key_all = strcmp(mode, "key-all") == 0;
     int do_key_checker = strcmp(mode, "key-checker") == 0;
-    int do_clear = do_sprites || do_plain || strcmp(mode, "clear") == 0;
+    int do_clear = do_sprites || do_fixed || do_plain || strcmp(mode, "clear") == 0;
     int do_present_only = strcmp(mode, "present") == 0;
     int do_static = strcmp(mode, "static") == 0;
 
-    if ((!do_sprites && !do_plain && !do_key_never && !do_key_all && !do_key_checker && !do_clear &&
+    if ((!do_sprites && !do_fixed && !do_plain && !do_key_never && !do_key_all && !do_key_checker && !do_clear &&
          !do_present_only && !do_static) ||
-        ((do_sprites || do_plain || do_key_never || do_key_all || do_key_checker) &&
+        ((do_sprites || do_fixed || do_plain || do_key_never || do_key_all || do_key_checker) &&
          (count < 1 || count > MAX_SPRITES))) {
-        fprintf(stderr, "mode must be sprites, plain, key-never, key-all, key-checker, clear, present, or static; count 1-%d\n",
+        fprintf(stderr, "mode must be sprites, fixed, plain, key-never, key-all, key-checker, clear, present, or static; count 1-%d\n",
                 MAX_SPRITES);
         return 1;
     }
@@ -192,12 +193,23 @@ int main(int argc, char **argv) {
         sprites[i].dx = (4 + rand() % 9) * ((rand() % 2) ? 1 : -1);
         sprites[i].dy = (4 + rand() % 9) * ((rand() % 2) ? 1 : -1);
     }
+    if (do_fixed) {
+        static const int fixed_x[] = {80, 240, 400, 560, 80, 240, 400, 560};
+        static const int fixed_y[] = {80, 80, 80, 80, 320, 320, 320, 320};
+        for (int i = 0; i < count; ++i) {
+            sprites[i].x = fixed_x[i % 8];
+            sprites[i].y = fixed_y[i % 8];
+            sprites[i].dx = 0;
+            sprites[i].dy = 0;
+        }
+    }
 
     uint32_t colorkey = noodles_rgb(COLORKEY_R, COLORKEY_G, COLORKEY_B);
     uint32_t background = noodles_rgb(BG_COLOR_R, BG_COLOR_G, BG_COLOR_B);
 
     printf("mode=%s, %s for %.1fs...\n", mode,
-           do_sprites ? "bouncing sprites" : do_plain ? "plain copies" :
+           do_sprites ? "bouncing sprites" : do_fixed ? "fixed sprites" :
+                        do_plain ? "plain copies" :
                         do_key_never ? "key copies (never match)" :
                         do_key_all ? "key copies (always match)" :
                         do_key_checker ? "key copies (checkerboard)" :
@@ -243,7 +255,7 @@ int main(int argc, char **argv) {
             break;
         }
 
-        for (int i = 0; (do_sprites || do_plain || do_key_never || do_key_all ||
+        for (int i = (do_fixed ? 0 : 0); (do_sprites || do_fixed || do_plain || do_key_never || do_key_all ||
                          do_key_checker) && i < count; ++i) {
             uint32_t dst = back + (uint32_t)sprites[i].y * NOODLES_BUFFER_PITCH +
                             (uint32_t)sprites[i].x * 4;
@@ -267,8 +279,9 @@ int main(int argc, char **argv) {
             break;
         }
 
-        for (int i = 0; (do_sprites || do_plain || do_key_never || do_key_all ||
+        for (int i = 0; (do_sprites || do_fixed || do_plain || do_key_never || do_key_all ||
                          do_key_checker) && i < count; ++i) {
+            if (do_fixed) continue;
             sprites[i].x += sprites[i].dx;
             sprites[i].y += sprites[i].dy;
             if (sprites[i].x <= 0 || sprites[i].x >= max_x) {
