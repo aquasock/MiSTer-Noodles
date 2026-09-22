@@ -348,3 +348,38 @@ Get the LED result: load Noodles_20260922c.rbf, run link-push again, and report 
 - [ ] Passed
 
 ---
+
+## 11 COMMIT Unreleased 6d1396a 2026-09-22T06:44:12-07:00
+
+#### Coming From:
+
+Unreleased a8d2f21
+
+#### Purpose:
+
+Find and fix why LINK-001's real command path visibly ran (LED_POWER/LED_USER both lit) but never produced any visible or memory-verifiable write.
+
+#### Outcome:
+
+Extended the LED-bisection technique further: LED_DISK was repurposed several times in sequence to test successive hypotheses (blit_start reached, blit_done reached, dst_addr correctness, then specific wrong-value candidates), each requiring a full rebuild/redeploy/test round trip run directly over SSH. Along the way, added tools/link_slot_dump.c (raw ring-slot readback bypassing the FPGA's own reconstruction) and tools/mem_scan.c (parameterized memory scan, generalizing ddram_marker_scan.c's hardcoded value), both promoted into the repo. Two false leads were chased and ruled out before finding the real bug: a raw multiply inside link_ring's indexed part-select (`word_idx*32`) was defensively rewritten as an explicit concatenation matching the file's own established style, and a 32-cycle DRAIN state was added between the last command-slot read and dispatch to test a real-DDR3-settling-time hypothesis -- neither changed the symptom, and DRAIN was reverted. A wide `mem_scan` across the FPGA-reserved 512MB window found what first looked like the fill landing at the wrong address (0x22be1000), but a follow-up push with a distinct, unique color proved that match was coincidental pre-existing content, unrelated to anything this project ever wrote -- a reminder that a single matching scan result is not proof of causation without a differential test. Direct LED instrumentation of blit_dst_addr itself (comparing CMDQ's actual output to candidate wrong values) found the real bug: dst_addr reached BLIT as literally 1, opcode's own raw value. Traced to Noodles.sv's link_ring/blit_copy read-port mux selecting on `link_rd_en` (high only during link_ring's REQ states) instead of a signal spanning the full REQ+WAIT lifetime of a pending read -- during the WAIT window the mux fell through to blit_copy's idle address, making ddram_adapter's byte-half-select pick the wrong half of the shared 64-bit DDRAM word at the exact moment link_ring's response arrived. Fixed by adding a new `rd_active` output to link_ring (mirroring rd_addr's own existing REQ+WAIT pinning) and using it as the mux selector (DDR-005). Verified end to end on real hardware: a link-pushed SOLID_FILL now correctly writes its color to 0x30000000, confirmed by direct `/dev/mem` readback (not just LEDs) and by the user seeing the display change. `make sim` passes all six testbenches; `quartus_sh --flow compile Noodles` completed with 0 errors each iteration.
+
+#### Next Steps:
+
+LINK-001 is now proven working end to end on real hardware, not just on paper -- the OSD test triggers (Marker Test, Draw Test, Blit Copy Test) become real candidates for removal per the plan already recorded in an earlier entry, now that LINK no longer needs them as a known-good fallback during its own bring-up. The read-port mux's failure mode (a shared-bus selector keyed on a requester's one-shot rd_en instead of a REQ+WAIT-spanning signal) is now documented in DDR-005 as a pattern to avoid for any future third reader on ddram_adapter; no testbench currently exercises the mux itself (sim/link_ring_dut.sv wires link_ring directly to its own adapter instance with no second client), which is why this bug shipped past `make sim` -- worth a dedicated mux-contention testbench before this class of bug can recur silently again. The displayed fill color also did not visually match the pushed color exactly (reported as yellow, not the cyan link_push.c requests) even though the correct raw bytes are confirmed in memory -- likely an FB_FORMAT channel-order detail, not a data-path bug, but not yet investigated. BLIT-001's third op (hardware noise/static-fill) and a real host-side API/library remain open.
+
+#### Files Modified:
+
+- Noodles.sv
+- rtl/link_ring.sv
+- sim/link_ring_dut.sv
+- tools/link_slot_dump.c
+- tools/mem_scan.c
+- Makefile
+- scripts/deploy.sh
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
