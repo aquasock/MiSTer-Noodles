@@ -459,6 +459,16 @@ OUT-005: "OUT-004's single-fresh-vblank-edge PRESENT margin is not reliably suff
   decision: "sys/ascal.vhd exports a toggle from its output-clock process at the internal output VS boundary where buffered scanout advances to the next frame. sys/sys_top.v synchronizes that toggle into clk_sys and exposes it as FB_RETIRED. rtl/present.sv flips front_sel only on a fresh FB_VBL edge, captures the synchronized retirement level, waits for it to change, and then waits one additional fresh FB_VBL edge before pulsing done. The earlier FB_BASE_LATCHED acknowledgement remains wired for diagnosis but is not used for PRESENT completion."
   consequence: "PRESENT completion now follows ascal's output-domain frame boundary rather than the Avalon-domain base-latch event, while retaining two-buffer operation and a conservative post-ack interval. FB_RETIRED is a synchronized toggle-level indication, not a pulse. Hardware validation remains required to determine whether this output-domain boundary is late enough to prevent OUT-005 ghosting."
 
+- record_id: OUT-008
+  kind: INTERFACE
+  component_id: OUT
+  title: "PRESENT retirement acknowledgement waits for ascal's output read and copy pipelines to become idle"
+  status: DECIDED
+  decided_date: 2026-09-22
+  supersedes: "OUT-007"
+  decision: "sys/ascal.vhd records the output-domain frame boundary as pending and toggles FB_RETIRED only after the boundary has passed and both o_readlev and o_copylev are zero in the idle display state. This keeps the existing synchronized toggle interface and two-buffer ownership model while preventing the unconditional VS-boundary acknowledgement from claiming retirement early."
+  consequence: "PRESENT no longer completes from the raw output VS boundary alone. The condition is still limited by ascal's counter semantics: because the output process resets these counters at VS, delayed Avalon responses may remain unrepresented, so hardware validation and any further instrumentation must establish whether this is sufficient."
+
 ## 6. Record template
 
 ```yaml

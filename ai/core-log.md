@@ -42,7 +42,7 @@ Wire CMDQ and BLIT into Noodles.sv for real: design and implement the DDRAM writ
 
 ---
 
-## 36 COMMIT Unreleased ??? 2026-09-22T12:59:49-07:00
+## 36 COMMIT Unreleased ae7d9c4 2026-09-22T12:59:49-07:00
 
 #### Coming From:
 
@@ -54,25 +54,20 @@ Instrument ascal's framebuffer read ownership to establish a retirement acknowle
 
 #### Outcome:
 
-The approved implementation will trace ascal's Avalon read request/response pipeline and output-buffer selection, then export a synchronized retirement event only after the output-domain boundary and any outstanding framebuffer read activity are clear. PRESENT will consume that evidence instead of another fixed timing heuristic. Simulation will exercise delayed read responses and repeated two-buffer flips, followed by a full Quartus build and repeated 64-sprite hardware trials.
+The output-domain retirement event is now deferred until after the frame boundary and until ascal reports both its read-prefetch and copy pipelines idle. This preserves the two-buffer design and changes only `sys/ascal.vhd`; `make sim` passes all six testbenches and the full Quartus compile completes with 0 errors and 57 warnings. Hardware validation is still pending.
 
 #### Next Steps:
 
-Locate the exact ascal read-pipeline idle condition, implement the smallest diagnostic/handshake change without adding a surface, validate simulation and timing, deploy the build, and compare repeated flicker results against the 4/10 baseline.
+Deploy the compiled RBF and repeat the 64-sprite workload at least ten times; if flicker remains, instrument the Avalon response lifetime directly because the output-domain counters may be reset at the boundary before delayed responses arrive.
 
 #### Files Modified:
 
 - sys/ascal.vhd
-- sys/sys_top.v
-- sys/emu_ports.vh
-- rtl/present.sv
-- Noodles.sv
-- sim/present_dut.sv
-- sim/tb_present.cpp
+- sys/ascal.vhd
 
 #### Status:
 
-- [ ] Built
+- [x] Built
 - [ ] Passed
 
 ---
