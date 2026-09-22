@@ -606,3 +606,41 @@ The project's control file, ai/core.md, still carries the old premise in its own
 - [x] Passed
 
 ---
+
+## 19 COMMIT Unreleased f10adb6 2026-09-22T08:57:28-07:00
+
+#### Coming From:
+
+Unreleased 7421ae7
+
+#### Purpose:
+
+Build the actual rendering capability the user wants this engine to reach: sprite compositing with transparency, targeting Dogz (the mid-90s virtual pet game) as the concrete visual reference, in a shape someone porting from SDL would find familiar.
+
+#### Outcome:
+
+Established with the user first that multi-frame animation needs no new hardware -- the host just issues a new BLIT_COPY-family command with a different source frame each tick, which LINK already supports -- so the real gap was transparency: plain BLIT_COPY is strictly opaque. Added BLIT_COPY_KEY (opcode 3, BLIT-006): colorkey transparency, chosen over full alpha blending as the cheaper mechanism that actually matches how sprite games of that era worked. Dispatched to the same rtl/blit_copy.sv engine as plain BLIT_COPY rather than a new module, since the two are structurally identical (read source pixel, conditionally write destination); blit_copy.sv gained key_enable/key_value inputs, and CMDQ now sets them per-opcode, reusing the command's otherwise-unused color field as the key value for opcode 3. tb_blit_copy.cpp gained a second test: a 4x4 checkerboard half key-colored, verifying bit-exact read count (16, every pixel inspected), write count (8, keyed pixels skipped), and final destination content in simulation. tools/blit_copy_key_push.c proves it on real hardware: built a minimal sprite purely from SOLID_FILLs (colorkey-colored region with a smaller solid square inside it) and BLIT_COPY_KEY'd it onto a differently-colored background -- confirmed visually, background color showing through cleanly around a sprite square with no trace of the colorkey border. lib/noodles_link.h/.c gained noodles_push_blit_copy_key(). `make sim` (5/5) and `quartus_sh --flow compile Noodles` (0 errors, 6,323 ALMs) both clean.
+
+#### Next Steps:
+
+The engine can now do what was asked: fill, opaque copy, and transparent (colorkeyed) copy -- enough for basic sprite-over-background compositing, animated by the host swapping source frames each tick. Not yet covered, if the Dogz-style target keeps growing: multiple simultaneously-tracked surfaces/sprites with host-side allocation (today the host just picks addresses by hand), and any need for true alpha blending (explicitly deferred, BLIT-006's consequence) if colorkey's hard edges turn out not to be enough.
+
+#### Files Modified:
+
+- rtl/blit_copy.sv
+- rtl/cmdq.sv
+- Noodles.sv
+- sim/engine_copy_dut.sv
+- sim/tb_blit_copy.cpp
+- lib/noodles_link.h
+- lib/noodles_link.c
+- tools/blit_copy_key_push.c
+- Makefile
+- scripts/deploy.sh
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
