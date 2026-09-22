@@ -751,3 +751,34 @@ Both non-throughput items from the original three-item priority list are done (d
 - [x] Passed
 
 ---
+
+## 23 COMMIT Unreleased 6a3627a 2026-09-22T09:38:57-07:00
+
+#### Coming From:
+
+Unreleased 06734c5
+
+#### Purpose:
+
+Build the actual target demo: a sprite animated continuously over a background, the real proof this engine's rendering capability (BLIT-006's colorkey compositing, OUT-004's double buffering, SURF-005's resolution) works together as a sustained game loop, not just isolated static commands.
+
+#### Outcome:
+
+Added tools/sprite_demo.c. Every previous demo pushed a handful of commands and stopped; this one runs the full per-frame cycle (clear the back buffer, colorkey-composite the sprite at a new position, present, wait) continuously for a configurable duration, which is the first real soak test of the ring buffer under sustained load, the fence under continuous polling, and present's vblank sync over many consecutive flips -- none of which anything before this exercised beyond a handful of commands. The sprite is built once from three SOLID_FILLs (a colorkey background, a brown body rect, a smaller offset tan head rect -- a genuine two-part silhouette, not just a single square) into its own 2MB scratch slot, then bounced off the buffer edges, re-fetching noodles_link_back_buffer() every frame the way a real game loop would. No RTL changes and no new host API were needed -- this is purely composition of what LINK-004/LINK-005/BLIT-006/OUT-004/SURF-005 already provide. Verified on real hardware across two separate 15-second runs: 453 frames then 456 frames, stable ~30fps average with no degradation over either run (no ring stalls, no fence timeouts, no wedging), confirmed visually clean -- smooth bouncing motion, no tearing or glitches -- by the user both times.
+
+#### Next Steps:
+
+The engine has now been proven, end to end and under sustained load, to do what the user's original Dogz reference asked for: an animated character composited over a background, driven the way a real game loop would drive it. Two gaps remain open from the earlier OpenBW-scoping discussion, neither blocking further demo work: an asset-upload path (today every sprite is built from SOLID_FILL rects; there's no way to load real decoded image data into a surface, though this is expected to be a cheap host-side mmap+memcpy addition per DDR-002, not new hardware), and BLIT_COPY's throughput gap (still deliberately deferred -- 30fps on a single small sprite doesn't yet prove or disprove anything about many-sprite scenes).
+
+#### Files Modified:
+
+- tools/sprite_demo.c
+- Makefile
+- scripts/deploy.sh
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
