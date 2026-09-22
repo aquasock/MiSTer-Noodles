@@ -717,3 +717,37 @@ Per the priority order agreed with the user (double buffering, then resolution, 
 - [x] Passed
 
 ---
+
+## 22 COMMIT Unreleased 06734c5 2026-09-22T09:32:44-07:00
+
+#### Coming From:
+
+Unreleased 3741062
+
+#### Purpose:
+
+Scale the surfaces up from the 64x64 bring-up size to something StarCraft/OpenBW-scale (640x480), the second item in the priority order agreed with the user (double buffering, then resolution, then BLIT_COPY throughput only if proven necessary).
+
+#### Outcome:
+
+Each 640x480x4B buffer is ~1.17MB, far larger than the old 16KB surface, so OUT-004's tight 32KB buffer spacing no longer fit -- redesigned the address map with generous 2MB-aligned slots: BUFFER_A/BUFFER_B at 0x31000000/0x31200000, well clear of LINK-002's ring and of each other. Moved the LED_DISK regression check's BUFFER_A/BUFFER_B localparams to the top of Noodles.sv (both it and FB_BASE's mux need them) and fixed the check itself to validate against EITHER buffer address -- it was still hardcoded to a single old address and would have false-positived on every legitimate draw to whichever buffer wasn't that one. Updated lib/noodles_link.h's buffer constants to match. Found and fixed a real gap while auditing every tool against the new map: link_push.c, blit_copy_push.c, and blit_copy_key_push.c all still drew directly into a hardcoded single-buffer address and never called present() -- leftover from before OUT-004 landed. Without a present, double buffering means nothing they drew would ever actually become visible; all three were updated to draw into noodles_link_back_buffer() and present_and_wait(). blit_copy_push.c/blit_copy_key_push.c also needed their own off-screen source scratch moved to a fresh 2MB slot (0x31400000, clear of both buffers and the ring) since a full-size source region would otherwise collide with the ring header at the old 0x30010000 scratch address, and their fence-wait timeouts bumped from 200ms to 2s -- a full-surface SOLID_FILL now costs ~15ms and a full-surface BLIT_COPY ~126ms (bench.c's own measured per-pixel rates), comfortably within budget but well past the old 64x64-era timeout. solid_fill_push.c and present_demo.c needed no changes at all, already fully symbolic. Verified on real hardware: present_demo.c's color cycle confirmed clean with correct alternating addresses (0x31000000/0x31200000) both in its own printed output and visually (pillarboxed 4:3 on the user's 16:9 display, exactly as expected for a true 640x480 source, not a bug); blit_copy_key_push.c's sprite composite (now a 128x128 square, scaled up from 24x24 for visibility on the larger canvas) confirmed visually correct too. `quartus_sh --flow compile Noodles`: 0 errors, 6,319 ALMs, 0.571ns/0.246ns worst-case setup/hold slack, ~2:18 total compile time.
+
+#### Next Steps:
+
+Both non-throughput items from the original three-item priority list are done (double buffering, resolution). BLIT_COPY's ~8.2-cycles/pixel throughput gap (DDR-003's single-outstanding-read simplification) remains deliberately deferred until something concrete proves it's actually a bottleneck -- per the user's own agreed reasoning, not before. No other open items were surfaced by this pass.
+
+#### Files Modified:
+
+- Noodles.sv
+- lib/noodles_link.h
+- tools/link_push.c
+- tools/blit_copy_push.c
+- tools/blit_copy_key_push.c
+- tools/bench.c
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
