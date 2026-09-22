@@ -782,3 +782,36 @@ The engine has now been proven, end to end and under sustained load, to do what 
 - [x] Passed
 
 ---
+
+## 24 COMMIT Unreleased 821c046 2026-09-22T09:52:13-07:00
+
+#### Coming From:
+
+Unreleased 6a3627a
+
+#### Purpose:
+
+Close the asset-upload gap sprite_demo's entry flagged: every sprite in every demo so far was built out of SOLID_FILL rects, with no way to get real decoded image data into a surface.
+
+#### Outcome:
+
+Added noodles_link_upload() to lib/noodles_link.{h,c} -- a plain mmap+memcpy straight into DDR3 through the same /dev/mem fd noodles_link_open() already holds, needing no new opcode, no ring traffic, and no FPGA-side change at all, since DDR-002 already made DDRAM_* addresses direct physical addresses. Proved it with tools/load_bmp.c, a self-contained uncompressed-24-bit-BMP loader (BITMAPINFOHEADER only, chosen over PNG/JPEG specifically for zero decoding dependencies): parses the header, converts BGR rows to BLIT-004's packed R|(G<<8)|(B<<16) order while flipping to top-down row order, uploads the converted buffer to the shared 0x31400000 scratch slot, clears the back buffer, BLIT_COPYs the image in at a centered (or caller-given) position, and presents. Generated a genuine 320x240 test image via Python/PIL (sky gradient, sun, ground, a simple house) since no real asset existed yet, deployed both the tool and the test image to the MiSTer, and ran it: console output confirmed the upload size/address and presented position, and the user confirmed the on-screen result was a perfect match against the source file, after first asking to see the source file itself before confirming -- a reasonable check given the display is being viewed indirectly, not a sign anything was wrong.
+
+#### Next Steps:
+
+The other gap sprite_demo's entry flagged -- BLIT_COPY's ~8.2-cycles/pixel throughput -- remains deliberately deferred until something concrete proves it's a bottleneck. A real game loop combining this entry's asset loading with sprite_demo's animate/composite/present pattern (i.e. an actual sprite loaded from a BMP, animated, instead of one built from SOLID_FILL rects) has not been built yet and is the natural next proof point if the user wants to keep pushing toward the Dogz-style target.
+
+#### Files Modified:
+
+- lib/noodles_link.h
+- lib/noodles_link.c
+- tools/load_bmp.c
+- Makefile
+- scripts/deploy.sh
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
