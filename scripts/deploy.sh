@@ -1,0 +1,18 @@
+#!/bin/sh
+# Copy the spike to the MiSTer. Default login is root, password "1".
+#   scripts/deploy.sh 192.168.1.42
+set -e
+
+HOST="${1:-${MISTER_HOST:-mister.local}}"
+DEST="${DEST:-/media/fat/pet}"
+BINS="build/arm/misterpet-spike build/arm/fbterm-toggle"
+
+for b in $BINS; do [ -f "$b" ] || { echo "missing $b -- run make first" >&2; exit 1; }; done
+
+ssh "root@$HOST" "mkdir -p $DEST"
+scp $BINS "root@$HOST:$DEST/"
+echo
+echo "on the MiSTer (Menu core, press F9 first to hand the framebuffer to Linux):"
+echo "  $DEST/misterpet-spike --info"
+echo "  $DEST/misterpet-spike --pattern --seconds 15"
+echo "  $DEST/misterpet-spike --fbcmd 320 240 --seconds 30"
