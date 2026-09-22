@@ -1,11 +1,11 @@
-# MiSTer-Pet
+# MiSTer-Noodles
 
 A little character that lives on the MiSTer's menu background.
 
 The MiSTer's black-and-white static is generated inside the FPGA by the Menu
 core and there is no way to composite over it from Linux -- when Main hands the
 scaler to the Linux framebuffer, the framebuffer *replaces* the core's video. So
-MiSTer-Pet draws its own static (ported pixel-for-pixel from the Menu core's
+MiSTer-Noodles draws its own static (ported pixel-for-pixel from the Menu core's
 RTL) and puts the pet on top of it. See [docs/mister-framebuffer.md](docs/mister-framebuffer.md)
 for the full picture, including the `/dev/MiSTer_cmd` command set.
 
