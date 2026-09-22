@@ -1402,3 +1402,33 @@ Reload the deployed RBF, run consecutive short two-sprite overlap launches, and 
 - [x] Built
 - [x] Deployed
 - [ ] Passed
+## 44 COMMIT Unreleased present-wait-budget 2026-09-22T14:43:23-07:00
+
+#### Coming From:
+
+Unreleased 71534df
+
+#### Purpose:
+
+Prevent the host diagnostic from declaring PRESENT failure while queued full-frame work and the FPGA retirement handshake are still completing.
+
+#### Outcome:
+
+The parity-fix RBF initially produced `present failed` after 29 frames and the `static` initialization path timed out. `noodles_present_and_wait()` was polling for only 200 ms; that is shorter than a queued full-frame workload can require. Increased the wait to 2 seconds. The ARM build and RTL simulation passed. After deployment, `static` held its initialized frame for four seconds successfully, and the two-sprite overlap workload completed 47 frames in 4.2 seconds at 11.2 FPS without a host-side PRESENT failure.
+
+The user still needs to judge the display for visual flicker. The lower throughput reflects the longer, correctly serialized completion wait and is not itself evidence of corruption.
+
+#### Next Steps:
+
+Visually check the two-sprite overlap run, then repeat the odd/even launch test now that startup and PRESENT waits no longer produce false failures. Reload the parity-fix RBF if the running core has not yet been reloaded.
+
+#### Files Modified:
+
+- lib/noodles_link.c
+- ai/core-log.md
+
+#### Status:
+
+- [x] Built
+- [x] Deployed
+- [ ] Passed

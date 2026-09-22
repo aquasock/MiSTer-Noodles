@@ -126,7 +126,12 @@ int noodles_present_and_wait(noodles_link_t *link) {
     // Vblank-synced on the FPGA side (present.sv), so this can legitimately
     // take up to roughly one frame -- poll rather than a single short wait.
     struct timespec delay = {.tv_sec = 0, .tv_nsec = 1000000};  // 1ms
-    for (int i = 0; i < 200; ++i) {
+    // A PRESENT may sit behind a full frame of DDRAM work before the
+    // vblank-synchronized flip can complete. Keep the wait long enough for
+    // that queued work plus the retirement acknowledgement; the command has
+    // already been submitted, so timing out here would only make callers
+    // report a false failure.
+    for (int i = 0; i < 2000; ++i) {
         if (noodles_link_done_count(link) >= target) {
             link->presents_completed += 1;
             return 0;
