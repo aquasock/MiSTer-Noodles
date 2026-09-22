@@ -1343,3 +1343,33 @@ Deploy the compiled core and repeat the 64-sprite workload for multiple 15-secon
 - [ ] Passed
 
 ---
+## 42 COMMIT Unreleased overlap-colorkey-diagnostic 2026-09-22T14:28:45-07:00
+
+#### Coming From:
+
+Unreleased 3f71eb4
+
+#### Purpose:
+
+Determine whether overlapping real-colorkey sprites reproduce the intermittent framebuffer artifact without motion or edge involvement.
+
+#### Outcome:
+
+Added an `overlap` stress-demo mode that clears the back buffer and draws eight stationary real-colorkey sprites in a compact 4x2 cluster with 24-pixel spacing, producing deliberate overlap while keeping the cluster away from the framebuffer edges. The deployed 15-second run completed at 20 FPS, but the user observed all eight sprites flickering for the entire run.
+
+Compared with the clean eight-sprite fixed/inset run, this isolates the failure to overlapping colorkey compositing or the ordering/ownership of overlapping writes. Motion, random placement, and scanout-edge artifacts are not required to reproduce it.
+
+#### Next Steps:
+
+Run the same overlap geometry with two and four sprites to determine whether the failure begins with the first overlap. Inspect and simulate `rtl/blit_copy.sv` around mixed key/non-key read/write sequencing and overlapping destination behavior.
+
+#### Files Modified:
+
+- tools/stress_demo.c
+- ai/core-log.md
+
+#### Status:
+
+- [x] Built
+- [x] Deployed
+- [x] Passed
