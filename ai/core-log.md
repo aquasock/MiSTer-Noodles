@@ -319,3 +319,32 @@ Get hardware confirmation: load Noodles_20260922b.rbf, press "Draw Test" (magent
 - [ ] Passed
 
 ---
+
+## 10 COMMIT Unreleased 0e408fe 2026-09-22T05:31:37-07:00
+
+#### Coming From:
+
+Unreleased 3c7180d
+
+#### Purpose:
+
+Add hardware observability for LINK-001's first real test, after it silently failed to produce any visible change.
+
+#### Outcome:
+
+The user ran link-push on Noodles_20260922b.rbf: it reported success (write_ptr 0->1) but the surface stayed magenta instead of turning cyan. link_ring passed simulation thoroughly, including a wraparound case, but only in isolation against a dedicated adapter instance -- never integrated with the other three write-mux clients (marker_test, blit, blit_copy) actually contending for the bus in Noodles.sv, which is a real difference between the tested configuration and the deployed one. Rather than guess further, added the same LED-bisection technique that found DDR-002's address bug: LED_POWER now latches solid once link_ring has actually dispatched a command to CMDQ, using the post-mux link_cmd_valid/link_cmd_ready signals specifically so the result reflects what the mux actually granted, not just what link_ring itself believes it sent. Also corrected LED_DISK/LED_POWER to take full manual LED control (bit[1]=1 per emu_ports.vh) rather than leaving them OR'd with system status, which the earlier marker_done_ever wiring had never done correctly either. `quartus_sh --flow compile Noodles` completed with 0 errors, no timing violations. Deployed as Noodles_20260922c.rbf; not yet tested on hardware.
+
+#### Next Steps:
+
+Get the LED result: load Noodles_20260922c.rbf, run link-push again, and report whether LED_POWER lit. If it didn't light, the fault is inside link_ring (init sequence, write-mux access for INIT/writeback, polling, read-mux access, or fetch) and needs its own isolated hardware test akin to the marker test. If it did light, the fault is downstream in this specific CMDQ/BLIT mux integration despite that path being separately proven by Draw Test and Blit Copy Test, meaning something about having a third command source changes CMDQ's or the write-mux's behavior in a way simulation didn't catch.
+
+#### Files Modified:
+
+- Noodles.sv
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
