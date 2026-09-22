@@ -18,10 +18,25 @@
 //
 // MiSTer-Noodles top-level glue between the sys/ framework and the core.
 //
-// CMDQ, BLIT and the DDRAM write adapter (DDR-001) are wired for real below
-// and drive the actual DDRAM_* pins. This is still a bring-up checkpoint,
-// not the finished engine -- CMDQ's only command source is one hardcoded,
-// OSD-triggered test command (CMDQ-002), not LINK's ring buffer.
+// CMDQ's sole command source is LINK-001's real host-driven ring buffer
+// (rtl/link_ring.sv, LINK-002/LINK-003): a host process (lib/noodles_link.h,
+// LINK-004) writes commands directly into shared DDR3 and link_ring polls,
+// fetches, and dispatches them -- no OSD involved. CMDQ dispatches to BLIT
+// (SOLID_FILL, BLIT-002) or blit_copy (BLIT_COPY, BLIT-003), both driving
+// the real DDRAM_* pins via ddram_adapter (DDR-001/DDR-003). LINK-005's
+// completion fence (rtl/link_fence.sv) publishes a done-count back to DRAM
+// so the host can tell when a specific command actually finished, not just
+// got dispatched.
+//
+// This used to also carry three OSD test buttons (Marker Test, Draw Test,
+// Blit Copy Test) that fed CMDQ hardcoded commands directly, as a
+// known-good fallback while LINK's ring buffer was still being brought up
+// and hardware-debugged (see DDR-002 through DDR-005's history in
+// core-log.md). They were retired once LINK proved the real path correct
+// end to end on real hardware, including completion signaling -- CMDQ's
+// command front end and the write-port mux are back down to their real,
+// permanent client lists (link_ring only for commands; blit/blit_copy/
+// link_ring/link_fence for writes), not a bring-up-era multiplexed stand-in.
 //
 // Every address used below is deliberately inside SURF-003's confirmed-safe
 // window (physical [0x20000000,0x40000000), FPGA-reserved DDR3, read
@@ -33,39 +48,8 @@
 // releases have used safely since. Nothing here should ever target an
 // address outside that without a new record explaining why it's safe.
 //
-// DDR-002 was checked on real hardware and, after an initial wrong guess
-// (DDRAM_ADDR=0 landed at physical 0x0, not 0x20000000 -- see the marker
-// test's own history and CMDQ/DDR-002 records), confirmed DDRAM_ADDR is an
-// unwindowed, direct physical word address (word N = byte N*8 in the same
-// address space as everything else). SURF-004 then found 0x20000000 itself
-// unsafe for a different reason (see above), so ddram_marker_test's
-// address moved again, to 0x30000000/8 = word 0x06000000.
-//
-// A real command now flows end to end: the "Draw Test" OSD button fires
-// one hardcoded SOLID_FILL through CMDQ (CMDQ-002), filling a 64x64 32bpp
-// surface at 0x30000000 with a fixed color, and
-// FB_EN/FB_BASE/FB_STRIDE/FB_WIDTH/FB_HEIGHT/FB_FORMAT scan that surface
-// out over HDMI via MISTER_FB -- gated behind a "draw ever completed" latch
-// so nothing is displayed (FB_EN stays 0) until that button has actually
-// been pressed once, rather than showing whatever was in memory at boot.
-// A second button, "Blit Copy Test", fires a hardcoded BLIT_COPY (BLIT-003)
-// copying an 8x8 rect from an arbitrary safe address into the visible
-// surface's corner -- the source is never pre-filled by anything, so its
-// content is whatever happened to already be in that DDR3, not a chosen
-// color; the point is proving the real read+write path on hardware, not a
-// pretty picture.
-//
-// LINK-001's ring buffer (rtl/link_ring.sv, LINK-002/LINK-003) is now wired
-// in too: tools/link_push.c is a real ARM host process pushing a SOLID_FILL
-// (cyan, distinct from the OSD "Draw Test" button's magenta) directly into
-// shared DDR3, no OSD involved. All three command sources -- draw_test,
-// copy_test, and link_ring -- feed the same single CMDQ instance through a
-// small priority mux, since CMDQ only accepts one command at a time anyway;
-// the OSD buttons stay in place as a known-good fallback during LINK's own
-// bring-up, per the plan recorded in core-log.md, not because they're
-// meant to coexist with LINK long-term.
 // See OUT-001/OUT-002, SURF-001/SURF-002/SURF-003/SURF-004, BLIT-002/BLIT-003,
-// LINK-001/LINK-002/LINK-003 and DDR-001/DDR-002/DDR-003/DDR-004.
+// LINK-001 through LINK-005, and DDR-001 through DDR-005.
 
 module emu
 (
@@ -93,11 +77,12 @@ assign AUDIO_L = 0;
 assign AUDIO_R = 0;
 assign AUDIO_MIX = 0;
 
-// LED_DISK: diagnostic for the read-mux bug fixed in link_ring.sv/rd_active
-// (see the comment there and the write-port mux comment below for the full
-// story). Latches solid if blit_start EVER fires with blit_dst_addr not
-// equal to the one address every hardware test so far has used
-// (0x30000000) -- i.e. "the bug is still happening". Should stay OFF now.
+// LED_DISK: standing regression check for the read-mux bug DDR-005 fixed
+// (rtl/link_ring.sv's rd_active, see the comment there and the write-port
+// mux comment below for the full story). Latches solid if blit_start EVER
+// fires with blit_dst_addr not equal to the one address every hardware
+// test so far has used (0x30000000) -- should stay OFF; if it ever lights,
+// something reintroduced dst_addr corruption between link_ring and CMDQ.
 reg dst_addr_wrong_ever;
 always @(posedge clk_sys or posedge reset)
 	if (reset) dst_addr_wrong_ever <= 1'b0;
@@ -105,14 +90,10 @@ always @(posedge clk_sys or posedge reset)
 
 assign LED_DISK = dst_addr_wrong_ever;
 
-// LED_POWER is otherwise unused -- diagnostic for LINK-001's first
-// hardware test: latches solid once link_ring has actually dispatched a
-// command to CMDQ (not just fetched it), independent of what happens
-// downstream. If this never lights after link-push, the bug is inside
-// link_ring itself (init, polling, or fetch); if it lights but nothing
-// visible changes, the bug is downstream in CMDQ/BLIT/the write path for
-// this specific mux integration. bit[1]=1 takes full manual control of the
-// LED instead of leaving it OR'd with system status (emu_ports.vh).
+// LED_POWER: latches solid once link_ring has actually dispatched a
+// command to CMDQ -- a basic "has the ring buffer ever delivered a command"
+// health indicator. bit[1]=1 takes full manual control of the LED instead
+// of leaving it OR'd with system status (emu_ports.vh).
 reg link_dispatch_ever;
 always @(posedge clk_sys or posedge reset)
 	if (reset) link_dispatch_ever <= 1'b0;
@@ -124,26 +105,17 @@ assign BUTTONS = 0;
 // draw_done_ever gates FB_EN so nothing is displayed until a fill has
 // actually completed once -- otherwise the screen would show whatever
 // happened to be in memory at boot. Keyed on blit_done (BLIT's own
-// completion), not draw_test's trigger-specific done, so a link_ring- or
-// blit_copy-driven fill also unblanks the display -- gating on the OSD
-// button's own done specifically would mean a link-only session (never
-// pressing "Draw Test") could never show anything even if everything else
-// worked.
+// completion), not any particular command source, so a link_ring-dispatched
+// fill unblanks the display on its own.
 reg draw_done_ever;
 always @(posedge clk_sys or posedge reset)
 	if (reset) draw_done_ever <= 1'b0;
 	else if (blit_done) draw_done_ever <= 1'b1;
 
-// Diagnostic for LINK-001's continued bring-up: LED_POWER already confirmed
-// CMDQ accepted a link_ring-dispatched command (link_cmd_valid&&link_cmd_ready),
-// but the surface never actually changed (still reads back the OLD magenta
-// at 0x30000000 after a link-push, per hardware readback). CMDQ silently
-// drops any command whose opcode it doesn't recognize -- "accepted" isn't
-// the same as "recognized and started BLIT". Repurposes LED_USER's
-// heartbeat blink (not currently needed -- everything else already proves
-// the clock runs) to latch solid the first time blit_start fires for ANY
-// reason, so we can tell whether CMDQ's opcode decode ever actually saw a
-// valid SOLID_FILL from link_ring's reconstructed command data.
+// LED_USER: latches solid the first time blit_start fires for any reason --
+// a basic "has the fill engine ever run" health indicator. Was originally
+// LED_USER's heartbeat blink; that heartbeat isn't informative once
+// everything else already proves the clock is alive.
 reg blit_start_ever;
 always @(posedge clk_sys or posedge reset)
 	if (reset) blit_start_ever <= 1'b0;
@@ -165,71 +137,17 @@ assign FB_FORCE_BLANK = ~draw_done_ever;
 
 ///////////////////////   ENGINE   /////////////////////////////////
 
-// CMDQ-002: the "Draw Test" OSD button fires this one hardcoded SOLID_FILL
-// command through CMDQ -- stands in for LINK's not-yet-built ring buffer.
-// opcode=1 (SOLID_FILL), dst_addr=0x30000000 (SURF-004), dst_pitch=256
-// (64px*4B), width=64, height=64, color=0x00FF00FF (magenta). Field order
-// matches CMDQ-001's slot layout; must stay identical to
-// sim/cmd_trigger_dut.sv's default, which is what `make sim` actually
-// verifies.
-localparam logic [255:0] DRAW_TEST_COMMAND = {
-	32'd0, 32'd0, 32'h00FF00FF, 32'd64, 32'd64, 32'd256, 32'h30000000, 32'd1
-};
-
-// CMDQ-002/BLIT-003: "Blit Copy Test" -- opcode=2 (BLIT_COPY), copies an 8x8
-// rect from 0x30010000 (arbitrary safe address, content whatever it already
-// is) into the visible surface's top-left corner. Must stay identical to
-// sim/cmd_copy_trigger_dut.sv's default, which is what `make sim` verifies.
-localparam logic [255:0] BLIT_COPY_TEST_COMMAND = {
-	32'd32, 32'h3001_0000, 32'd0, 32'd8, 32'd8, 32'd256, 32'h3000_0000, 32'd2
-};
-
-wire        engine_cmd_ready;
 wire [31:0] engine_wr_addr, engine_wr_data;
 wire        engine_wr_en, engine_wr_ready;
 wire        blit_start, blit_busy, blit_done;
 wire [31:0] blit_dst_addr, blit_color;
 wire [15:0] blit_dst_pitch, blit_width, blit_height;
-wire        draw_trigger_busy, draw_done;
-wire [255:0] draw_cmd_data;
-wire         draw_cmd_valid, draw_cmd_ready;
 
 wire        copy_start, copy_busy, copy_done;
 wire [31:0] copy_dst_addr, copy_src_addr;
 wire [15:0] copy_dst_pitch, copy_src_pitch, copy_width, copy_height;
-wire        copytest_busy, copytest_done;
-wire [255:0] copytest_cmd_data;
-wire         copytest_cmd_valid, copytest_cmd_ready;
 wire [31:0] copy_wr_addr, copy_wr_data, copy_rd_addr, copy_rd_data;
 wire        copy_wr_en, copy_wr_ready, copy_rd_en, copy_rd_ready, copy_rd_valid;
-
-cmd_test_trigger #(
-	.COMMAND(DRAW_TEST_COMMAND)
-) draw_test
-(
-	.clk      (clk_sys),
-	.reset    (reset),
-	.trigger  (status[2]),
-	.busy     (draw_trigger_busy),
-	.done     (draw_done),
-	.cmd_data (draw_cmd_data),
-	.cmd_valid(draw_cmd_valid),
-	.cmd_ready(draw_cmd_ready)
-);
-
-cmd_test_trigger #(
-	.COMMAND(BLIT_COPY_TEST_COMMAND)
-) copy_test
-(
-	.clk      (clk_sys),
-	.reset    (reset),
-	.trigger  (status[3]),
-	.busy     (copytest_busy),
-	.done     (copytest_done),
-	.cmd_data (copytest_cmd_data),
-	.cmd_valid(copytest_cmd_valid),
-	.cmd_ready(copytest_cmd_ready)
-);
 
 // LINK-001/LINK-002/LINK-003: the real host-driven command path.
 // tools/link_push.c writes commands and write_ptr directly into shared
@@ -284,26 +202,13 @@ link_fence link_fence
 	.wr_ready  (fence_wr_ready)
 );
 
-// Priority mux feeding CMDQ's single command front end. The OSD buttons
-// stay ahead of link_ring in priority purely so a deliberate button press
-// during bring-up is never starved by a busy ring -- arbitrary otherwise,
-// since a human pressing a button and a host process pushing to the ring
-// are never expected to race in practice.
-wire        cmd_sel_draw = draw_cmd_valid;
-wire        cmd_sel_copytest = !cmd_sel_draw && copytest_cmd_valid;
-wire [255:0] engine_cmd_data  = cmd_sel_draw ? draw_cmd_data  : cmd_sel_copytest ? copytest_cmd_data  : link_cmd_data;
-wire         engine_cmd_valid = cmd_sel_draw ? draw_cmd_valid : cmd_sel_copytest ? copytest_cmd_valid : link_cmd_valid;
-assign draw_cmd_ready     = cmd_sel_draw     ? engine_cmd_ready : 1'b0;
-assign copytest_cmd_ready = cmd_sel_copytest ? engine_cmd_ready : 1'b0;
-assign link_cmd_ready     = (cmd_sel_draw || cmd_sel_copytest) ? 1'b0 : engine_cmd_ready;
-
 cmdq cmdq
 (
 	.clk           (clk_sys),
 	.reset         (reset),
-	.cmd_valid     (engine_cmd_valid),
-	.cmd_data      (engine_cmd_data),
-	.cmd_ready     (engine_cmd_ready),
+	.cmd_valid     (link_cmd_valid),
+	.cmd_data      (link_cmd_data),
+	.cmd_ready     (link_cmd_ready),
 	.blit_start    (blit_start),
 	.blit_dst_addr (blit_dst_addr),
 	.blit_dst_pitch(blit_dst_pitch),
@@ -365,58 +270,25 @@ blit_copy blit_copy
 	.wr_ready (copy_wr_ready)
 );
 
-// Deliberately, individually triggered by one OSD button -- writes ONE
-// fixed word to physical 0x30000000 per press and stops. See the file
-// header, DDR-002 and SURF-004.
-//
-// MARKER_ADDR history: originally 0, which DDR-002's first hardware test
-// showed lands at physical 0x00000000 (DDRAM_ADDR is an unwindowed, direct
-// physical word address, not offset from any window). Moved to
-// 0x20000000, which DDR-002 then confirmed correctly -- but SURF-004 later
-// found 0x20000000 itself collides with MiSTer's own system video scaler.
-// Now 0x30000000, the address MiSTer-Raster's own hardware-validated fix
-// uses for exactly this reason.
-wire        marker_busy, marker_done;
-wire [31:0] marker_wr_addr, marker_wr_data;
-wire        marker_wr_en, marker_wr_ready;
-
-ddram_marker_test #(
-	.MARKER_ADDR(32'h3000_0000)
-) marker_test
-(
-	.clk     (clk_sys),
-	.reset   (reset),
-	.trigger (status[1]),
-	.busy    (marker_busy),
-	.done    (marker_done),
-	.wr_addr (marker_wr_addr),
-	.wr_data (marker_wr_data),
-	.wr_en   (marker_wr_en),
-	.wr_ready(marker_wr_ready)
-);
-
-// 5-way priority mux into the DDRAM adapter's write port: marker_test,
-// blit's fill writes, blit_copy's copy writes, link_ring's writes (INIT +
-// read_ptr writeback), link_fence's writes (INIT + completion-count
-// publish). None can ever be simultaneously active by construction of
-// CMDQ's own single-engine dispatch (blit and blit_copy), marker_test's
-// independent OSD trigger, and link_ring only writing while idle/finishing
-// a dispatch, so this priority is a tie-breaker, not load-bearing
-// arbitration -- same caveat as DDR-003's read/write mux. link_fence sits
-// lowest: its writes are never time-critical (the host only needs the
-// count to arrive eventually, not within any particular cycle), and by the
-// time it wants to write, the engine that just triggered it (blit/blit_copy)
-// has already stopped writing.
-wire        wr_sel_marker = marker_wr_en;
-wire        wr_sel_copy   = !wr_sel_marker && copy_wr_en;
-wire        wr_sel_link   = !wr_sel_marker && !wr_sel_copy && link_wr_en;
-wire        wr_sel_engine = !wr_sel_marker && !wr_sel_copy && !wr_sel_link && engine_wr_en;
-wire        wr_sel_fence  = !wr_sel_marker && !wr_sel_copy && !wr_sel_link && !wr_sel_engine && fence_wr_en;
-wire [31:0] adapter_wr_addr = wr_sel_marker ? marker_wr_addr : wr_sel_copy ? copy_wr_addr : wr_sel_link ? link_wr_addr : wr_sel_engine ? engine_wr_addr : fence_wr_addr;
-wire [31:0] adapter_wr_data = wr_sel_marker ? marker_wr_data : wr_sel_copy ? copy_wr_data : wr_sel_link ? link_wr_data : wr_sel_engine ? engine_wr_data : fence_wr_data;
-wire        adapter_wr_en   = wr_sel_marker ? marker_wr_en   : wr_sel_copy ? copy_wr_en   : wr_sel_link ? link_wr_en   : wr_sel_engine ? engine_wr_en   : fence_wr_en;
+// 4-way priority mux into the DDRAM adapter's write port: blit_copy's copy
+// writes, link_ring's writes (INIT + read_ptr writeback), blit's fill
+// writes, link_fence's writes (INIT + completion-count publish). None can
+// ever be simultaneously active by construction of CMDQ's own single-engine
+// dispatch (blit and blit_copy) and link_ring only writing while
+// idle/finishing a dispatch, so this priority is a tie-breaker, not
+// load-bearing arbitration -- same caveat as DDR-003's read/write mux.
+// link_fence sits lowest: its writes are never time-critical (the host only
+// needs the count to arrive eventually, not within any particular cycle),
+// and by the time it wants to write, the engine that just triggered it
+// (blit/blit_copy) has already stopped writing.
+wire        wr_sel_copy   = copy_wr_en;
+wire        wr_sel_link   = !wr_sel_copy && link_wr_en;
+wire        wr_sel_engine = !wr_sel_copy && !wr_sel_link && engine_wr_en;
+wire        wr_sel_fence  = !wr_sel_copy && !wr_sel_link && !wr_sel_engine && fence_wr_en;
+wire [31:0] adapter_wr_addr = wr_sel_copy ? copy_wr_addr : wr_sel_link ? link_wr_addr : wr_sel_engine ? engine_wr_addr : fence_wr_addr;
+wire [31:0] adapter_wr_data = wr_sel_copy ? copy_wr_data : wr_sel_link ? link_wr_data : wr_sel_engine ? engine_wr_data : fence_wr_data;
+wire        adapter_wr_en   = wr_sel_copy ? copy_wr_en   : wr_sel_link ? link_wr_en   : wr_sel_engine ? engine_wr_en   : fence_wr_en;
 wire        adapter_wr_ready;
-assign marker_wr_ready = wr_sel_marker ? adapter_wr_ready : 1'b0;
 assign copy_wr_ready   = wr_sel_copy   ? adapter_wr_ready : 1'b0;
 assign link_wr_ready   = wr_sel_link   ? adapter_wr_ready : 1'b0;
 assign engine_wr_ready = wr_sel_engine ? adapter_wr_ready : 1'b0;
@@ -484,10 +356,6 @@ localparam CONF_STR = {
 	"-;",
 	"T[0],Reset;",
 	"R[0],Reset and close OSD;",
-	"-;",
-	"T[1],Marker Test -- writes ONE word to phys 0x30000000!;",
-	"T[2],Draw Test -- fills a 64x64 test surface via CMDQ/BLIT;",
-	"T[3],Blit Copy Test -- copies 8x8 into the surface via CMDQ/BLIT_COPY;",
 	"v,0;",
 	"V,v",`BUILD_DATE
 };
@@ -544,10 +412,6 @@ assign VGA_R  = 8'd0;
 assign VGA_G  = 8'd0;
 assign VGA_B  = 8'd0;
 
-// LED_USER's heartbeat blink is temporarily replaced by blit_start_ever --
-// see the comment where that register is declared. Every other LED and the
-// HDMI output already prove the clock is alive, so the heartbeat itself
-// isn't currently informative.
 assign LED_USER = blit_start_ever;
 
 endmodule

@@ -5,7 +5,7 @@ set -e
 
 HOST="${1:-${MISTER_HOST:-mister.local}}"
 DEST="${DEST:-/media/fat/pet}"
-BINS="build/arm/misterpet-spike build/arm/fbterm-toggle build/arm/ddram-marker-check build/arm/ddram-marker-scan build/arm/link-push build/arm/link-slot-dump build/arm/mem-scan"
+BINS="build/arm/misterpet-spike build/arm/fbterm-toggle build/arm/link-push build/arm/link-slot-dump build/arm/mem-scan"
 
 for b in $BINS; do [ -f "$b" ] || { echo "missing $b -- run make first" >&2; exit 1; }; done
 
@@ -17,10 +17,7 @@ echo "  $DEST/misterpet-spike --info"
 echo "  $DEST/misterpet-spike --pattern --seconds 15"
 echo "  $DEST/misterpet-spike --fbcmd 320 240 --seconds 30"
 echo
-echo "after loading the Noodles core and pressing its OSD 'Marker Test' option:"
-echo "  $DEST/ddram-marker-check"
-echo
-echo "to push a real host-driven command into LINK's ring buffer (no OSD needed):"
+echo "after loading the Noodles core, push a real host-driven command into LINK's ring buffer:"
 echo "  $DEST/link-push"
 echo
 echo "diagnostics: dump a ring slot's raw words, or scan memory for a value:"

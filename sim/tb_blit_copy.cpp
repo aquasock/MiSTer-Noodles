@@ -1,13 +1,12 @@
-// Verilator testbench for the BLIT_COPY path end to end: cmd_test_trigger
-// -> CMDQ (opcode 2 decode, CMDQ-001/BLIT-003) -> blit_copy -> ddram_adapter
-// (DDR-003) -> a behavioral Avalon-MM memory model that must serve both
-// reads and writes correctly, including the half-word steering on each
-// side independently (source and destination addresses are deliberately
-// not both aligned the same way).
-//
-// The command itself is a compile-time default on cmd_copy_trigger_dut
-// (cmd_test_trigger has no runtime command input, same pattern as
-// sim/tb_cmd_trigger.cpp) -- kDstAddr etc. below must match that default.
+// Verilator testbench for the BLIT_COPY path end to end: CMDQ (opcode 2
+// decode, CMDQ-001/BLIT-003) -> blit_copy -> ddram_adapter (DDR-003) -> a
+// behavioral Avalon-MM memory model that must serve both reads and writes
+// correctly, including the half-word steering on each side independently
+// (source and destination addresses are deliberately not both aligned the
+// same way). cmd_valid/cmd_data are driven directly (same pattern as
+// tb_ddram_adapter.cpp), not through cmd_test_trigger -- that module and
+// the OSD buttons it drove were retired once LINK-001 proved the real
+// ring-buffer command path end to end (see core-log.md).
 
 #include <cstdint>
 #include <cstdio>
@@ -15,10 +14,12 @@
 #include <memory>
 #include <unordered_map>
 
-#include "Vcmd_copy_trigger_dut.h"
+#include "Vengine_copy_dut.h"
 #include "verilated.h"
 
 namespace {
+
+constexpr uint32_t kOpBlitCopy = 0x02;
 
 constexpr uint32_t kDstAddr = 0x30001004u;  // upper half of its word
 constexpr uint32_t kDstPitch = 32;          // 8px * 4B
@@ -28,6 +29,17 @@ constexpr uint32_t kWidth = 4;
 constexpr uint32_t kHeight = 3;
 
 uint32_t SourcePixel(uint32_t row, uint32_t col) { return 0xA0000000u | (row << 8) | col; }
+
+void PackCommand(Vengine_copy_dut &dut) {
+    dut.cmd_data[0] = kOpBlitCopy;
+    dut.cmd_data[1] = kDstAddr;
+    dut.cmd_data[2] = kDstPitch;
+    dut.cmd_data[3] = kWidth;
+    dut.cmd_data[4] = kHeight;
+    dut.cmd_data[5] = 0;  // color, unused for BLIT_COPY
+    dut.cmd_data[6] = kSrcAddr;
+    dut.cmd_data[7] = kSrcPitch;
+}
 
 // Behavioral Avalon-MM memory: word-addressed, 8 bytes/word, single
 // outstanding read at a time (matches blit_copy's own contract), fixed
@@ -65,10 +77,10 @@ public:
         }
 
         if (we) {
-            // NOTE: words_[addr] would insert a zero-valued entry via
-            // operator[] before a find()==end() check could ever see a
-            // missing key -- look up first, so a first-touch word starts
-            // from the fill pattern rather than silent zero.
+            // words_[addr] would insert a zero-valued entry via operator[]
+            // before a find()==end() check could ever see a missing key --
+            // look up first, so a first-touch word starts from the fill
+            // pattern rather than silent zero.
             auto it = words_.find(addr);
             uint64_t word = (it != words_.end()) ? it->second : kFillPattern;
             for (int i = 0; i < 8; ++i) {
@@ -105,7 +117,7 @@ private:
 
 class Testbench {
 public:
-    Testbench() : dut_(new Vcmd_copy_trigger_dut) {}
+    Testbench() : dut_(new Vengine_copy_dut) {}
     ~Testbench() { dut_->final(); }
 
     void Tick(AvalonMemory &mem) {
@@ -121,10 +133,10 @@ public:
         mem.Step(dut_->DDRAM_WE, dut_->DDRAM_RD, dut_->DDRAM_ADDR, dut_->DDRAM_DIN, dut_->DDRAM_BE);
     }
 
-    Vcmd_copy_trigger_dut &dut() { return *dut_; }
+    Vengine_copy_dut &dut() { return *dut_; }
 
 private:
-    std::unique_ptr<Vcmd_copy_trigger_dut> dut_;
+    std::unique_ptr<Vengine_copy_dut> dut_;
 };
 
 int Fail(const char *msg) {
@@ -139,7 +151,7 @@ int main(int argc, char **argv) {
 
     Testbench tb;
     AvalonMemory mem;
-    Vcmd_copy_trigger_dut &dut = tb.dut();
+    Vengine_copy_dut &dut = tb.dut();
 
     for (uint32_t row = 0; row < kHeight; ++row) {
         for (uint32_t col = 0; col < kWidth; ++col) {
@@ -148,17 +160,18 @@ int main(int argc, char **argv) {
     }
 
     dut.reset = 1;
-    dut.trigger = 0;
+    dut.cmd_valid = 0;
     for (int i = 0; i < 4; ++i) tb.Tick(mem);
     dut.reset = 0;
     tb.Tick(mem);
 
-    dut.trigger = 1;
+    PackCommand(dut);
+    dut.cmd_valid = 1;
 
-    // dut.busy/dut.done are cmd_test_trigger's signals -- they track CMDQ
-    // *accepting* the command, not blit_copy finishing it (same distinction
-    // tb_cmd_trigger.cpp already had to account for). Wait for the actual
-    // pixel count instead.
+    if (!dut.cmd_ready) return Fail("cmdq not ready to accept right after reset");
+    tb.Tick(mem);
+    dut.cmd_valid = 0;
+
     int guard = 0;
     do {
         tb.Tick(mem);

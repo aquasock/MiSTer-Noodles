@@ -1,25 +1,19 @@
-// Simulation-only wiring of cmd_test_trigger + CMDQ + blit_copy + the real
-// DDRAM adapter (read and write sides): the full trigger-to-pixel path for
-// BLIT_COPY (CMDQ-002-style bring-up, BLIT-003, DDR-003), exposing the real
-// DDRAM_* signal names so the testbench can drive one behavioral Avalon-MM
-// memory model that must serve both the read and the write side correctly.
+// Simulation-only wiring of CMDQ + blit_copy + the real DDRAM adapter (read
+// and write sides): the full CMDQ-dispatch-to-pixel path for BLIT_COPY
+// (BLIT-003, DDR-003), exposing the real DDRAM_* signal names so the
+// testbench can drive one behavioral Avalon-MM memory model that must serve
+// both the read and the write side correctly. cmd_valid/cmd_data are driven
+// directly by the testbench (same pattern as sim/engine_ddram_dut.sv), not
+// through an OSD-style trigger -- there is no trigger left in the real core
+// to test now that LINK-001 proves the ring-buffer path end to end.
 
-// Default COMMAND matches Noodles.sv's real "Blit Copy Test" command
-// exactly (BLIT-003): opcode=2 (BLIT_COPY), dst_addr=0x30001004,
-// dst_pitch=32, width=4, height=3, src_addr=0x30002000, src_pitch=16. Set
-// as a compile-time default rather than a runtime input, same pattern as
-// sim/cmd_trigger_dut.sv -- cmd_test_trigger has no runtime command input.
-module cmd_copy_trigger_dut #(
-    parameter logic [255:0] COMMAND = {
-        32'd16, 32'h30002000, 32'd0, 32'd3, 32'd4, 32'd32, 32'h30001004, 32'd2
-    }
-) (
-    input  logic clk,
-    input  logic reset,
+module engine_copy_dut (
+    input  logic          clk,
+    input  logic          reset,
 
-    input  logic trigger,
-    output logic busy,
-    output logic done,
+    input  logic          cmd_valid,
+    input  logic [255:0]  cmd_data,
+    output logic          cmd_ready,
 
     output logic        DDRAM_CLK,
     input  logic        DDRAM_BUSY,
@@ -33,9 +27,6 @@ module cmd_copy_trigger_dut #(
     output logic        DDRAM_RD
 );
 
-    logic         cmd_valid, cmd_ready;
-    logic [255:0] cmd_data;
-
     logic        blit_start, blit_busy, blit_done;
     logic [31:0] blit_dst_addr, blit_color;
     logic [15:0] blit_dst_pitch, blit_width, blit_height;
@@ -48,17 +39,6 @@ module cmd_copy_trigger_dut #(
     logic        wr_en, wr_ready;
     logic [31:0] rd_addr, rd_data;
     logic        rd_en, rd_ready, rd_valid;
-
-    cmd_test_trigger #(.COMMAND(COMMAND)) trigger_i (
-        .clk      (clk),
-        .reset    (reset),
-        .trigger  (trigger),
-        .busy     (busy),
-        .done     (done),
-        .cmd_data (cmd_data),
-        .cmd_valid(cmd_valid),
-        .cmd_ready(cmd_ready)
-    );
 
     cmdq cmdq_i (
         .clk            (clk),
@@ -85,9 +65,9 @@ module cmd_copy_trigger_dut #(
         .copy_done      (copy_done)
     );
 
-    // FILL's write port is never driven in this DUT (blit_start never
-    // fires unless COMMAND's opcode is 1) -- tie it off and give
-    // blit_copy's write port sole use of the adapter.
+    // FILL's write port is never driven in this DUT (blit_start never fires
+    // unless cmd_data's opcode is 1) -- tie it off and give blit_copy's
+    // write port sole use of the adapter.
     blit blit_i (
         .clk      (clk),
         .reset    (reset),
