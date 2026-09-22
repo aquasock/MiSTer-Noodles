@@ -431,6 +431,8 @@ ARCHITECTURE rtl OF ascal IS
 	SIGNAL avl_reset_na : std_logic;
 	SIGNAL avl_o_vs_sync,avl_o_vs : std_logic;
 	SIGNAL avl_fb_ena : std_logic;
+	SIGNAL avl_read_busy,avl_retire_pending : std_logic;
+	SIGNAL fb_boundary_toggle,fb_boundary_sync,fb_boundary_sync2,fb_boundary_seen : std_logic;
 
 	FUNCTION buf_next(a,b : natural RANGE 0 TO 2; freeze : std_logic := '0') RETURN natural IS
 	BEGIN
@@ -1162,7 +1164,6 @@ ARCHITECTURE rtl OF ascal IS
 
 	SIGNAL fb_base_latched_toggle : std_logic := '0';
 	SIGNAL fb_retired_toggle : std_logic := '0';
-	SIGNAL fb_retire_pending : std_logic := '0';
 BEGIN
 
 	o_fb_base_latched <= fb_base_latched_toggle;
@@ -1693,8 +1694,24 @@ BEGIN
 			avl_readdataack<='0';
 			avl_readack<='0';
 			fb_base_latched_toggle<='0';
+			fb_retired_toggle<='0';
+			avl_read_busy<='0';
+			avl_retire_pending<='0';
+			fb_boundary_sync<='0';
+			fb_boundary_sync2<='0';
+			fb_boundary_seen<='0';
 
 		ELSIF rising_edge(avl_clk) THEN
+			fb_boundary_sync<=fb_boundary_toggle; -- <ASYNC>
+			fb_boundary_sync2<=fb_boundary_sync;
+			IF fb_boundary_sync2/=fb_boundary_seen THEN
+				fb_boundary_seen<=fb_boundary_sync2;
+				avl_retire_pending<='1';
+			ELSIF avl_retire_pending='1' AND avl_read_busy='0' AND
+					avl_readdatavalid='0' AND avl_state=sIDLE THEN
+				fb_retired_toggle<=NOT fb_retired_toggle;
+				avl_retire_pending<='0';
+			END IF;
 			----------------------------------
 			avl_write_sync<=i_write; -- <ASYNC>
 			avl_write_sync2<=avl_write_sync;
@@ -1794,6 +1811,7 @@ BEGIN
 						avl_state<=sIDLE;
 						avl_read_i<='0';
 						avl_readack<=NOT avl_readack;
+						avl_read_busy<='1';
 					END IF;
 			END CASE;
 
@@ -1803,6 +1821,9 @@ BEGIN
 			IF avl_readdatavalid='1' THEN
 				avl_wr<='1';
 				avl_wad<=(avl_wad+1) MOD (2*BLEN);
+				IF (avl_wad MOD BLEN)=BLEN-1 THEN
+					avl_read_busy<='0';
+				END IF;
 				IF (avl_wad MOD BLEN)=BLEN-2 THEN
 					avl_readdataack<=NOT avl_readdataack;
 				END IF;
@@ -1898,8 +1919,7 @@ BEGIN
 			o_readdataack_sync<='0';
 			o_readdataack_sync2<='0';
 			o_readdataack<='0';
-			fb_retired_toggle<='0';
-			fb_retire_pending<='0';
+			fb_boundary_toggle<='0';
 
 		ELSIF rising_edge(o_clk) THEN
 			------------------------------------------------------
@@ -1959,14 +1979,7 @@ BEGIN
 				o_bufup0<='0';
 			END IF;
 			IF o_vsv(1)='1' AND o_vsv(0)='0' THEN
-				fb_retire_pending<='1';
-			ELSIF fb_retire_pending='1' AND o_state=sDISP AND
-					o_copy=sWAIT AND o_readlev=0 AND o_copylev=0 THEN
-				-- The output frame boundary has passed and both scaler
-				-- prefetch/copy queues are idle; only now is the old
-				-- framebuffer no longer owned by scanout.
-				fb_retired_toggle<=NOT fb_retired_toggle;
-				fb_retire_pending<='0';
+				fb_boundary_toggle<=NOT fb_boundary_toggle;
 			END IF;
 			IF o_vsv(1)='1' AND o_vsv(0)='0' AND o_bufup1='1' THEN
 				o_obuf1<=buf_next(o_obuf1,o_ibuf1,o_freeze);
