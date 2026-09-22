@@ -103,7 +103,21 @@ always @(posedge clk_sys or posedge reset)
 	else if (marker_done) marker_done_ever <= 1'b1;
 
 assign LED_DISK = marker_done_ever;
-assign LED_POWER = 0;
+
+// LED_POWER is otherwise unused -- diagnostic for LINK-001's first
+// hardware test: latches solid once link_ring has actually dispatched a
+// command to CMDQ (not just fetched it), independent of what happens
+// downstream. If this never lights after link-push, the bug is inside
+// link_ring itself (init, polling, or fetch); if it lights but nothing
+// visible changes, the bug is downstream in CMDQ/BLIT/the write path for
+// this specific mux integration. bit[1]=1 takes full manual control of the
+// LED instead of leaving it OR'd with system status (emu_ports.vh).
+reg link_dispatch_ever;
+always @(posedge clk_sys or posedge reset)
+	if (reset) link_dispatch_ever <= 1'b0;
+	else if (link_cmd_valid && link_cmd_ready) link_dispatch_ever <= 1'b1;
+
+assign LED_POWER = {1'b1, link_dispatch_ever};
 assign BUTTONS = 0;
 
 // draw_done_ever gates FB_EN so nothing is displayed until "Draw Test" has
