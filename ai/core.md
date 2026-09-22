@@ -1,10 +1,10 @@
-# MiSTer-Pet
+# MiSTer-Noodles
 
 ---
 
 ## Purpose
 
-MiSTer-Noodles is tamagochi style pet for the MiSTer FPGA.
+MiSTer-Noodles is tamagochi style pet for the MiSTer FPGA. It is a demo project meant to demonstrate a 2D FPGA accelerated game.
 
 ---
 
@@ -32,7 +32,7 @@ Read this core.md file first. Treat core.md is the primary project-level source 
 
 ## Build Environment
 
-- The GitHub repository for this project is: https://github.com/aquasock/MiSTer-Pet.git
+- The GitHub repository for this project is: https://github.com/aquasock/MiSTer-Noodles.git
 
 - The user's local GitHub repository must always stay up to date with the online repository.
 
