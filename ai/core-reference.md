@@ -80,6 +80,8 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 | What does a command slot look like on the wire? | CMDQ component records | CMDQ-001 |
 | What are SOLID_FILL's exact fields? | BLIT component records | BLIT-002 |
 | How does a write actually reach DDRAM_*? | DDR component records | DDR-001 |
+| What DDR3 addresses are actually safe to write? | SURF component records | SURF-003 |
+| Does DDRAM_ADDR=0 really mean physical 0x20000000? | DDR component records | DDR-002 (unconfirmed) |
 
 ---
 
@@ -96,6 +98,8 @@ OUT-002: "Display output uses the template's built-in MISTER_FB DDRAM framebuffe
 CMDQ-001: "v1 command slot is a fixed 32-byte / 256-bit record, plain uint32 fields, no bit-packing"
 BLIT-002: "SOLID_FILL (opcode 1) fields: dst_addr, dst_pitch, width, height, color"
 DDR-001: "DDRAM_* is a standard Avalon-MM master port; v1 adapter does single-word (burstcnt=1), write-only, 4-byte-into-8-byte-word transfers"
+SURF-003: "Safe FPGA-writable DDR3 window is Linux physical [0x20000000,0x40000000); the first 32MB of it is Main_MiSTer's own 'Core's fb' region"
+DDR-002 (PROPOSED): "DDRAM_ADDR is assumed window-relative (word 0 = physical 0x20000000) -- inferred, not confirmed, needs an empirical hardware check"
 ```
 
 ---
@@ -192,6 +196,24 @@ DDR-001: "DDRAM_* is a standard Avalon-MM master port; v1 adapter does single-wo
   decided_date: 2026-09-21
   decision: "DDRAM_* is a standard Altera/Intel Avalon-MM master interface -- confirmed by reading sys/sys_top.v, which wires DDRAM_BUSY/DOUT_READY/RD/WE straight onto an f2h_sdram Avalon port's waitrequest/readdatavalid/read/write signals of the same name pattern. DDRAM_ADDR is a word address over a 64-bit (8-byte) data bus: word_addr = byte_addr[31:3]. A request (RD or WE asserted, ADDR/DIN/BE stable) is accepted on the clock edge DDRAM_BUSY is sampled low; the master must hold the request stable on every cycle DDRAM_BUSY is high. Read data returns asynchronously later, one DDRAM_DOUT_READY pulse per requested word. rtl/ddram_write_adapter.sv implements only single-word writes (DDRAM_BURSTCNT=1, DDRAM_RD tied low) -- no reads, no bursts, nothing for CMDQ's future DDR3 polling yet."
   consequence: "BLIT's existing generic wr_addr/wr_data/wr_en/wr_ready port (BLIT-002) needed no changes to work with this: its valid-held-until-ready convention already matches Avalon-MM's write/waitrequest semantics, so the adapter is purely combinational (DDRAM_WE=wr_en, DDRAM_ADDR=wr_addr[31:3], wr_ready=~DDRAM_BUSY). Because DDRAM_DIN is 8 bytes wide and BLIT writes 4-byte pixels, the adapter steers each write into the upper or lower half of DDRAM_DIN using wr_addr[2] and masks the other half off with DDRAM_BE -- correct only when wr_addr is 4-byte aligned (see BLIT-002's added consequence note). CMDQ's read path for LINK's ring buffer needs a second, read-capable adapter; this record and rtl/ddram_write_adapter.sv cover the write side only."
+
+- record_id: SURF-003
+  kind: INTERFACE
+  component_id: SURF
+  title: "Safe DDR3 address window, confirmed from Main_MiSTer source"
+  status: DECIDED
+  decided_date: 2026-09-21
+  decision: "Read directly from the MiSTer-devel/Main_MiSTer source (shmem.h, video.cpp, and the load-address bounds checks in user_io.cpp/menu.cpp). The entire upper half of the board's DDR3, Linux physical address range [0x20000000,0x40000000) (512MB), is reserved for FPGA-side use -- shmem.h's `fpga_mem(x) = 0x20000000 | (x & 0x1FFFFFFF)` and every loader path in Main reject addresses outside it. Within that window, video.cpp's `FB_ADDR = 0x20000000 + 32MB` carries the comment '512mb + 32mb(Core's fb)': the first 32MB, physical 0x20000000-0x21FFFFFF, is explicitly set aside for a core's own use, distinct from Main's own wallpaper framebuffers which start at 0x22000000. This is independently corroborated by core.md's own hardware notes, which record Linux as seeing only ~492 MiB of the board's 1GB DDR3 -- consistent with Linux being capped below this reserved window."
+  consequence: "SURF surfaces and LINK's future ring buffer belong inside the 32MB Core's-fb sub-window (physical 0x20000000-0x21FFFFFF), not just anywhere in the full 512MB FPGA-reserved range, to avoid ever colliding with Main's own framebuffer use above 0x22000000. This gives an exact, sourced address range for the first real hardware test, rather than a guess -- but see DDR-002 for what is still unconfirmed about how this Linux-side physical address relates to the FPGA-side DDRAM_ADDR value that actually needs to be programmed."
+
+- record_id: DDR-002
+  kind: INTERFACE
+  component_id: DDR
+  title: "DDRAM_ADDR zero-point (unconfirmed, needs empirical check)"
+  status: PROPOSED
+  decided_date: 2026-09-21
+  decision: "Working assumption: DDRAM_ADDR is window-relative, not an absolute Linux physical address -- DDRAM_ADDR word 0 is assumed to correspond to Linux physical byte address 0x20000000, the start of the FPGA-reserved window (SURF-003). This follows from Main_MiSTer's fpga_mem(x) = 0x20000000 | (x & 0x1FFFFFFF) masking pattern and standard Altera/Intel F2H SDRAM bridge behavior, but is not confirmed by anything readable in our vendored sys/sysmem.sv, which is Qsys-generated boilerplate with no base-address documentation."
+  consequence: "This record stays PROPOSED, not DECIDED, on purpose: per this file's own operating rules, a PROPOSED record is not binding, and nothing should be implemented against a guessed physical address without checking it first. The planned check is the smallest possible real-hardware test: from the FPGA, write one recognizable marker word to DDRAM_ADDR=0 (via the DDR-001 adapter); from Linux userspace, read physical address 0x20000000 via /dev/mem and confirm the marker landed there. Only after that passes should this be promoted to DECIDED and used for an actual surface or the LINK ring buffer."
 ```
 
 ---
