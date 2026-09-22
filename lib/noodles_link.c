@@ -62,6 +62,7 @@ int noodles_push_command(noodles_link_t *link, const uint32_t command[8]) {
 
     link->header[0] = next_write_ptr;  // publish: FPGA can now see and fetch it
     link->write_ptr = next_write_ptr;
+    link->submitted += 1;
     return 0;
 }
 
@@ -80,4 +81,10 @@ int noodles_push_blit_copy(noodles_link_t *link, uint32_t dst_addr, uint16_t dst
         NOODLES_OP_BLIT_COPY, dst_addr, dst_pitch, width, height, 0, src_addr, src_pitch,
     };
     return noodles_push_command(link, command);
+}
+
+uint32_t noodles_link_submitted_count(const noodles_link_t *link) { return link->submitted; }
+
+uint32_t noodles_link_done_count(const noodles_link_t *link) {
+    return link->header[3];  // +12 bytes = index 3 of a uint32_t array
 }

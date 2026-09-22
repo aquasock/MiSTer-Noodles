@@ -9,12 +9,14 @@
 // publishes and the host reads. See ai/core-reference.md's LINK component
 // records for the wire contract; this header is the C-callable form of it.
 //
-// Deliberately fire-and-forget, no completion signal: noodles_push_*
-// returning 0 means the command was written into the ring and the ring's
-// write_ptr was published, not that the FPGA has finished (or even started)
-// executing it. There is currently no way for the host to know a specific
-// command has completed -- see ai/core-reference.md LINK-004 for why that
-// gap is deliberate for now, not an oversight.
+// noodles_push_* returning 0 means the command was written into the ring
+// and the ring's write_ptr was published, not that the FPGA has finished
+// (or even started) executing it -- LINK-004 shipped this library without
+// a completion signal deliberately, since nothing needed one yet.
+// LINK-005 adds one: noodles_link_submitted_count()/noodles_link_done_count()
+// let a caller ask "has command #N actually finished" by comparing the two,
+// for the first time cases that need it (surface readback, safely reusing a
+// BLIT_COPY's source region) rather than just fire-and-forget.
 
 #ifndef NOODLES_LINK_H
 #define NOODLES_LINK_H
@@ -30,9 +32,10 @@ typedef struct {
     int fd;
     void *map;
     size_t map_span;
-    volatile uint32_t *header;  // write_ptr at [0], read_ptr at [2] (+8 bytes)
+    volatile uint32_t *header;  // write_ptr at [0], read_ptr at [2], fence at [3] (LINK-005)
     volatile uint32_t *slots;
     uint32_t write_ptr;         // host's own tracked copy; the FPGA never writes this field
+    uint32_t submitted;         // count of commands pushed through THIS handle since open()
 } noodles_link_t;
 
 // Opens /dev/mem and maps LINK-002's header+slot region. Returns 0 on
@@ -70,6 +73,29 @@ int noodles_push_solid_fill(noodles_link_t *link, uint32_t dst_addr, uint16_t ds
 int noodles_push_blit_copy(noodles_link_t *link, uint32_t dst_addr, uint16_t dst_pitch,
                             uint32_t src_addr, uint16_t src_pitch, uint16_t width,
                             uint16_t height);
+
+// Count of commands successfully pushed through THIS handle since
+// noodles_link_open() -- NOT an absolute, cross-session count (the library
+// has no way to know that). Only meaningful compared against
+// noodles_link_done_count() when the handle has been open since a fresh
+// core load, matching the FPGA-side counter's own lifetime (LINK-005).
+// Concretely: this is safe for one long-lived handle (open once, e.g. at
+// game startup, push many commands over the run), but comparing it against
+// noodles_link_done_count() across two SEPARATE short-lived processes each
+// opening their own handle is not meaningful -- each one's submitted count
+// restarts at 0 while done_count keeps counting from the shared FPGA
+// session, so an old, already-satisfied done_count can make a brand new
+// command look "done" before it has even been pushed. When in doubt, use
+// noodles_link_done_count() alone and compare it against a value read
+// BEFORE the push, not against submitted_count().
+uint32_t noodles_link_submitted_count(const noodles_link_t *link);
+
+// Reads LINK-005's completion fence directly from DRAM: a monotonic count,
+// published by rtl/link_fence.sv, of commands that have ACTUALLY finished
+// executing (not just been dispatched). A command is done once this
+// return value is >= the noodles_link_submitted_count() value observed
+// right after that command's push call returned.
+uint32_t noodles_link_done_count(const noodles_link_t *link);
 
 #ifdef __cplusplus
 }

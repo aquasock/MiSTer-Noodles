@@ -40,18 +40,20 @@ MARKER_TEST_SIM   := $(SIM_DIR)/marker_test/Vmarker_test_dut
 CMD_TRIGGER_SIM   := $(SIM_DIR)/cmd_trigger/Vcmd_trigger_dut
 CMD_COPY_SIM      := $(SIM_DIR)/cmd_copy_trigger/Vcmd_copy_trigger_dut
 LINK_RING_SIM     := $(SIM_DIR)/link_ring/Vlink_ring_dut
+LINK_FENCE_SIM    := $(SIM_DIR)/link_fence/Vlink_fence_dut
 
 .PHONY: all host deploy sim clean
 
 all: $(ARMBIN) $(ARMTOG) $(ARMMARKER) $(ARMSCAN) $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN)
 
-sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(MARKER_TEST_SIM) $(CMD_TRIGGER_SIM) $(CMD_COPY_SIM) $(LINK_RING_SIM)
+sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(MARKER_TEST_SIM) $(CMD_TRIGGER_SIM) $(CMD_COPY_SIM) $(LINK_RING_SIM) $(LINK_FENCE_SIM)
 	$(SOLID_FILL_SIM)
 	$(DDRAM_ADAPTER_SIM)
 	$(MARKER_TEST_SIM)
 	$(CMD_TRIGGER_SIM)
 	$(CMD_COPY_SIM)
 	$(LINK_RING_SIM)
+	$(LINK_FENCE_SIM)
 
 $(SOLID_FILL_SIM): rtl/cmdq.sv rtl/blit.sv sim/engine_dut.sv sim/tb_solid_fill.cpp
 	@mkdir -p $(dir $@)
@@ -88,6 +90,12 @@ $(LINK_RING_SIM): rtl/link_ring.sv rtl/ddram_adapter.sv sim/link_ring_dut.sv sim
 	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module link_ring_dut \
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
 		rtl/link_ring.sv rtl/ddram_adapter.sv sim/link_ring_dut.sv sim/tb_link_ring.cpp -o $(notdir $@)
+
+$(LINK_FENCE_SIM): rtl/link_fence.sv sim/link_fence_dut.sv sim/tb_link_fence.cpp
+	@mkdir -p $(dir $@)
+	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module link_fence_dut \
+		--Wall --Wno-fatal -Wno-DECLFILENAME \
+		rtl/link_fence.sv sim/link_fence_dut.sv sim/tb_link_fence.cpp -o $(notdir $@)
 
 $(ARMBIN): src/spike_fb.c | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ $< $(LDLIBS)

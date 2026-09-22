@@ -8,3 +8,4 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/ddram_adapter.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/ddram_marker_test.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cmd_test_trigger.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/link_ring.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/link_fence.sv

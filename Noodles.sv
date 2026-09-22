@@ -260,6 +260,30 @@ link_ring link_ring
 	.cmd_ready(link_cmd_ready)
 );
 
+// LINK-005: completion fence. blit_done/copy_done fire once per command
+// that ACTUALLY finished executing (link_ring's own read_ptr only tracks
+// dispatch acceptance -- see LINK-003/LINK-005), ORed here since either one
+// completing a command means "one more command is done" from the host's
+// point of view; CMDQ never runs both at once. link_fence has no idea which
+// engine ran or what command it was -- it is a pure counter, deliberately
+// dumber than link_ring, so it never needs touching if link_ring's own FSM
+// changes again.
+wire cmd_done_pulse = blit_done || copy_done;
+
+wire [31:0] fence_wr_addr, fence_wr_data;
+wire        fence_wr_en, fence_wr_ready;
+
+link_fence link_fence
+(
+	.clk       (clk_sys),
+	.reset     (reset),
+	.done_pulse(cmd_done_pulse),
+	.wr_addr   (fence_wr_addr),
+	.wr_data   (fence_wr_data),
+	.wr_en     (fence_wr_en),
+	.wr_ready  (fence_wr_ready)
+);
+
 // Priority mux feeding CMDQ's single command front end. The OSD buttons
 // stay ahead of link_ring in priority purely so a deliberate button press
 // during bring-up is never starved by a busy ring -- arbitrary otherwise,
@@ -371,24 +395,32 @@ ddram_marker_test #(
 	.wr_ready(marker_wr_ready)
 );
 
-// 4-way priority mux into the DDRAM adapter's write port: marker_test,
+// 5-way priority mux into the DDRAM adapter's write port: marker_test,
 // blit's fill writes, blit_copy's copy writes, link_ring's writes (INIT +
-// read_ptr writeback). None can ever be simultaneously active by
-// construction of CMDQ's own single-engine dispatch (blit and blit_copy),
-// marker_test's independent OSD trigger, and link_ring only writing while
-// idle/finishing a dispatch, so this priority is a tie-breaker, not
-// load-bearing arbitration -- same caveat as DDR-003's read/write mux.
+// read_ptr writeback), link_fence's writes (INIT + completion-count
+// publish). None can ever be simultaneously active by construction of
+// CMDQ's own single-engine dispatch (blit and blit_copy), marker_test's
+// independent OSD trigger, and link_ring only writing while idle/finishing
+// a dispatch, so this priority is a tie-breaker, not load-bearing
+// arbitration -- same caveat as DDR-003's read/write mux. link_fence sits
+// lowest: its writes are never time-critical (the host only needs the
+// count to arrive eventually, not within any particular cycle), and by the
+// time it wants to write, the engine that just triggered it (blit/blit_copy)
+// has already stopped writing.
 wire        wr_sel_marker = marker_wr_en;
 wire        wr_sel_copy   = !wr_sel_marker && copy_wr_en;
 wire        wr_sel_link   = !wr_sel_marker && !wr_sel_copy && link_wr_en;
-wire [31:0] adapter_wr_addr = wr_sel_marker ? marker_wr_addr : wr_sel_copy ? copy_wr_addr : wr_sel_link ? link_wr_addr : engine_wr_addr;
-wire [31:0] adapter_wr_data = wr_sel_marker ? marker_wr_data : wr_sel_copy ? copy_wr_data : wr_sel_link ? link_wr_data : engine_wr_data;
-wire        adapter_wr_en   = wr_sel_marker ? marker_wr_en   : wr_sel_copy ? copy_wr_en   : wr_sel_link ? link_wr_en   : engine_wr_en;
+wire        wr_sel_engine = !wr_sel_marker && !wr_sel_copy && !wr_sel_link && engine_wr_en;
+wire        wr_sel_fence  = !wr_sel_marker && !wr_sel_copy && !wr_sel_link && !wr_sel_engine && fence_wr_en;
+wire [31:0] adapter_wr_addr = wr_sel_marker ? marker_wr_addr : wr_sel_copy ? copy_wr_addr : wr_sel_link ? link_wr_addr : wr_sel_engine ? engine_wr_addr : fence_wr_addr;
+wire [31:0] adapter_wr_data = wr_sel_marker ? marker_wr_data : wr_sel_copy ? copy_wr_data : wr_sel_link ? link_wr_data : wr_sel_engine ? engine_wr_data : fence_wr_data;
+wire        adapter_wr_en   = wr_sel_marker ? marker_wr_en   : wr_sel_copy ? copy_wr_en   : wr_sel_link ? link_wr_en   : wr_sel_engine ? engine_wr_en   : fence_wr_en;
 wire        adapter_wr_ready;
 assign marker_wr_ready = wr_sel_marker ? adapter_wr_ready : 1'b0;
 assign copy_wr_ready   = wr_sel_copy   ? adapter_wr_ready : 1'b0;
 assign link_wr_ready   = wr_sel_link   ? adapter_wr_ready : 1'b0;
-assign engine_wr_ready = (wr_sel_marker || wr_sel_copy || wr_sel_link) ? 1'b0 : adapter_wr_ready;
+assign engine_wr_ready = wr_sel_engine ? adapter_wr_ready : 1'b0;
+assign fence_wr_ready  = wr_sel_fence  ? adapter_wr_ready : 1'b0;
 
 // 2-way priority mux into the DDRAM adapter's read port: blit_copy and
 // link_ring. LINK-003's cmd_ready gating keeps these from ever actually
