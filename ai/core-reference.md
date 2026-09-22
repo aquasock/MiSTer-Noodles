@@ -92,6 +92,7 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 | How does CMDQ actually find and fetch a queued command? | LINK component records | LINK-003 |
 | Why does a shared read port need a "who's mid-request" signal, not just rd_en? | DDR/LINK component records | DDR-005 |
 | How do I pack an R,G,B color into SOLID_FILL's color field? | BLIT component records | BLIT-004 |
+| What's the real host-side API for pushing commands, and does it tell me when a draw finished? | LINK component records | LINK-004 |
 
 ---
 
@@ -120,6 +121,7 @@ DDR-005: "A shared read-port mux must select on a REQ+WAIT-spanning signal (link
 BLIT-004: "SOLID_FILL's color field is packed R | (G<<8) | (B<<16) -- R in the LOW byte -- matching FB_FORMAT's RGB memory order, not the 0xRRGGBB hex-literal reading"
 LINK-002: "64-slot ring buffer at phys 0x30020000 (header: write_ptr +0, read_ptr +8) / 0x30021000 (slots), reusing CMDQ-001's 32-byte slot format"
 LINK-003: "link_ring.sv polls write_ptr only while CMDQ is idle (cmd_ready), fetches via 8 sequential reads, dispatches to CMDQ, writes back read_ptr"
+LINK-004: "lib/noodles_link.{h,c} is the real host-side API (open/close, noodles_rgb, push_command/solid_fill/blit_copy) -- fire-and-forget, no completion signal by deliberate choice"
 ```
 
 ---
@@ -322,9 +324,15 @@ LINK-003: "link_ring.sv polls write_ptr only while CMDQ is idle (cmd_ready), fet
   decided_date: 2026-09-22
   decision: "rtl/link_ring.sv polls LINK-002's write_ptr continuously whenever CMDQ's cmd_ready is asserted (CMDQ idle, no engine busy) -- DDR-004 established this does not contend with video scan-out bandwidth, so no throttling is applied. On a mismatch with its own registered read_ptr, it fetches the 32-byte slot at slot_base+read_ptr*32 via 8 sequential 4-byte reads over the shared read port (DDR-003), presents the assembled 256 bits to CMDQ exactly as the OSD test triggers already do (cmd_valid/cmd_data, held until cmd_ready), then on acceptance advances read_ptr mod 64 and writes it back to the header before resuming polling. Gating all polling/fetching on cmd_ready -- not polling continuously regardless of engine state -- keeps DDR-003's single-outstanding-read assumption valid without needing real arbitration between blit_copy's reads and link_ring's: whenever an engine is busy (mid-copy, potentially mid-read), cmd_ready is low and link_ring issues no reads at all."
   consequence: "This makes LINK's own dispatch latency depend entirely on how long the currently-running command takes -- a slow future BLIT op would delay LINK from even checking for the next command, not just from starting it. That is an acceptable v1 tradeoff for a simple, provably-non-contending design, not a permanent limit; a future record can revisit if it becomes a real bottleneck. rtl/link_ring.sv is CMDQ's third command source, joining (and eventually replacing) the OSD test triggers through the same priority-mux pattern already used for draw_test/copy_test."
-```
 
----
+- record_id: LINK-004
+  kind: INTERFACE
+  component_id: LINK
+  title: "Host-side library API (lib/noodles_link.{h,c}), fire-and-forget, no completion signal"
+  status: DECIDED
+  decided_date: 2026-09-22
+  decision: "lib/noodles_link.h/.c is the real ARM/Linux-side API for LINK-001, replacing hand-rolled /dev/mem mmap code that every caller (starting with tools/link_push.c) previously duplicated. Surface: noodles_link_open/close manage the mmap of LINK-002's header+slot region; noodles_rgb packs an R,G,B triple per BLIT-004's byte order; noodles_push_command writes a raw 8-word slot and publishes write_ptr; noodles_push_solid_fill and noodles_push_blit_copy are typed wrappers over it for CMDQ-001's two current opcodes. noodles_link_t tracks write_ptr locally after syncing once at open() (only the host ever writes it, so no need to re-read DRAM every push), but always reads read_ptr fresh from DRAM (the FPGA owns it) to check ring fullness. Deliberately no completion signal: a successful push means the command was written into the ring and published, not that the FPGA has started or finished executing it -- callers get exactly the fire-and-forget semantics LINK-003's serial CMDQ already implies today, nothing stronger. tools/link_push.c was refactored onto this library (not left duplicating the old inline code) and reverified on real hardware: a library-pushed SOLID_FILL lands the correct color at the correct address, identically to the pre-library version."
+  consequence: "Any caller needing to know when a specific command has actually finished executing (before reading back a surface, or before reusing a BLIT_COPY's source region) has no way to do that today -- this was a deliberate scope decision, not an oversight, made after weighing an RTL completion-counter addition (CMDQ already knows engine_done; the gap is that nothing publishes it to DRAM) against shipping the ARM-side library alone. The RTL option was deferred: no current feature needs it, and it would mean touching link_ring.sv's FSM again immediately after DDR-005's hardware debugging cycle, with its own new sim testbench and hardware verification round trip. If a future milestone needs readback or safe source-reuse, that is the concrete trigger to revisit this and add a fence/counter field to LINK-002's header -- not before."
 
 ## 6. Record template
 
