@@ -82,6 +82,9 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 | How does a write actually reach DDRAM_*? | DDR component records | DDR-001 |
 | What DDR3 addresses are actually safe to write? | SURF component records | SURF-003 |
 | What does a DDRAM_ADDR value actually target physically? | DDR component records | DDR-002 |
+| Where does today's hardcoded test command come from? | CMDQ component records | CMDQ-002 |
+| What surface does the OSD's Draw Test actually display? | OUT component records | OUT-003 |
+| Is any address inside SURF-003's window actually unsafe? | SURF component records | SURF-004 |
 
 ---
 
@@ -100,6 +103,9 @@ BLIT-002: "SOLID_FILL (opcode 1) fields: dst_addr, dst_pitch, width, height, col
 DDR-001: "DDRAM_* is a standard Avalon-MM master port; v1 adapter does single-word (burstcnt=1), write-only, 4-byte-into-8-byte-word transfers"
 SURF-003: "Safe FPGA-writable DDR3 window is Linux physical [0x20000000,0x40000000); the first 32MB of it is Main_MiSTer's own 'Core's fb' region"
 DDR-002: "DDRAM_ADDR is a direct, unwindowed physical word address (word N = byte N*8) -- confirmed on hardware; word 0 is physical 0x0, not 0x20000000"
+CMDQ-002: "'Draw Test' OSD button fires one hardcoded SOLID_FILL through CMDQ -- temporary stand-in for LINK's ring buffer"
+OUT-003: "Draw Test's surface: 64x64, 32bpp, pitch 256, base 0x30000000; FB_EN gated on the fill having completed at least once"
+SURF-004: "Physical 0x20000000 itself is unsafe -- MiSTer's own system video scaler uses it; 0x30000000 is the proven-safe address (per aquasock/MiSTer-Raster's hardware-learned fix)"
 ```
 
 ---
@@ -213,7 +219,34 @@ DDR-002: "DDRAM_ADDR is a direct, unwindowed physical word address (word N = byt
   status: DECIDED
   decided_date: 2026-09-21
   decision: "Checked on real hardware (QMTech MiSTer, DE10-Nano-compatible). The original working assumption -- that DDRAM_ADDR was window-relative, with word 0 corresponding to physical 0x20000000 -- was wrong. rtl/ddram_marker_test.sv, first built targeting DDRAM_ADDR=0 (byte address 0x0), wrote its marker word to physical 0x00000000: confirmed by a full 1GB /dev/mem scan (tools/ddram_marker_scan.c) that found the marker at exactly phys 0x0 and nowhere in the SURF-003 reserved region. DDRAM_ADDR is a direct physical word address with no base offset or window translation: word N corresponds to byte address N*8 in the same address space Linux itself uses, including its own live RAM. Main_MiSTer's fpga_mem(x) = 0x20000000 | (x & 0x1FFFFFFF) macro is purely a software convention for Main's own use of the reserved region -- it does not describe any hardware bridge address translation, and does not apply to a core's own DDRAM_ADDR value."
-  consequence: "DDR-001's adapter math (word_addr = byte_addr>>3) was already correct and needed no change -- what was wrong was treating an address like 0x0 as safely inside the reserved window. Every address a core puts on DDRAM_ADDR, directly or via BLIT-002's dst_addr, must be a real absolute physical address already known to be safe (i.e. inside SURF-003's [0x20000000,0x40000000) window, and preferably its 0x20000000-0x21FFFFFF Core's-fb sub-window) -- there is no offset that makes a small or zero-based address safe. ddram_marker_test now targets 0x20000000 directly and this has not yet been re-verified against real hardware (next step). One stray word was written to live physical address 0x0 during this discovery; the system remained stable, but a reboot before relying on this build for anything else is the clean way to clear that uncertainty rather than assume it was harmless."
+  consequence: "DDR-001's adapter math (word_addr = byte_addr>>3) was already correct and needed no change -- what was wrong was treating an address like 0x0 as safely inside the reserved window. Every address a core puts on DDRAM_ADDR, directly or via BLIT-002's dst_addr, must be a real absolute physical address already known to be safe (i.e. inside SURF-003's [0x20000000,0x40000000) window -- there is no offset that makes a small or zero-based address safe. SURF-004 later found that 0x20000000 itself, despite being inside this window, is not safe either -- see that record before picking an address from this one alone. ddram_marker_test now targets 0x20000000 directly; re-verified on hardware and tools/ddram_marker_check.c confirms PASS. One stray word was written to live physical address 0x0 during this discovery; the system remained stable, but a reboot before relying on this build for anything else is the clean way to clear that uncertainty rather than assume it was harmless."
+
+- record_id: CMDQ-002
+  kind: INTERFACE
+  component_id: CMDQ
+  title: "Draw Test hardcoded command"
+  status: DECIDED
+  decided_date: 2026-09-21
+  decision: "The OSD's 'Draw Test' button (Noodles.sv, rtl/cmd_test_trigger.sv) fires exactly one fixed SOLID_FILL command through CMDQ on each press, encoded per CMDQ-001's slot layout: opcode=1, dst_addr=0x30000000, dst_pitch=256, width=64, height=64, color=0x00FF00FF (magenta), reserved words zero. cmd_test_trigger is a generic one-shot 'present this fixed command to CMDQ until accepted' module, not specific to this command."
+  consequence: "This is explicitly a stand-in for LINK-001's still-unbuilt ring buffer, not a step toward it architecturally -- CMDQ has no other way to receive a command today. Every field is hardcoded in Noodles.sv; changing what gets drawn means editing and resynthesizing the core, not sending a different command. sim/cmd_trigger_dut.sv and sim/tb_cmd_trigger.cpp verify this exact command end to end (CMDQ decode through BLIT's pixel writes) and must be kept identical to Noodles.sv's DRAW_TEST_COMMAND if either changes."
+
+- record_id: OUT-003
+  kind: INTERFACE
+  component_id: OUT
+  title: "Draw Test's MISTER_FB surface and FB_EN gating"
+  status: DECIDED
+  decided_date: 2026-09-21
+  decision: "FB_FORMAT/FB_WIDTH/FB_HEIGHT/FB_BASE/FB_STRIDE are hardcoded in Noodles.sv to match CMDQ-002's command exactly: 64x64, 32bpp (FB_FORMAT[2:0]=3'b110), base 0x30000000, stride 256. FB_EN and FB_FORCE_BLANK are gated on a 'draw ever completed' latch (set the first time the Draw Test command's BLIT fill finishes) rather than tied on unconditionally, so the display stays blank until a real fill has happened at least once instead of showing whatever was previously in memory at that address."
+  consequence: "The surface parameters here are not derived from CMDQ-002's command at elaboration time -- they are separately hardcoded and must be kept in sync by hand; a future record should make BLIT/CMDQ and OUT share one source of truth for surface geometry before this becomes a real API. CE_PIXEL, previously tied to constant 0, was also changed to a real toggling signal as part of this record's bring-up -- the framework's OSD/mixer chain needs it regardless of whether the picture comes from MISTER_FB or a core's own raster output; see the comment in Noodles.sv for what was checked."
+
+- record_id: SURF-004
+  kind: INTERFACE
+  component_id: SURF
+  title: "Physical 0x20000000 itself is unsafe -- MiSTer's system video scaler owns it"
+  status: DECIDED
+  decided_date: 2026-09-21
+  decision: "Physical byte address 0x20000000 -- the very start of SURF-003's [0x20000000,0x40000000) FPGA-reserved window, and this project's first choice of surface/marker address -- is not actually free for a core to use. It is MiSTer's own system video scaler's RAM base. This is not inferred: it is a direct, hardware-learned lesson from the aquasock/MiSTer-Raster project (a much more mature sibling MiSTer core, same author), whose commit 53f322905 ('Move H262 frame store out of scaler DDR region') states plainly: 'MiSTer's system video scaler uses physical DDR byte address 0x20000000 as its RAM base.' That project originally placed its own DDR3 picture store at word address 0x04000000 (= physical 0x20000000, the same value this project's SURF-003 treated as safe) and moved it to word address 0x06000000 (= physical 0x30000000) after hitting a real collision. Every subsequent hardware-accepted release of that project (through v0.9.5, per its changelog) has used 0x30000000+ without incident."
+  consequence: "This project's marker test, Draw Test command, and FB_BASE were all originally pointed at 0x20000000 and have been moved to 0x30000000 as a result, before ever enabling FB_EN or displaying anything from that address (SURF-003's DECIDED status and its 'Core's fb' sub-window language are not wrong about Linux's own reservation, just incomplete about a second, FPGA-side consumer within it -- treat SURF-003 plus this record together, not SURF-003 alone, when picking an address). This is also a standing reminder to consult aquasock/MiSTer-Raster before re-deriving platform facts this project may already have hard-won answers for (recorded separately in this session's persistent memory, not in this file)."
 ```
 
 ---
