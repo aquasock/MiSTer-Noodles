@@ -41,8 +41,9 @@ int noodles_link_open(noodles_link_t *link) {
     link->slots =
         (volatile uint32_t *)((char *)link->map + (NOODLES_SLOT_BASE_ADDR - NOODLES_HEADER_ADDR));
     link->write_ptr = link->header[0];  // sync with whatever is already published
-    link->done_baseline = link->header[3];  // LINK-005's fence value at open time -- see
-                                             // noodles_present_and_wait()'s use of it
+    uint32_t fence_state = link->header[3];
+    link->done_baseline = fence_state & 0x7fffffffu;
+    link->presents_completed = (fence_state >> 31) & 1u;
 
     return 0;
 }
@@ -101,7 +102,7 @@ int noodles_push_blit_copy_key(noodles_link_t *link, uint32_t dst_addr, uint16_t
 uint32_t noodles_link_submitted_count(const noodles_link_t *link) { return link->submitted; }
 
 uint32_t noodles_link_done_count(const noodles_link_t *link) {
-    return link->header[3];  // +12 bytes = index 3 of a uint32_t array
+    return link->header[3] & 0x7fffffffu;
 }
 
 int noodles_present_and_wait(noodles_link_t *link) {

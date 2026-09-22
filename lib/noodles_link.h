@@ -42,11 +42,11 @@ typedef struct {
     int fd;
     void *map;
     size_t map_span;
-    volatile uint32_t *header;  // write_ptr at [0], read_ptr at [2], fence at [3] (LINK-005)
+    volatile uint32_t *header;  // write_ptr [0], read_ptr [2], fence/count+front [3]
     volatile uint32_t *slots;
     uint32_t write_ptr;         // host's own tracked copy; the FPGA never writes this field
     uint32_t submitted;         // count of commands pushed through THIS handle since open()
-    uint32_t presents_completed;  // count of PRESENT flips CONFIRMED done (OUT-004)
+    uint32_t presents_completed;  // current front parity: 0=A, 1=B
     uint32_t done_baseline;     // LINK-005 fence value at open() time; done_baseline + submitted
                                  // converts a per-handle submitted count into the fence's own
                                  // absolute numbering -- see noodles_present_and_wait()
@@ -137,7 +137,7 @@ int noodles_present_and_wait(noodles_link_t *link);
 // Returns the buffer address the host should currently draw into (the back
 // buffer, i.e. the one NOT being scanned out right now). Starts as
 // NOODLES_BUFFER_B_ADDR (buffer A is front after an FPGA reset/core load)
-// and alternates each time noodles_present_and_wait() confirms a flip.
+// and follows the FPGA-published front parity across process launches.
 // Draw a full frame's worth of commands at this address, then call
 // noodles_present_and_wait() before reading this again.
 uint32_t noodles_link_back_buffer(const noodles_link_t *link);

@@ -25,6 +25,7 @@ module link_fence #(
     input  logic reset,
 
     input  logic done_pulse,  // one cycle high per command that finished (not just dispatched)
+    input  logic front_sel,   // 0=A is front, 1=B is front
 
     output logic [31:0] wr_addr,
     output logic [31:0] wr_data,
@@ -61,7 +62,10 @@ module link_fence #(
     wire pending = !initialized || (done_count != published_count);
 
     assign wr_addr = FENCE_ADDR;
-    assign wr_data = write_value;
+    // Publish the actual scanout parity with the fence count so a host
+    // process opened after a prior process/core session cannot assume A is
+    // still front.
+    assign wr_data = {front_sel, write_value[30:0]};
     assign wr_en   = (state == WRITE_REQ);
 
     always_ff @(posedge clk or posedge reset) begin

@@ -238,6 +238,7 @@ link_fence link_fence
 	.clk       (clk_sys),
 	.reset     (reset),
 	.done_pulse(cmd_done_pulse),
+	.front_sel (front_sel),
 	.wr_addr   (fence_wr_addr),
 	.wr_data   (fence_wr_data),
 	.wr_en     (fence_wr_en),
