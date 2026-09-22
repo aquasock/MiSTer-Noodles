@@ -499,6 +499,16 @@ OUT-005: "OUT-004's single-fresh-vblank-edge PRESENT margin is not reliably suff
   decision: "sys/ascal.vhd records the output-domain frame boundary, then requires the next synchronized Avalon-domain o_fb_base latch before FB_RETIRED can toggle. The existing outstanding-read counter must also be zero and the Avalon reader idle."
   consequence: "The retirement acknowledgement cannot complete in the phase gap where output VS has advanced but the Avalon reader still uses the prior framebuffer base. Two-buffer operation and the public FB_RETIRED toggle interface remain unchanged."
 
+- record_id: OUT-012
+  kind: INTERFACE
+  component_id: OUT
+  title: "Host buffer parity is published by the FPGA completion fence"
+  status: DECIDED
+  decided_date: 2026-09-22
+  supersedes: "OUT-011"
+  decision: "rtl/link_fence.sv publishes the completion count in bits 30:0 and the persistent front_sel parity in bit 31 of the existing fence word. lib/noodles_link.c masks the count and initializes each handle's back-buffer parity from the published front bit, so process restarts do not assume buffer A is front."
+  consequence: "A host process can safely reopen the shared link after prior PRESENT commands without drawing into the current scanout surface solely because its local present counter restarted. The completion-count capacity is reduced to 31 bits."
+
 ## 6. Record template
 
 ```yaml

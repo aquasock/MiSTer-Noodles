@@ -42,6 +42,39 @@ Wire CMDQ and BLIT into Noodles.sv for real: design and implement the DDRAM writ
 
 ---
 
+## 40 COMMIT Unreleased 0b58b29 2026-09-22T13:53:00-07:00
+
+#### Coming From:
+
+Unreleased fd8c39a
+
+#### Purpose:
+
+Synchronize host back-buffer tracking with the FPGA's persistent front-buffer parity.
+
+#### Outcome:
+
+Repeated four-second trials showed a deterministic odd/even pattern: each new host process assumed buffer A was front, while the FPGA retained `front_sel` across process launches. The completion fence now publishes the actual front parity in its high bit, and the host masks that bit from the completion count while seeding its local buffer state from it. Simulation, host builds, and Quartus validation pass; hardware validation is pending.
+
+#### Next Steps:
+
+Deploy the parity-aware FPGA and host tool, then repeat alternating short sprite runs to verify that every process starts drawing into the actual back buffer and that the colorkey path no longer exhibits the parity-dependent flicker.
+
+#### Files Modified:
+
+- rtl/link_fence.sv
+- Noodles.sv
+- sim/link_fence_dut.sv
+- lib/noodles_link.c
+- lib/noodles_link.h
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
+
 ## 39 COMMIT Unreleased 3746dc7 2026-09-22T13:30:00-07:00
 
 #### Coming From:
