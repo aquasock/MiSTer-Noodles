@@ -1,6 +1,8 @@
 // Simulation-only exposure of present's ports, for tb_present.cpp.
 
-module present_dut (
+module present_dut #(
+    parameter integer RETIRE_VBLANKS = 3
+) (
     input  logic clk,
     input  logic reset,
 
@@ -13,7 +15,7 @@ module present_dut (
     output logic front_sel
 );
 
-    present present_i (
+    present #(.RETIRE_VBLANKS(RETIRE_VBLANKS)) present_i (
         .clk      (clk),
         .reset    (reset),
         .fb_vbl   (fb_vbl),

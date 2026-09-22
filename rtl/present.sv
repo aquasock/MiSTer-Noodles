@@ -16,7 +16,10 @@
 // structure. ai/core-reference.md OUT-004 defines PRESENT's semantics and
 // the double-buffer address layout.
 
-module present (
+module present #(
+    // Empirical retirement margin for ascal's independent output buffering.
+    parameter integer RETIRE_VBLANKS = 3
+) (
     input  logic clk,
     input  logic reset,
 
@@ -38,6 +41,7 @@ module present (
 
     typedef enum logic [1:0] {IDLE, WAIT_VBL, FINISH} state_t;
     state_t state;
+    integer vbl_count;
 
     always_ff @(posedge clk or posedge reset) begin
         if (reset) begin
@@ -45,14 +49,16 @@ module present (
             busy      <= 1'b0;
             done      <= 1'b0;
             front_sel <= 1'b0;
+            vbl_count <= 0;
         end else begin
             done <= 1'b0;
 
             unique case (state)
                 IDLE: begin
                     if (start) begin
-                        busy  <= 1'b1;
-                        state <= WAIT_VBL;
+                        busy      <= 1'b1;
+                        vbl_count <= 0;
+                        state     <= WAIT_VBL;
                     end
                 end
 
@@ -63,8 +69,12 @@ module present (
                 // moments before vblank ends.
                 WAIT_VBL: begin
                     if (vbl_rising) begin
-                        front_sel <= ~front_sel;
-                        state     <= FINISH;
+                        if (vbl_count == 0)
+                            front_sel <= ~front_sel;
+                        if (vbl_count + 1 >= RETIRE_VBLANKS)
+                            state <= FINISH;
+                        else
+                            vbl_count <= vbl_count + 1;
                     end
                 end
 

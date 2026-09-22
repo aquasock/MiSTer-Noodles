@@ -1,6 +1,7 @@
 // Verilator testbench for rtl/present.sv. Checks: (1) reset lands with
 // front_sel=0, busy/done clear, (2) a start pulse followed by a fresh
-// fb_vbl rising edge flips front_sel exactly once and pulses done, (3) a
+// fb_vbl rising edge flips front_sel exactly once and waits for the
+// configured retirement edges before pulsing done, (3) a
 // start pulse that arrives while fb_vbl is ALREADY high does NOT flip
 // immediately -- it must wait for fb_vbl to go low then high again (a
 // fresh edge), not just "currently in blank", (4) repeated flips toggle
@@ -65,9 +66,19 @@ int main(int argc, char **argv) {
     for (int i = 0; i < 5; ++i) tb.Tick();  // stay low a while, must not flip yet
     if (dut.front_sel != 0) return Fail("front_sel flipped before any vblank edge");
 
-    dut.fb_vbl = 1;  // rising edge now
+    dut.fb_vbl = 1;  // first rising edge: flip, but do not finish yet
     tb.Tick();
     if (dut.front_sel != 1) return Fail("front_sel did not flip on vblank rising edge");
+    if (!dut.busy || dut.done) return Fail("present completed on first retirement edge");
+    dut.fb_vbl = 0;
+    tb.Tick();
+    dut.fb_vbl = 1;  // second fresh edge
+    tb.Tick();
+    if (!dut.busy || dut.done) return Fail("present completed on second retirement edge");
+    dut.fb_vbl = 0;
+    tb.Tick();
+    dut.fb_vbl = 1;  // third fresh edge: retirement margin is satisfied
+    tb.Tick();
     tb.Tick();  // FINISH -> done pulses this cycle, sampled after Tick()
     if (!dut.done) return Fail("done did not pulse after flip");
     tb.Tick();
@@ -87,9 +98,17 @@ int main(int argc, char **argv) {
     tb.Tick();
     if (dut.front_sel != 1) return Fail("front_sel flipped on a falling edge");
 
-    dut.fb_vbl = 1;  // NOW a fresh rising edge
+    dut.fb_vbl = 1;  // first fresh rising edge: flip, but remain busy
     tb.Tick();
     if (dut.front_sel != 0) return Fail("front_sel did not flip on the fresh rising edge");
+    for (int edge = 0; edge < 2; ++edge) {
+        dut.fb_vbl = 0;
+        tb.Tick();
+        dut.fb_vbl = 1;
+        tb.Tick();
+    }
+    tb.Tick();
+    if (!dut.done) return Fail("delayed present did not complete after three fresh edges");
 
     // Case 3: repeated flips toggle correctly. front_sel is 0 here (case 2
     // left it there); each iteration must invert it.
@@ -111,7 +130,13 @@ int main(int argc, char **argv) {
                           (unsigned)dut.front_sel);
             return Fail("repeated flip toggled incorrectly");
         }
-        for (int j = 0; j < 3; ++j) tb.Tick();  // let FINISH/done clear before next start
+        for (int edge = 0; edge < 2; ++edge) {
+            dut.fb_vbl = 0;
+            tb.Tick();
+            dut.fb_vbl = 1;
+            tb.Tick();
+        }
+        tb.Tick();  // let FINISH/done clear before next start
     }
 
     std::printf("PASS: present vblank-synced flip, waits for a fresh edge, toggles correctly\n");
