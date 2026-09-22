@@ -444,3 +444,40 @@ Per the plan agreed with the user, the next milestone is the FPGA-side completio
 - [x] Passed
 
 ---
+
+## 14 COMMIT Unreleased 9b4f0a8 2026-09-22T07:26:08-07:00
+
+#### Coming From:
+
+Unreleased b301df4
+
+#### Purpose:
+
+Build the FPGA-side completion counter LINK-004 deliberately deferred, so the host can finally know when a specific command has actually finished executing, not just been dispatched.
+
+#### Outcome:
+
+Added rtl/link_fence.sv: a small, separate module (not folded into link_ring.sv's own FSM) that watches blit_done||copy_done -- already exposed at Noodles.sv's top level, so cmdq.sv/blit.sv/blit_copy.sv/link_ring.sv needed no changes at all -- and publishes a monotonic completion count to a new DRAM field at HEADER_ADDR+12, as CMDQ's fifth write-mux client (lowest priority, since its writes are never time-critical). tb_link_fence.cpp caught a real bug before it ever reached hardware: the first design combinationally tied wr_en to a state that `reset` forced entry into asynchronously, meaning wr_en would go high while reset itself was still asserted, since the write mux/adapter have no reset input of their own to gate against -- the same class of hazard DDR-002/LINK-003 already had to learn to avoid, just caught in simulation this time. Fixed by folding the "publish an initial 0" behavior into the pending-write condition instead of a distinct INIT state, so reset lands in a non-writing IDLE. lib/noodles_link.{h,c} gained noodles_link_submitted_count() (per-handle push count) and noodles_link_done_count() (reads the fence); the header now documents a real footgun found while proving this on hardware -- comparing a per-handle submitted count against the FPGA's session-lifetime done_count is only valid within one long-lived handle, not across separate short-lived processes each opening their own (an old, already-satisfied done_count can make a brand new command look done before it was even pushed). tools/link_push.c was fixed to check done_count strictly advancing past its own pre-push reading instead, and reverified across three separate invocations on real hardware: fence count 3->4, 4->5, 5->6, one genuine increment per completed command. `make sim` passes all seven testbenches; `quartus_sh --flow compile Noodles` completed with 0 errors (6,383 ALMs, +48 over the previous build, matching link_fence's small footprint).
+
+#### Next Steps:
+
+LINK-001 through LINK-005 now form a complete, hardware-proven host-driven command path: submit, dispatch, execute, and confirm completion. BLIT-001's third op (hardware noise/static-fill) and retiring the OSD test triggers (Marker Test, Draw Test, Blit Copy Test -- genuinely unnecessary now that LINK no longer needs them as a bring-up fallback) remain the open items from earlier entries. A concrete next use for the fence itself -- surface readback (e.g. a screenshot tool) or safe BLIT_COPY source reuse -- would be a good forcing function to exercise it beyond this session's own demonstration.
+
+#### Files Modified:
+
+- rtl/link_fence.sv
+- Noodles.sv
+- sim/link_fence_dut.sv
+- sim/tb_link_fence.cpp
+- lib/noodles_link.h
+- lib/noodles_link.c
+- tools/link_push.c
+- Makefile
+- files.qip
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
