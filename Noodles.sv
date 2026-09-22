@@ -28,20 +28,22 @@
 // That is intentional, not an oversight. BLIT-002's dst_addr is whatever the
 // command says, and this project had not confirmed what DDR3 address range
 // is actually safe to write given Linux owns most of that physical memory.
-// It has now: SURF-003, read straight from MiSTer-devel/Main_MiSTer's own
-// source, confirms physical [0x20000000,0x40000000) is FPGA-reserved, with
-// the first 32MB of it (0x20000000-0x21FFFFFF) explicitly a core's own to
-// use ("Core's fb" in video.cpp). What is NOT yet confirmed is DDR-002:
-// whether DDRAM_ADDR=0 (the FPGA-side address) really corresponds to that
-// physical 0x20000000, or something else -- inferred from Main's fpga_mem()
-// macro, but not verified against our own RTL. ddram_marker_test below
-// exists to check exactly that, in isolation: pressing the OSD's single
-// "Marker Test" button writes one fixed word to DDRAM_ADDR=0, once, and
-// nothing else. tools/ddram_marker_check.c reads Linux physical 0x20000000
-// back and reports whether it matches. Until that check has actually been
-// run and passed, treat DDR-002 as unverified -- FB_EN stays 0 and nothing
-// beyond this one marker word should be trusted to land where intended.
-// See OUT-001, SURF-001/SURF-002/SURF-003 and DDR-001/DDR-002.
+// SURF-003, read straight from MiSTer-devel/Main_MiSTer's own source,
+// confirms physical [0x20000000,0x40000000) is FPGA-reserved, with the
+// first 32MB (0x20000000-0x21FFFFFF) explicitly a core's own to use
+// ("Core's fb" in video.cpp).
+//
+// DDR-002 has now been checked on real hardware, and the first attempt was
+// informative: with ddram_marker_test targeting DDRAM_ADDR=0 (byte address
+// 0x0), the marker word landed at physical 0x00000000 -- the base of live
+// Linux memory -- not inside the reserved window. DDRAM_ADDR is an
+// unwindowed, direct physical word address (word N = byte N*8 in the same
+// address space as everything else), confirmed by a full-range /dev/mem
+// scan that found the marker at exactly phys 0x0 and nowhere in the
+// reserved region. ddram_marker_test now targets 0x20000000/8 = word
+// 0x04000000, the corrected, actually-safe address. DDR-001's adapter math
+// (word_addr = byte_addr>>3) needed no change -- only the address supplied
+// to it did. See OUT-001, SURF-001/SURF-002/SURF-003 and DDR-001/DDR-002.
 
 module emu
 (
@@ -69,7 +71,18 @@ assign AUDIO_L = 0;
 assign AUDIO_R = 0;
 assign AUDIO_MIX = 0;
 
-assign LED_DISK = 0;
+// LED_DISK is otherwise unused -- repurposed as a diagnostic while DDR-002
+// is unresolved: latches solid on once the marker write has actually
+// completed on the DDRAM_* bus (not just been requested), independent of
+// where it landed. If this LED never lights after pressing "Marker Test",
+// the write itself never completed (e.g. DDRAM_BUSY stuck), not just
+// landed at an unexpected address.
+reg marker_done_ever;
+always @(posedge clk_sys or posedge reset)
+	if (reset) marker_done_ever <= 1'b0;
+	else if (marker_done) marker_done_ever <= 1'b1;
+
+assign LED_DISK = marker_done_ever;
 assign LED_POWER = 0;
 assign BUTTONS = 0;
 
@@ -130,13 +143,23 @@ blit blit
 );
 
 // Deliberately, individually triggered by one OSD button -- writes ONE
-// fixed word to DDRAM_ADDR=0 per press and stops. See the file header and
-// DDR-002.
+// fixed word to physical 0x20000000 per press and stops. See the file
+// header and DDR-002.
+//
+// MARKER_ADDR is 0x20000000, not 0 -- DDR-002's first hardware test showed
+// DDRAM_ADDR is an unwindowed, direct physical word address (word N = byte
+// N*8 in the same address space as everything else), not an offset into
+// SURF-003's reserved window as originally assumed. Address 0 on that first
+// test therefore landed at physical 0x00000000 -- the base of live Linux
+// memory -- not inside the safe window. 0x20000000/8 = word address
+// 0x04000000 is the corrected, actually-safe target.
 wire        marker_busy, marker_done;
 wire [31:0] marker_wr_addr, marker_wr_data;
 wire        marker_wr_en, marker_wr_ready;
 
-ddram_marker_test marker_test
+ddram_marker_test #(
+	.MARKER_ADDR(32'h2000_0000)
+) marker_test
 (
 	.clk     (clk_sys),
 	.reset   (reset),

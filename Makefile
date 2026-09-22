@@ -17,8 +17,10 @@ LDLIBS   := -lm
 ARMBIN     := build/arm/misterpet-spike
 ARMTOG     := build/arm/fbterm-toggle
 ARMMARKER  := build/arm/ddram-marker-check
+ARMSCAN    := build/arm/ddram-marker-scan
 HOSTBIN    := build/host/misterpet-spike
 HOSTMARKER := build/host/ddram-marker-check
+HOSTSCAN   := build/host/ddram-marker-scan
 
 HOST    ?= mister.local
 DEST    ?= /media/fat/pet
@@ -32,7 +34,7 @@ MARKER_TEST_SIM   := $(SIM_DIR)/marker_test/Vmarker_test_dut
 
 .PHONY: all host deploy sim clean
 
-all: $(ARMBIN) $(ARMTOG) $(ARMMARKER)
+all: $(ARMBIN) $(ARMTOG) $(ARMMARKER) $(ARMSCAN)
 
 sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(MARKER_TEST_SIM)
 	$(SOLID_FILL_SIM)
@@ -68,12 +70,18 @@ $(ARMTOG): src/fbterm_toggle.c | build/arm
 $(ARMMARKER): tools/ddram_marker_check.c | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ $<
 
-host: $(HOSTBIN) $(HOSTMARKER)
+$(ARMSCAN): tools/ddram_marker_scan.c | build/arm
+	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ $<
+
+host: $(HOSTBIN) $(HOSTMARKER) $(HOSTSCAN)
 
 $(HOSTBIN): src/spike_fb.c | build/host
 	$(HOSTCC) $(CFLAGS) -o $@ $< $(LDLIBS)
 
 $(HOSTMARKER): tools/ddram_marker_check.c | build/host
+	$(HOSTCC) $(CFLAGS) -o $@ $<
+
+$(HOSTSCAN): tools/ddram_marker_scan.c | build/host
 	$(HOSTCC) $(CFLAGS) -o $@ $<
 
 build/arm build/host:
