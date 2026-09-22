@@ -5,7 +5,7 @@ set -e
 
 HOST="${1:-${MISTER_HOST:-mister.local}}"
 DEST="${DEST:-/media/fat/pet}"
-BINS="build/arm/link-push build/arm/link-slot-dump build/arm/mem-scan build/arm/blit-copy-push build/arm/solid-fill-push build/arm/blit-copy-key-push"
+BINS="build/arm/link-push build/arm/link-slot-dump build/arm/mem-scan build/arm/blit-copy-push build/arm/solid-fill-push build/arm/blit-copy-key-push build/arm/bench"
 
 for b in $BINS; do [ -f "$b" ] || { echo "missing $b -- run make first" >&2; exit 1; }; done
 
@@ -28,3 +28,6 @@ echo
 echo "prove BLIT_COPY_KEY (colorkey transparency): a red square with a magenta"
 echo "colorkey border, composited onto a blue background -- border shouldn't overwrite it:"
 echo "  $DEST/blit-copy-key-push"
+echo
+echo "benchmark the real end-to-end command path (push -> dispatch -> execute -> fence):"
+echo "  $DEST/bench"
