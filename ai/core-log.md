@@ -849,3 +849,40 @@ Factored the BMP-parsing logic out of tools/load_bmp.c into tools/bmp_loader.h (
 - [x] Passed
 
 ---
+
+## 26 COMMIT Unreleased a7c893c 2026-09-22T11:40:00-07:00
+
+#### Coming From:
+
+Unreleased 7f1e84e
+
+#### Purpose:
+
+The user asked to push count=64 on stress_demo.c to actually stress the core ("lets do 64"). It ran at a stable 10fps with no ring/fence errors, but that number was suspicious -- worth finding out whether it was a real hardware limit or host-side overhead before treating it as a finding.
+
+#### Outcome:
+
+**Pipelining fix (LINK-007).** stress_demo.c fence-waited after every single push (1 clear + count blits + 1 present, all individually waited). At count=64 that serialized 66 host round trips per frame; rewrote to push commands back-to-back, blocking only on an actual ring-full return (push_fill_retry/push_key_retry/present_retry helpers, retrying with a short sleep). This raised 64-sprite throughput from 10fps to 15fps initially -- but the user reported the display now showed real, visible ghosting ("NES sprite flicker... ghosted from the bmp's previous location"), confirmed both live and on a screen recording, not a capture artifact.
+
+**Real bug found and fixed (LINK-007).** noodles_present_and_wait() sampled done_count() before pushing PRESENT and returned success as soon as done_count() advanced by ANY amount afterward -- correct only when nothing else is in flight, which was true for every caller before stress_demo.c pipelined. With dozens of blits still draining when PRESENT was pushed, an ordinary blit's own completion satisfied that check, so present_and_wait() reported the flip done before PRESENT had even been dispatched -- the host then started drawing the next frame into the buffer still being scanned out live. Fixed by comparing against PRESENT's own absolute position in the fence's numbering (a new done_baseline field on noodles_link_t, captured at open(), plus the handle's submitted count read right after the push) -- matches LINK-005's own already-documented contract, which the implementation had never actually followed. Rebuilt and redeployed the entire toolchain (library change) and reverified.
+
+**Flicker persisted -- threshold-tested to find the real cause.** After the LINK-007 fix, 64-sprite runs still flickered on roughly half of repeated attempts (flicker, clean, clean, flicker across 4 runs). Tested count=30 (clean, 1 run, 20fps=60/3Hz), count=50 (flickered, 1 run, 15fps=60/4Hz), and count=10 with the NEW pipelined+fixed code specifically (flickered on its very first run, 30fps=60/2Hz) -- ruling out "only happens at high count" as too simple an explanation, and the exact-60/N frame rates confirming rtl/present.sv's vblank-sync logic itself is working correctly (not just running slow), so the bug is not a "missed frame" but genuine visible corruption during otherwise-on-time frames.
+
+**Root cause identified (OUT-005): ascal's own internal buffering/clock domain, not our own RTL.** Re-read rtl/present.sv in full -- its front_sel-flip-on-fresh-FB_VBL-edge logic is correct in isolation. Root cause found by reading the vendored scaler directly (sys/ascal.vhd): ascal does NOT latch a new fb_base on FB_VBL (the signal present.sv watches) -- it latches avl_o_offset0/1 from o_fb_base only on the rising edge of avl_o_vs (~line 1714-1717), ascal's OWN internally-generated output vsync, synchronized into a SEPARATE Avalon memory clock domain (avl_clk) via a 2-stage synchronizer explicitly marked <ASYNC> in the source, plus its own internal double-buffering (o_obuf0/o_obuf1, ~line 1940-1967) governing when it actually re-fetches frame data. There is no guaranteed timing relationship between "present.sv flipped front_sel on a fresh FB_VBL edge" and "ascal actually started reading from the new address" -- when the phase relationship between FB_VBL and ascal's independent avl_o_vs/buffer state drifts unfavorably, the host can start drawing the next frame into a buffer ascal hasn't finished consuming, producing the observed ghosting. This is exactly the risk OUT-004's own decision text already flagged as accepted uncertainty ("not depending on undocumented assumptions about ascal's own prefetch timing") -- confirmed real and measurable, not just theoretical.
+
+#### Next Steps:
+
+No fix for OUT-005 is implemented. Two directions identified but not attempted, left for whoever continues this: (1) empirical mitigation -- have present.sv wait for multiple fresh FB_VBL edges (not just one) before considering a flip's prior frame retired, cheap to try, not root-cause-verified; (2) deeper study of ascal's configuration (RAMBASE/RAMSIZE/buffering-mode parameters passed to it in sys_top.v) to find an actually-guaranteed-safe relationship between FB_VBL and avl_o_vs, or a different signal to watch instead. Start from ascal.vhd's o_run/o_vsv/avl_o_vs signal chain, already located above, rather than re-deriving it. Empirically, draw workloads completing within ~1-2 vsync periods (~30 sprites at this project's 48x48 sprite size) have not shown the artifact in testing done so far; heavier workloads may, intermittently -- but sample sizes here are small (a handful of runs per count), not a rigorous characterization. The user is handing off this session to another agent at this point.
+
+#### Files Modified:
+
+- lib/noodles_link.c
+- lib/noodles_link.h
+- tools/stress_demo.c
+
+#### Status:
+
+- [x] Built
+- [ ] Passed (LINK-007's fix verified; OUT-005's underlying issue is NOT resolved)
+
+---
