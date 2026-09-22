@@ -481,3 +481,37 @@ LINK-001 through LINK-005 now form a complete, hardware-proven host-driven comma
 - [x] Passed
 
 ---
+
+## 15 COMMIT Unreleased 9c88aa7 2026-09-22T07:44:56-07:00
+
+#### Coming From:
+
+Unreleased 9b4f0a8
+
+#### Purpose:
+
+Retire the three OSD test buttons (Marker Test, Draw Test, Blit Copy Test) now that LINK-004/LINK-005 prove the real host-driven command path correct end to end, including completion signaling.
+
+#### Outcome:
+
+Deleted rtl/cmd_test_trigger.sv, rtl/ddram_marker_test.sv, tools/ddram_marker_check.c, and tools/ddram_marker_scan.c (the latter two existed only to verify ddram_marker_test's specific behavior; mem_scan.c already supersedes ddram_marker_scan's functionality). Noodles.sv's CMDQ command front end is back to a single real client (link_ring, no mux); the write-port mux dropped from 5-way to 4-way (blit_copy, link_ring, blit, link_fence). CONF_STR lost its three test-button entries. Test coverage was handled per-testbench rather than deleted wholesale: sim/cmd_trigger_dut.sv+tb_cmd_trigger.cpp and sim/marker_test_dut.sv+tb_marker_test.cpp were deleted outright since tb_solid_fill.cpp already covers CMDQ+BLIT without a trigger wrapper and nothing else tested ddram_marker_test specifically, but sim/cmd_copy_trigger_dut.sv+tb_cmd_copy_trigger.cpp were the ONLY coverage for CMDQ+blit_copy+ddram_adapter's read and write sides together -- a real, still-live path, since BLIT_COPY remains a real opcode LINK can dispatch -- so they were adapted rather than dropped: renamed to sim/engine_copy_dut.sv+tb_blit_copy.cpp, same coverage, cmd_valid/cmd_data driven directly by the testbench instead of through cmd_test_trigger. Documented as CMDQ-003 in core-reference.md, superseding CMDQ-002 (whose decision text named a module that no longer exists); OUT-003's surface parameters remain accurate and unchanged, only its "Draw Test" framing is now historical. Verified via make sim (5/5 testbenches), quartus_sh --flow compile Noodles (0 errors, 6,376 ALMs, down slightly from 6,383), and on real hardware: the OSD buttons are confirmed gone and link-push still works end to end (dispatch, fill, fence) on the cleaned-up core.
+
+#### Next Steps:
+
+The only item left from BLIT-001's original three-op milestone is the third op (hardware noise/static-fill, ported from the Menu core's procedural static generator) -- not started. LINK-001 through LINK-005 and this cleanup together mean the core's real, permanent shape is now what's actually in Noodles.sv, not a bring-up-era mix of real and scaffolding paths.
+
+#### Files Modified:
+
+- Noodles.sv
+- files.qip
+- Makefile
+- scripts/deploy.sh
+- sim/engine_copy_dut.sv
+- sim/tb_blit_copy.cpp
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
