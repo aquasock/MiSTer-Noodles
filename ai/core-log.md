@@ -280,3 +280,42 @@ None.
 - [x] Passed
 
 ---
+
+## 9 COMMIT Unreleased 3c7180d 2026-09-22T03:37:36-07:00
+
+#### Coming From:
+
+Unreleased 285b3cd
+
+#### Purpose:
+
+Implement LINK-001: a real host-driven ring buffer command path, replacing the OSD test triggers as CMDQ's real source.
+
+#### Outcome:
+
+Implemented rtl/link_ring.sv (LINK-002/LINK-003): a 64-slot ring in shared DDR3, polled only while CMDQ is idle so it never actually contends with blit_copy's reads, self-initializing write_ptr/read_ptr to 0/0 on reset since DRAM isn't cleared by an FPGA reset and stale content could otherwise be misread as a valid pointer -- a real bug this project's own testing caught partway through, not a hypothetical worry. Verified with a new Verilator testbench acting as the host (writing commands and write_ptr directly into a behavioral memory model, exactly as an ARM process would via /dev/mem) across 5 commands on a 4-slot ring, forcing a wraparound. That test caught a second real bug: rd_addr was only pinned to the polled header address while state==POLL_REQ, so once the requester moved to POLL_WAIT to await the response, the combinational address fell through to a stale slot-fetch address left over from the previous fetch, making the adapter's byte-half-select pick the wrong half of the response. Fixed by holding rd_addr across the REQ/WAIT pair together. Also found and fixed a latent dead-code bug in this test's own memory model (and cmd_copy_trigger's, same copy-paste origin): `words_[addr]` inserts a zero-valued entry via operator[] before a `find()==end()` check could ever see a missing key, so a "start from the fill pattern" branch never actually ran -- harmless where it was already used, but worth fixing before it hides something real. `make sim` passes all six testbenches now.
+
+Added tools/link_push.c: the first real host-driven command this project has ever issued, an ARM process writing a SOLID_FILL (cyan, distinct from the OSD "Draw Test" button's magenta) directly into shared DDR3 via /dev/mem, refusing to push if the ring is full. Wired link_ring into Noodles.sv as a third CMDQ command source and a second DDRAM read client alongside blit_copy, both muxes extended with the same tie-breaker-not-arbitration caveat as before. `quartus_sh --flow compile Noodles` completed with 0 errors, no timing violations. Deployed as Noodles_20260922b.rbf; not yet tested on hardware.
+
+#### Next Steps:
+
+Get hardware confirmation: load Noodles_20260922b.rbf, press "Draw Test" (magenta baseline), then run link-push on the MiSTer and confirm the surface turns cyan -- proof the ring buffer genuinely works end to end, not just in simulation. If it does, LINK-001 can be marked DECIDED-and-proven rather than DECIDED-on-paper, and the OSD test triggers become candidates for removal rather than permanent fixtures. BLIT-001's third op (hardware noise/static-fill) and a real host-side API/library (link_push.c is a one-shot diagnostic, not something a "game" would use) remain open.
+
+#### Files Modified:
+
+- Noodles.sv
+- rtl/link_ring.sv
+- sim/link_ring_dut.sv
+- sim/tb_link_ring.cpp
+- sim/tb_cmd_copy_trigger.cpp
+- tools/link_push.c
+- Makefile
+- files.qip
+- scripts/deploy.sh
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
