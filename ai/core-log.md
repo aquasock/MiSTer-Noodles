@@ -183,3 +183,32 @@ Load Noodles_20260921d.rbf, press "Draw Test," and confirm both that the disk LE
 - [ ] Passed
 
 ---
+
+## 6 COMMIT Unreleased 1c39477 2026-09-22T00:02:24-07:00
+
+#### Coming From:
+
+Unreleased 1c39477
+
+#### Purpose:
+
+Record hardware confirmation of entry 5's build: the engine's first real picture on screen.
+
+#### Outcome:
+
+The user loaded Noodles_20260921d.rbf and pressed "Draw Test." The whole screen filled solid magenta -- correct, not a bug: FB_WIDTH/FB_HEIGHT are only 64x64, so MiSTer's scaler upscales the buffer to fill the display, and since the entire buffer was filled one color, a full-screen result is exactly what a correctly working pipeline produces. This is the first pixel this engine has ever put on a real display: CMDQ decoded CMDQ-002's command, BLIT wrote all 4096 pixels through the DDR-001 adapter, and MISTER_FB (OUT-002/OUT-003) scanned it out correctly. tools/ddram_marker_check.c also reported PASS at physical 0x30000000, confirming SURF-004's corrected address end to end on real hardware, not just in the abstract.
+
+#### Next Steps:
+
+BLIT-001's milestone still calls for straight blit and hardware noise/static-fill, neither implemented yet -- solid-fill is the only proven operation. LINK-001's ring buffer remains the biggest architectural gap: CMDQ-002's hardcoded single command is still the only way anything reaches CMDQ. Worth considering next: a second, differently-positioned/colored fill to prove BLIT's address math beyond a buffer-filling rectangle, before moving on to straight blit or LINK.
+
+#### Files Modified:
+
+None.
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
