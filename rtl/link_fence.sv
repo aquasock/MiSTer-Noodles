@@ -58,6 +58,7 @@ module link_fence #(
     logic [31:0] published_count;
     logic [31:0] write_value;
     logic        initialized;
+    logic        front_value;
 
     wire pending = !initialized || (done_count != published_count);
 
@@ -65,7 +66,7 @@ module link_fence #(
     // Publish the actual scanout parity with the fence count so a host
     // process opened after a prior process/core session cannot assume A is
     // still front.
-    assign wr_data = {front_sel, write_value[30:0]};
+    assign wr_data = {front_value, write_value[30:0]};
     assign wr_en   = (state == WRITE_REQ);
 
     always_ff @(posedge clk or posedge reset) begin
@@ -75,8 +76,12 @@ module link_fence #(
             published_count <= '0;
             write_value     <= '0;
             initialized     <= 1'b0;
+            front_value     <= 1'b0;
         end else begin
-            if (done_pulse) done_count <= done_count + 32'd1;
+            if (done_pulse) begin
+                done_count  <= done_count + 32'd1;
+                front_value <= front_sel;
+            end
 
             unique case (state)
                 IDLE: begin

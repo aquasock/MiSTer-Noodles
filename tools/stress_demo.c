@@ -164,6 +164,9 @@ int main(int argc, char **argv) {
         free(converted);
         return 1;
     }
+    printf("startup fence=0x%08x, front parity=%u, back=0x%08x\n",
+           link.header[3], link.presents_completed,
+           noodles_link_back_buffer(&link));
 
     uint32_t sprite_pitch = sprite_w * 4;
     size_t sprite_bytes = (size_t)sprite_h * sprite_pitch;

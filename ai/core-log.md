@@ -1373,3 +1373,32 @@ Run the same overlap geometry with two and four sprites to determine whether the
 - [x] Built
 - [x] Deployed
 - [x] Passed
+## 43 COMMIT Unreleased fence-parity-latch 2026-09-22T14:35:37-07:00
+
+#### Coming From:
+
+Unreleased 4cc5a31
+
+#### Purpose:
+
+Make the published framebuffer parity correspond to the scanout state at command completion, rather than sampling the live front-select signal during a delayed fence-memory write.
+
+#### Outcome:
+
+Three ten-run batches of the fixed overlap diagnostic reproduced flicker on every odd-numbered process launch, for both eight sprites and two sprites. Startup instrumentation showed the fence completion count advancing while the published front-parity bit remained zero across launches. Updated `link_fence.sv` to latch `front_sel` whenever a command completion arrives and publish that latched value with the corresponding completion count. RTL simulation passed, host build passed, and full Quartus compilation completed with zero errors. The new RBF and diagnostic tool were deployed; hardware validation requires reloading the new RBF.
+
+#### Next Steps:
+
+Reload the deployed RBF, run consecutive short two-sprite overlap launches, and verify startup fence parity alternates with the actual front buffer. Then repeat the eight-sprite overlap test.
+
+#### Files Modified:
+
+- rtl/link_fence.sv
+- tools/stress_demo.c
+- ai/core-log.md
+
+#### Status:
+
+- [x] Built
+- [x] Deployed
+- [ ] Passed
