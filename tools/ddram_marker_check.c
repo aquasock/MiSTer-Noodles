@@ -1,7 +1,10 @@
-// Checks DDR-002's hypothesis: that a write the FPGA makes to DDRAM_ADDR=0
-// (via rtl/ddram_marker_test.sv, fired once from the "Marker Test" OSD
-// option) lands at Linux physical address 0x20000000 -- the start of the
+// Checks that a write the FPGA makes (via rtl/ddram_marker_test.sv, fired
+// once from the "Marker Test" OSD option, targeting DDRAM_ADDR=0x20000000/8)
+// lands at Linux physical address 0x20000000 -- the start of the
 // FPGA-reserved DDR3 window Main_MiSTer's own source uses (SURF-003).
+// DDR-002 already confirmed DDRAM_ADDR is a direct, unwindowed physical
+// word address; this just confirms the deployed build's marker target
+// wasn't fat-fingered back to 0x0.
 //
 // Usage, as root on the MiSTer, after pressing "Marker Test" in the OSD:
 //   ./ddram_marker_check
@@ -39,11 +42,11 @@ int main(void) {
     printf("phys 0x%08x: 0x%08x\n", FPGA_MEM_BASE, got);
     int ok = (got == MARKER_VALUE);
     if (ok) {
-        printf("PASS: marker found -- DDRAM_ADDR=0 is physical 0x%08x (DDR-002 confirmed)\n",
-               FPGA_MEM_BASE);
+        printf("PASS: marker found at physical 0x%08x, as expected\n", FPGA_MEM_BASE);
     } else {
         printf("NO MATCH (expected 0x%08x): either \"Marker Test\" wasn't pressed yet on the\n"
-               "loaded core, or DDR-002's address mapping is wrong.\n",
+               "loaded core, or the deployed build's marker target has drifted from\n"
+               "0x20000000 -- run ddram-marker-scan to find out where it actually went.\n",
                MARKER_VALUE);
     }
 
