@@ -85,6 +85,8 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 | Where does today's hardcoded test command come from? | CMDQ component records | CMDQ-002 |
 | What surface does the OSD's Draw Test actually display? | OUT component records | OUT-003 |
 | Is any address inside SURF-003's window actually unsafe? | SURF component records | SURF-004 |
+| What are BLIT_COPY's exact fields? | BLIT component records | BLIT-003 |
+| How does a read reach DDRAM_*? | DDR component records | DDR-003 |
 
 ---
 
@@ -106,6 +108,8 @@ DDR-002: "DDRAM_ADDR is a direct, unwindowed physical word address (word N = byt
 CMDQ-002: "'Draw Test' OSD button fires one hardcoded SOLID_FILL through CMDQ -- temporary stand-in for LINK's ring buffer"
 OUT-003: "Draw Test's surface: 64x64, 32bpp, pitch 256, base 0x30000000; FB_EN gated on the fill having completed at least once"
 SURF-004: "Physical 0x20000000 itself is unsafe -- MiSTer's own system video scaler uses it; 0x30000000 is the proven-safe address (per aquasock/MiSTer-Raster's hardware-learned fix)"
+BLIT-003: "BLIT_COPY (opcode 2) reuses dst_addr/pitch/width/height, adds src_addr (word 6) and src_pitch (word 7) where SOLID_FILL had reserved words"
+DDR-003: "Generic single-outstanding read port added to the DDRAM adapter (ddram_write_adapter.sv -> ddram_adapter.sv), muxed onto the shared physical bus alongside the write port"
 ```
 
 ---
@@ -247,6 +251,24 @@ SURF-004: "Physical 0x20000000 itself is unsafe -- MiSTer's own system video sca
   decided_date: 2026-09-21
   decision: "Physical byte address 0x20000000 -- the very start of SURF-003's [0x20000000,0x40000000) FPGA-reserved window, and this project's first choice of surface/marker address -- is not actually free for a core to use. It is MiSTer's own system video scaler's RAM base. This is not inferred: it is a direct, hardware-learned lesson from the aquasock/MiSTer-Raster project (a much more mature sibling MiSTer core, same author), whose commit 53f322905 ('Move H262 frame store out of scaler DDR region') states plainly: 'MiSTer's system video scaler uses physical DDR byte address 0x20000000 as its RAM base.' That project originally placed its own DDR3 picture store at word address 0x04000000 (= physical 0x20000000, the same value this project's SURF-003 treated as safe) and moved it to word address 0x06000000 (= physical 0x30000000) after hitting a real collision. Every subsequent hardware-accepted release of that project (through v0.9.5, per its changelog) has used 0x30000000+ without incident."
   consequence: "This project's marker test, Draw Test command, and FB_BASE were all originally pointed at 0x20000000 and have been moved to 0x30000000 as a result, before ever enabling FB_EN or displaying anything from that address (SURF-003's DECIDED status and its 'Core's fb' sub-window language are not wrong about Linux's own reservation, just incomplete about a second, FPGA-side consumer within it -- treat SURF-003 plus this record together, not SURF-003 alone, when picking an address). This is also a standing reminder to consult aquasock/MiSTer-Raster before re-deriving platform facts this project may already have hard-won answers for (recorded separately in this session's persistent memory, not in this file)."
+
+- record_id: BLIT-003
+  kind: INTERFACE
+  component_id: BLIT
+  title: "BLIT_COPY command semantics"
+  status: DECIDED
+  decided_date: 2026-09-22
+  decision: "Opcode 2 (BLIT_COPY), the second of BLIT-001's three milestone ops, copies a width x height rectangle from a source surface to a destination surface with no scaling, blending or format conversion, 4 bytes/pixel like SOLID_FILL. It reuses CMDQ-001's existing 32-byte slot without changing the layout: dst_addr/dst_pitch/width/height keep their SOLID_FILL positions (words 1-4), color (word 5) is unused for this opcode, and the two words CMDQ-001 called 'reserved, must be zero' become src_addr (word 6) and src_pitch (word 7) instead -- reserved words are zero only for opcodes that do not define them, not universally; CMDQ-001's slot positions are unchanged, only which opcodes assign meaning to which words grows. Implemented as a separate module, rtl/blit_copy.sv, dispatched by CMDQ alongside rtl/blit.sv (SOLID_FILL) rather than merging the two engines -- keeps the already-proven fill FSM untouched."
+  consequence: "BLIT_COPY needs a read port for the first time -- see DDR-003. Per-pixel it issues a read at src_addr+row*src_pitch+col*4, waits for that one word, then writes it to dst_addr+row*dst_pitch+col*4 before advancing; exactly one outstanding read at a time, never a second read issued before the first is consumed. Source and destination rectangles are not checked for overlap; an overlapping copy's result is whatever row-major read-then-write order produces, not a defined semantic."
+
+- record_id: DDR-003
+  kind: INTERFACE
+  component_id: DDR
+  title: "Generic read port, single-outstanding, added to the DDRAM adapter"
+  status: DECIDED
+  decided_date: 2026-09-22
+  decision: "rtl/ddram_write_adapter.sv is replaced by rtl/ddram_adapter.sv, which adds a generic read port (rd_addr/rd_en/rd_ready/rd_data/rd_valid) alongside the existing write port, muxed onto the one physical DDRAM_* bus (ADDR/BURSTCNT/RD/WE are shared fields -- only one of a read or a write request can be presented in a given cycle). Read protocol mirrors the write side's Avalon-MM shape: rd_en/rd_addr held stable until rd_ready is sampled (word_addr=byte_addr>>3, same as writes), then some cycles later rd_valid pulses once with rd_data holding the selected 32-bit half of the 64-bit DDRAM_DOUT word (addr[2] selects half, same convention as DDRAM_BE on writes). This is deliberately simpler than aquasock/MiSTer-Raster's DDR arbiter (mpeg2_h262_ddram_arbiter.sv), which tracks multiple concurrent outstanding reads per client with a descriptor queue tagging each response's owner -- this project has exactly one reader (BLIT-003's copy engine) with exactly one outstanding read at a time, so no response-ownership tracking is needed yet."
+  consequence: "If a second concurrent DDR3 reader is ever added (e.g. a future BLIT op needing two source reads in flight, or LINK's CMDQ polling running concurrently with an in-flight BLIT read), this single-outstanding assumption breaks and the descriptor-queue pattern from MiSTer-Raster's arbiter is the proven design to reuse rather than re-deriving response-ownership tracking from scratch. Read and write requests share one mux into the adapter; today's only clients (marker_test, blit's fill writes, blit_copy's read+write) never contend for it simultaneously by construction of their own FSMs, not because the adapter enforces it -- a future concurrent client would need real arbitration, not just another mux input."
 ```
 
 ---
