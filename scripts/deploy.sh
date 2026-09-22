@@ -5,7 +5,7 @@ set -e
 
 HOST="${1:-${MISTER_HOST:-mister.local}}"
 DEST="${DEST:-/media/fat/pet}"
-BINS="build/arm/link-push build/arm/link-slot-dump build/arm/mem-scan build/arm/blit-copy-push build/arm/solid-fill-push build/arm/blit-copy-key-push build/arm/bench build/arm/present-demo"
+BINS="build/arm/link-push build/arm/link-slot-dump build/arm/mem-scan build/arm/blit-copy-push build/arm/solid-fill-push build/arm/blit-copy-key-push build/arm/bench build/arm/present-demo build/arm/sprite-demo"
 
 for b in $BINS; do [ -f "$b" ] || { echo "missing $b -- run make first" >&2; exit 1; }; done
 
@@ -35,3 +35,7 @@ echo
 echo "prove OUT-004 double buffering: cycles through solid colors, filling the"
 echo "current back buffer and presenting -- should look clean, no tearing:"
 echo "  $DEST/present-demo [seconds_per_color]"
+echo
+echo "the real target: a sprite bouncing around the screen continuously,"
+echo "the full per-frame game-loop pattern (clear, composite, present):"
+echo "  $DEST/sprite-demo [seconds]"

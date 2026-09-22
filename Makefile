@@ -21,6 +21,7 @@ ARMFILLPUSH := build/arm/solid-fill-push
 ARMKEYPUSH  := build/arm/blit-copy-key-push
 ARMBENCH    := build/arm/bench
 ARMPRESENT  := build/arm/present-demo
+ARMSPRITE   := build/arm/sprite-demo
 HOSTLINK    := build/host/link-push
 HOSTSLOTDUMP:= build/host/link-slot-dump
 HOSTMEMSCAN := build/host/mem-scan
@@ -29,6 +30,7 @@ HOSTFILLPUSH:= build/host/solid-fill-push
 HOSTKEYPUSH := build/host/blit-copy-key-push
 HOSTBENCH   := build/host/bench
 HOSTPRESENT := build/host/present-demo
+HOSTSPRITE  := build/host/sprite-demo
 
 HOST    ?= mister.local
 DEST    ?= /media/fat/pet
@@ -45,7 +47,7 @@ PRESENT_SIM       := $(SIM_DIR)/present/Vpresent_dut
 
 .PHONY: all host deploy sim clean
 
-all: $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT)
+all: $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT) $(ARMSPRITE)
 
 sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(BLIT_COPY_SIM) $(LINK_RING_SIM) $(LINK_FENCE_SIM) $(PRESENT_SIM)
 	$(SOLID_FILL_SIM)
@@ -115,7 +117,10 @@ $(ARMBENCH): tools/bench.c lib/noodles_link.c lib/noodles_link.h | build/arm
 $(ARMPRESENT): tools/present_demo.c lib/noodles_link.c lib/noodles_link.h | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ tools/present_demo.c lib/noodles_link.c
 
-host: $(HOSTLINK) $(HOSTSLOTDUMP) $(HOSTMEMSCAN) $(HOSTCOPYPUSH) $(HOSTFILLPUSH) $(HOSTKEYPUSH) $(HOSTBENCH) $(HOSTPRESENT)
+$(ARMSPRITE): tools/sprite_demo.c lib/noodles_link.c lib/noodles_link.h | build/arm
+	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ tools/sprite_demo.c lib/noodles_link.c
+
+host: $(HOSTLINK) $(HOSTSLOTDUMP) $(HOSTMEMSCAN) $(HOSTCOPYPUSH) $(HOSTFILLPUSH) $(HOSTKEYPUSH) $(HOSTBENCH) $(HOSTPRESENT) $(HOSTSPRITE)
 
 $(HOSTLINK): tools/link_push.c lib/noodles_link.c lib/noodles_link.h | build/host
 	$(HOSTCC) $(CFLAGS) -o $@ tools/link_push.c lib/noodles_link.c
@@ -141,10 +146,13 @@ $(HOSTBENCH): tools/bench.c lib/noodles_link.c lib/noodles_link.h | build/host
 $(HOSTPRESENT): tools/present_demo.c lib/noodles_link.c lib/noodles_link.h | build/host
 	$(HOSTCC) $(CFLAGS) -o $@ tools/present_demo.c lib/noodles_link.c
 
+$(HOSTSPRITE): tools/sprite_demo.c lib/noodles_link.c lib/noodles_link.h | build/host
+	$(HOSTCC) $(CFLAGS) -o $@ tools/sprite_demo.c lib/noodles_link.c
+
 build/arm build/host:
 	mkdir -p $@
 
-deploy: $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT)
+deploy: $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT) $(ARMSPRITE)
 	scripts/deploy.sh $(HOST)
 
 clean:
