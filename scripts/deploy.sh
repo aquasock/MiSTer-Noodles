@@ -5,12 +5,14 @@ set -e
 
 HOST="${1:-${MISTER_HOST:-mister.local}}"
 DEST="${DEST:-/media/fat/pet}"
-BINS="build/arm/link-push build/arm/link-slot-dump build/arm/mem-scan build/arm/blit-copy-push build/arm/solid-fill-push build/arm/blit-copy-key-push build/arm/bench build/arm/present-demo build/arm/sprite-demo build/arm/load-bmp"
+BINS="build/arm/link-push build/arm/link-slot-dump build/arm/mem-scan build/arm/blit-copy-push build/arm/solid-fill-push build/arm/blit-copy-key-push build/arm/bench build/arm/present-demo build/arm/sprite-demo build/arm/load-bmp build/arm/stress-demo"
+ASSETS="assets/sprite.bmp"
 
 for b in $BINS; do [ -f "$b" ] || { echo "missing $b -- run make first" >&2; exit 1; }; done
 
-ssh "root@$HOST" "mkdir -p $DEST"
+ssh "root@$HOST" "mkdir -p $DEST/assets"
 scp $BINS "root@$HOST:$DEST/"
+scp $ASSETS "root@$HOST:$DEST/assets/"
 echo
 echo "after loading the Noodles core, push a real host-driven command into LINK's ring buffer:"
 echo "  $DEST/link-push"
@@ -43,3 +45,9 @@ echo
 echo "load a real 24-bit uncompressed BMP and display it (noodles_link_upload,"
 echo "mmap+memcpy straight into DDR3, no ring/BLIT engine involved):"
 echo "  $DEST/load-bmp <file.bmp> [x] [y]"
+echo
+echo "stress test: N independently-bouncing copies of a loaded sprite asset,"
+echo "composited every frame (default asset assets/sprite.bmp, a 48x48"
+echo "magenta-colorkeyed smiley):"
+echo "  $DEST/stress-demo [sprite.bmp] [count] [seconds]"
+echo "  e.g.: cd $DEST && ./stress-demo assets/sprite.bmp 10 15"
