@@ -4,7 +4,7 @@
 
 ## Purpose
 
-MiSTer-Pet is tamagochi style pet for the MiSTer FPGA.
+MiSTer-Noodles is tamagochi style pet for the MiSTer FPGA.
 
 ---
 
@@ -38,7 +38,7 @@ Read this core.md file first. Treat core.md is the primary project-level source 
 
 - The tar.gz archives stored in the "archived_logs" folder are not to be referenced unless approval from the user is given first.
 
-- Do not create branches if possible. Always work off of master unless otherwise instructed.
+- Do not create branches if possible. Always work off of main unless otherwise instructed.
 
 - The build enviroment consists of Quartus Prime v17.0.2 Lite, and a QMTech MiSTer.
 
