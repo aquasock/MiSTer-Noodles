@@ -42,6 +42,35 @@ Wire CMDQ and BLIT into Noodles.sv for real: design and implement the DDRAM writ
 
 ---
 
+## 39 COMMIT Unreleased 3746dc7 2026-09-22T13:30:00-07:00
+
+#### Coming From:
+
+Unreleased 005324e
+
+#### Purpose:
+
+Require an Avalon framebuffer-base latch after the output boundary before declaring scanout retirement.
+
+#### Outcome:
+
+`FB_RETIRED` now requires the output-domain boundary, the subsequent Avalon-domain `o_fb_base` latch, and a zero outstanding-read count with the Avalon reader idle. This closes the phase where the output boundary could be acknowledged before the new base was accepted by the memory reader. Simulation and Quartus validation pass; hardware validation is pending.
+
+#### Next Steps:
+
+Deploy the new RBF and repeat the 64-sprite workload while watching for incomplete scanout frames; if the artifact remains, the remaining fault is likely internal ascal buffer ownership rather than framebuffer-base acceptance.
+
+#### Files Modified:
+
+- sys/ascal.vhd
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
+
 ## 38 COMMIT Unreleased 3fa589a 2026-09-22T13:22:00-07:00
 
 #### Coming From:
