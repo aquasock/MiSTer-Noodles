@@ -74,7 +74,7 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 | How does the host tell the FPGA what to draw? | LINK component records | LINK-001 |
 | How does the picture get to the screen? | OUT component records | OUT-001 |
 | Where do pixel buffers live and how are they addressed? | SURF component records | SURF-001 |
-| What can the engine actually draw right now? | BLIT component records | BLIT-001 |
+| What can the engine actually draw right now? | BLIT component records | BLIT-005 |
 | What physical memory does a surface actually live in? | SURF component records | SURF-002 |
 | How does a surface actually reach the screen? | OUT component records | OUT-002 |
 | What does a command slot look like on the wire? | CMDQ component records | CMDQ-001 |
@@ -92,6 +92,7 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 | How does CMDQ actually find and fetch a queued command? | LINK component records | LINK-003 |
 | Why does a shared read port need a "who's mid-request" signal, not just rd_en? | DDR/LINK component records | DDR-005 |
 | How do I pack an R,G,B color into SOLID_FILL's color field? | BLIT component records | BLIT-004 |
+| Why doesn't the engine have a third (noise-fill) op? | BLIT component records | BLIT-005 |
 | What's the real host-side API for pushing commands, and does it tell me when a draw finished? | LINK component records | LINK-004 |
 | How does the host know a specific command has actually finished, not just been dispatched? | LINK component records | LINK-005 |
 
@@ -104,7 +105,7 @@ CORE-001: "2D engine and demo are a standalone, independent MiSTer core"
 LINK-001: "Host-to-FPGA communication is DMA'd shared-memory command lists, not per-operation registers"
 OUT-001: "CORE generates its own video timing and drives HDMI/VGA directly, like a normal MiSTer core"
 SURF-001: "Surfaces live in SDRAM, addressed by raw byte address + pitch, no handle table in v1"
-BLIT-001: "First milestone op set: solid-fill, straight blit, hardware static/noise-fill"
+BLIT-001: "SUPERSEDED by BLIT-005 -- third op (Menu-static noise-fill) dropped, not built"
 SURF-002: "Surfaces live in the HPS-shared DDR3 (DDRAM_*), not the dedicated low-latency SDRAM_* chip"
 OUT-002: "Display output uses the template's built-in MISTER_FB DDRAM framebuffer scan-out, not a custom timing generator"
 CMDQ-001: "v1 command slot is a fixed 32-byte / 256-bit record, plain uint32 fields, no bit-packing"
@@ -121,6 +122,7 @@ DDR-003: "Generic single-outstanding read port added to the DDRAM adapter (ddram
 DDR-004: "DDRAM_* (ram1) is a separate physical F2H SDRAM port from MISTER_FB's own vbuf scan-out port and ram2's audio/palette port -- no Avalon-level contention"
 DDR-005: "A shared read-port mux must select on a REQ+WAIT-spanning signal (link_ring's new rd_active), not a requester's own rd_en, or it silently hands a pending response's byte-half-select to the wrong (idle) client -- found via a link-pushed dst_addr reading back as opcode's own value"
 BLIT-004: "SOLID_FILL's color field is packed R | (G<<8) | (B<<16) -- R in the LOW byte -- matching FB_FORMAT's RGB memory order, not the 0xRRGGBB hex-literal reading"
+BLIT-005: "BLIT-001's milestone met with 2 ops (SOLID_FILL, BLIT_COPY) -- the Menu-static noise-fill op dropped after abandoning the menu-integration concept, not deferred"
 LINK-002: "64-slot ring buffer at phys 0x30020000 (header: write_ptr +0, read_ptr +8) / 0x30021000 (slots), reusing CMDQ-001's 32-byte slot format"
 LINK-003: "link_ring.sv polls write_ptr only while CMDQ is idle (cmd_ready), fetches via 8 sequential reads, dispatches to CMDQ, writes back read_ptr"
 LINK-004: "lib/noodles_link.{h,c} is the real host-side API (open/close, noodles_rgb, push_command/solid_fill/blit_copy) -- fire-and-forget, no completion signal by deliberate choice"
@@ -172,7 +174,7 @@ LINK-005: "rtl/link_fence.sv publishes a monotonic done-count to DRAM (HEADER_AD
   kind: ARCHITECTURE
   component_id: BLIT
   title: "First milestone op set"
-  status: DECIDED
+  status: SUPERSEDED
   decided_date: 2026-09-21
   decision: "The first hardware-proof milestone implements exactly three BLIT operations: (1) solid-fill -- fill a destination rect in a surface with a constant color, (2) straight blit -- copy a source rect from one surface to a destination rect in another surface with no scaling or blending, (3) noise/static-fill -- fill a destination rect with the pet's procedural static pattern directly in hardware, ported from the same generator logic as the Menu core's static. No color-key, alpha blend, or scaling operations are in this milestone."
   consequence: "This scope directly targets the proven CPU bottleneck (full-1080p animated static could not hold frame rate in software -- 12 fps measured at 1920x1080, per README) as the milestone's proof point, while keeping the first CMDQ/BLIT implementation to the smallest op set that can show a hardware win. Color-key, alpha blending, and scaled blit are explicitly deferred to a later milestone and need their own records when scoped."
@@ -294,6 +296,18 @@ LINK-005: "rtl/link_fence.sv publishes a monotonic done-count to DRAM (HEADER_AD
   decided_date: 2026-09-22
   decision: "BLIT-002 already establishes that `color` is written verbatim as raw pixel bytes with no format conversion. This record pins down what byte order those raw bytes need to be in to actually display as the intended color, given this project's FB_FORMAT=5'b00110 (32bpp, bit[4]=0=RGB per emu_ports.vh). Per emu_ports.vh's own [4]=0=RGB/1=BGR comment, the pixel's bytes in ascending memory-address order are R, G, B, (unused). Since DDRAM_DIN/DDRAM_DOUT and every uint32_t on the ARM host side are little-endian, a 32-bit `color` value's LOWEST byte (bits [7:0]) lands at the LOWEST memory address -- i.e. bits[7:0]=R, bits[15:8]=G, bits[23:16]=B, bits[31:24]=unused. This is the reverse of the 'obvious' 0x00RRGGBB hex-literal reading most people reach for first. Found on real hardware: tools/link_push.c's SOLID_FILL used color=0x0000FFFF intending cyan (R=0,G=255,B=255) and instead displayed yellow (R=255,G=255,B=0) -- exactly what 0x0000FFFF produces under this byte order (low byte 0xFF=R, next byte 0xFF=G, next byte 0x00=B). The OSD 'Draw Test' button's magenta (0x00FF00FF, BLIT-001's original test command) never exposed this because R=0xFF,G=0x00,B=0xFF is palindromic under an R/B swap -- it looks correct under either byte-order assumption, which is why the bug went unnoticed until a non-palindromic color (cyan) was tried."
   consequence: "Any host-side code choosing a `color` value must construct it as `R | (G<<8) | (B<<16)`, not the naive `(R<<16) | (G<<8) | B` a 0xRRGGBB hex literal implies. tools/link_push.c's cyan constant is corrected to 0x00FFFF00 accordingly. This only applies while FB_FORMAT keeps bit[4]=0 (RGB) and bit[2:0]=3'b110 (32bpp) as OUT-002 set them; if a future record changes either, this byte-order mapping must be re-derived, not assumed to carry over. No record yet defines a host-side color-packing helper -- until one exists, every caller must independently apply this byte order or repeat this same mistake."
+
+- record_id: BLIT-005
+  kind: ARCHITECTURE
+  component_id: BLIT
+  title: "BLIT-001's milestone is met with two ops -- the third (Menu-static noise-fill) is dropped, not deferred"
+  status: DECIDED
+  decided_date: 2026-09-22
+  supersedes: "BLIT-001"
+  decision: "The project has abandoned the Menu-integration concept this repository originally started from (a pet character composited over the Menu core's own static via a Linux-framebuffer overlay -- see CORE-001's consequence and the now-removed src/spike_fb.c). MiSTer-Noodles is a standalone core with no relationship to the Menu core's video or the Linux framebuffer path. BLIT-001's third milestone op -- noise/static-fill 'ported from the same generator logic as the Menu core's static' -- was scoped specifically to prove hardware could beat a measured software bottleneck from THAT abandoned concept (redrawing Menu's static in the Linux framebuffer at 1080p measured 12fps on the Cortex-A9, per the old README). With the menu-integration goal gone, that bottleneck no longer describes anything this project does, and porting Menu's specific static algorithm (its exact LFSR/cosine-table bit-twiddling) buys nothing this project needs. BLIT-001's milestone is therefore considered met with its first two ops -- SOLID_FILL (BLIT-002) and BLIT_COPY (BLIT-003) -- both proven end to end on real hardware over the real LINK path (LINK-004/LINK-005), not just simulation or the retired OSD buttons (CMDQ-003)."
+  consequence: "No third BLIT op exists or is planned as a direct continuation of BLIT-001. A future procedural-fill op (e.g. a simple LFSR-based noise pattern, for demonstrating 'hardware generates content, not just copies it') is not ruled out, but would need its own record scoped to an actual current need, not inherited scope from the abandoned Menu-integration concept -- Menu-algorithm fidelity specifically is no longer a requirement for anything. src/spike_fb.c, src/fbterm_toggle.c, docs/mister-framebuffer.md, install/user-startup.sh.example, scripts/stage.sh, and scripts/hw-test.sh -- all built around that abandoned Linux-framebuffer-overlay approach -- are removed from the repository, not just architecturally superseded as CORE-001/OUT-001 already noted; README.md is rewritten to describe the actual current project."
+
+- record_id: DDR-003
   kind: INTERFACE
   component_id: DDR
   title: "Generic read port, single-outstanding, added to the DDRAM adapter"
