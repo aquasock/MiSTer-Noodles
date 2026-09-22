@@ -41,6 +41,8 @@ int noodles_link_open(noodles_link_t *link) {
     link->slots =
         (volatile uint32_t *)((char *)link->map + (NOODLES_SLOT_BASE_ADDR - NOODLES_HEADER_ADDR));
     link->write_ptr = link->header[0];  // sync with whatever is already published
+    link->done_baseline = link->header[3];  // LINK-005's fence value at open time -- see
+                                             // noodles_present_and_wait()'s use of it
 
     return 0;
 }
@@ -104,14 +106,27 @@ uint32_t noodles_link_done_count(const noodles_link_t *link) {
 
 int noodles_present_and_wait(noodles_link_t *link) {
     const uint32_t command[8] = {NOODLES_OP_PRESENT, 0, 0, 0, 0, 0, 0, 0};
-    uint32_t done_before = noodles_link_done_count(link);
     if (noodles_push_command(link, command) != 0) return -1;  // ring full
+    // This PRESENT's own position in the fence's GLOBAL numbering, not just
+    // this handle's local submitted count -- done_count() never resets
+    // except on a real core load, so it can already be well past any small
+    // per-handle submitted value from a prior process's session. done_baseline
+    // (captured at open()) converts link->submitted into the same absolute
+    // space done_count() lives in. Comparing against a fixed target here
+    // (rather than "done_count() advanced by any amount since a pre-push
+    // sample", what this used to do) matters once other commands can be
+    // in flight ahead of a present -- LINK-006's stress_demo.c pipelines
+    // draws instead of fence-waiting each one, so an ordinary blit's
+    // completion could otherwise satisfy a bare "advanced" check and report
+    // the flip done before it actually happened, with the host then
+    // drawing into the buffer still being scanned out live.
+    uint32_t target = link->done_baseline + link->submitted;
 
     // Vblank-synced on the FPGA side (present.sv), so this can legitimately
     // take up to roughly one frame -- poll rather than a single short wait.
     struct timespec delay = {.tv_sec = 0, .tv_nsec = 1000000};  // 1ms
     for (int i = 0; i < 200; ++i) {
-        if (noodles_link_done_count(link) > done_before) {
+        if (noodles_link_done_count(link) >= target) {
             link->presents_completed += 1;
             return 0;
         }

@@ -47,6 +47,9 @@ typedef struct {
     uint32_t write_ptr;         // host's own tracked copy; the FPGA never writes this field
     uint32_t submitted;         // count of commands pushed through THIS handle since open()
     uint32_t presents_completed;  // count of PRESENT flips CONFIRMED done (OUT-004)
+    uint32_t done_baseline;     // LINK-005 fence value at open() time; done_baseline + submitted
+                                 // converts a per-handle submitted count into the fence's own
+                                 // absolute numbering -- see noodles_present_and_wait()
 } noodles_link_t;
 
 // Opens /dev/mem and maps LINK-002's header+slot region. Returns 0 on

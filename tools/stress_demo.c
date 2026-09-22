@@ -1,15 +1,26 @@
 // Stress test: N independently-bouncing copies of a single loaded sprite
 // asset, all composited into the same frame, continuously. sprite_demo.c
 // proved one sprite driven as a real game loop; this multiplies the
-// per-frame command count (background clear + N colorkey blits + present,
-// all fence-waited in sequence like every other demo here) to find out
-// whether the ring buffer, the completion fence, and present's vblank sync
-// hold up under sustained multi-sprite load, not just a single sprite.
+// per-frame command count (background clear + N colorkey blits + present)
+// to find out whether the ring buffer, the completion fence, and present's
+// vblank sync hold up under sustained multi-sprite load, not just a single
+// sprite.
 //
 // The sprite art itself is real decoded pixel data (LINK-006), loaded once
 // via noodles_bmp_load()/noodles_link_upload() -- not built from SOLID_FILLs
 // like sprite_demo.c's sprite was. Default asset is assets/sprite.bmp (a
 // 48x48 magenta-colorkeyed smiley), overridable via argv.
+//
+// Commands are PIPELINED, not fence-waited one at a time: LINK-003's
+// dispatch already processes the ring strictly in FIFO order, so there is
+// no correctness reason to wait for a blit to finish before pushing the
+// next one -- only LINK-002's 63-outstanding-command ring capacity forces
+// a wait, and only once the ring is actually full. An earlier version
+// fence-waited after every single push (1 + count + 1 waits per frame);
+// at count=64 that serialized 66 host-side round trips per frame and
+// measured 10fps, stable but far below what the hardware itself can do.
+// Pushing without waiting and only blocking on an actual ring-full is
+// the fix -- see core-log.md for the before/after numbers.
 //
 // Usage, as root on the MiSTer:
 //   ./stress_demo [sprite.bmp] [count] [seconds]
@@ -42,13 +53,49 @@ static double now_s(void) {
     return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
 
-static int wait_fence(noodles_link_t *link, uint32_t done_before, const char *what) {
-    struct timespec delay = {.tv_sec = 0, .tv_nsec = 500000};  // 0.5ms
-    for (int i = 0; i < 4000; ++i) {
-        if (noodles_link_done_count(link) > done_before) return 0;
+// Retries a push until the ring has room (returns 0) or 2s pass with no
+// progress (returns 1, meaning something is actually stuck, not just busy).
+#define PUSH_RETRY_ITERS 20000
+#define PUSH_RETRY_DELAY_NS 100000  // 0.1ms
+
+static int push_fill_retry(noodles_link_t *link, uint32_t dst, uint16_t pitch, uint16_t w,
+                            uint16_t h, uint32_t color) {
+    struct timespec delay = {.tv_sec = 0, .tv_nsec = PUSH_RETRY_DELAY_NS};
+    for (int i = 0; i < PUSH_RETRY_ITERS; ++i) {
+        if (noodles_push_solid_fill(link, dst, pitch, w, h, color) == 0) return 0;
         nanosleep(&delay, NULL);
     }
-    fprintf(stderr, "%s: fence never caught up\n", what);
+    return 1;
+}
+
+static int push_key_retry(noodles_link_t *link, uint32_t dst, uint16_t dst_pitch, uint32_t src,
+                           uint16_t src_pitch, uint16_t w, uint16_t h, uint32_t colorkey) {
+    struct timespec delay = {.tv_sec = 0, .tv_nsec = PUSH_RETRY_DELAY_NS};
+    for (int i = 0; i < PUSH_RETRY_ITERS; ++i) {
+        if (noodles_push_blit_copy_key(link, dst, dst_pitch, src, src_pitch, w, h, colorkey) == 0)
+            return 0;
+        nanosleep(&delay, NULL);
+    }
+    return 1;
+}
+
+// noodles_present_and_wait() returns -1 on ring-full (LINK-004's documented,
+// non-retrying contract) -- with this file's own commands pipelined ahead
+// of it, the ring can genuinely still be full of undrained draws at the
+// moment PRESENT is pushed, so -1 here means "try again shortly", not
+// failure. A 1 return (pushed fine, fence never caught up) is a real
+// problem and stays fatal.
+static int present_retry(noodles_link_t *link) {
+    struct timespec delay = {.tv_sec = 0, .tv_nsec = PUSH_RETRY_DELAY_NS};
+    for (int i = 0; i < PUSH_RETRY_ITERS; ++i) {
+        int rc = noodles_present_and_wait(link);
+        if (rc == 0) return 0;
+        if (rc == -1) {
+            nanosleep(&delay, NULL);
+            continue;
+        }
+        return 1;
+    }
     return 1;
 }
 
@@ -115,37 +162,26 @@ int main(int argc, char **argv) {
     while (now_s() - t_start < run_seconds) {
         uint32_t back = noodles_link_back_buffer(&link);
 
-        uint32_t done_before = noodles_link_done_count(&link);
-        if (noodles_push_solid_fill(&link, back, NOODLES_BUFFER_PITCH, NOODLES_BUFFER_WIDTH,
-                                     NOODLES_BUFFER_HEIGHT, background) != 0) {
-            fprintf(stderr, "frame %ld: ring full clearing background\n", frame);
-            failed = 1;
-            break;
-        }
-        if (wait_fence(&link, done_before, "background clear")) {
+        if (push_fill_retry(&link, back, NOODLES_BUFFER_PITCH, NOODLES_BUFFER_WIDTH,
+                             NOODLES_BUFFER_HEIGHT, background)) {
+            fprintf(stderr, "frame %ld: ring stuck clearing background\n", frame);
             failed = 1;
             break;
         }
 
         for (int i = 0; i < count; ++i) {
-            done_before = noodles_link_done_count(&link);
             uint32_t dst = back + (uint32_t)sprites[i].y * NOODLES_BUFFER_PITCH +
                             (uint32_t)sprites[i].x * 4;
-            if (noodles_push_blit_copy_key(&link, dst, NOODLES_BUFFER_PITCH, SPRITE_SRC_ADDR,
-                                            sprite_pitch, (uint16_t)sprite_w, (uint16_t)sprite_h,
-                                            colorkey) != 0) {
-                fprintf(stderr, "frame %ld: ring full compositing sprite %d\n", frame, i);
-                failed = 1;
-                break;
-            }
-            if (wait_fence(&link, done_before, "sprite composite")) {
+            if (push_key_retry(&link, dst, NOODLES_BUFFER_PITCH, SPRITE_SRC_ADDR, sprite_pitch,
+                                (uint16_t)sprite_w, (uint16_t)sprite_h, colorkey)) {
+                fprintf(stderr, "frame %ld: ring stuck compositing sprite %d\n", frame, i);
                 failed = 1;
                 break;
             }
         }
         if (failed) break;
 
-        if (noodles_present_and_wait(&link) != 0) {
+        if (present_retry(&link)) {
             fprintf(stderr, "frame %ld: present failed\n", frame);
             failed = 1;
             break;
