@@ -26,8 +26,8 @@
 // BLIT-006), or present (PRESENT, OUT-004's double-buffer flip). BLIT/
 // blit_copy drive the real DDRAM_* pins via ddram_adapter (DDR-001/DDR-003);
 // present touches no DDRAM_* at all, it only flips which of two fixed
-// surfaces FB_BASE points at, synced to the framework's vertical blank so
-// the flip never happens mid-scan-out. LINK-005's completion fence
+// surfaces FB_BASE points at, synced to the framework's vertical blank and
+// completed when ascal acknowledges latching the new base. LINK-005's fence
 // (rtl/link_fence.sv) publishes a done-count back to DRAM so the host can
 // tell when a specific command -- a draw OR a present -- actually finished,
 // not just got dispatched.
@@ -52,7 +52,7 @@
 // releases have used safely since. Nothing here should ever target an
 // address outside that without a new record explaining why it's safe.
 //
-// See OUT-001/OUT-002/OUT-004, SURF-001/SURF-002/SURF-003/SURF-004,
+// See OUT-001/OUT-002/OUT-004/OUT-005, SURF-001/SURF-002/SURF-003/SURF-004,
 // BLIT-002/BLIT-003/BLIT-006, LINK-001 through LINK-005, and DDR-001
 // through DDR-005.
 
@@ -217,6 +217,7 @@ present present
 	.clk       (clk_sys),
 	.reset     (reset),
 	.fb_vbl    (FB_VBL),
+	.fb_base_latched(FB_BASE_LATCHED),
 	.start     (present_start),
 	.busy      (present_busy),
 	.done      (present_done),

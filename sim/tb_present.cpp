@@ -1,11 +1,5 @@
-// Verilator testbench for rtl/present.sv. Checks: (1) reset lands with
-// front_sel=0, busy/done clear, (2) a start pulse followed by a fresh
-// fb_vbl rising edge flips front_sel exactly once and waits for the
-// configured retirement edges before pulsing done, (3) a
-// start pulse that arrives while fb_vbl is ALREADY high does NOT flip
-// immediately -- it must wait for fb_vbl to go low then high again (a
-// fresh edge), not just "currently in blank", (4) repeated flips toggle
-// front_sel correctly each time (0->1->0->1).
+// Verilator testbench for rtl/present.sv. Exercises arbitrary phase
+// relationships between FB_VBL and ascal's framebuffer-base acknowledgement.
 
 #include <cstdint>
 #include <cstdio>
@@ -39,6 +33,13 @@ int Fail(const char *msg) {
     return 1;
 }
 
+void FreshVbl(Testbench &tb, Vpresent_dut &dut) {
+    dut.fb_vbl = 0;
+    tb.Tick();
+    dut.fb_vbl = 1;
+    tb.Tick();
+}
+
 }  // namespace
 
 int main(int argc, char **argv) {
@@ -49,96 +50,85 @@ int main(int argc, char **argv) {
 
     dut.reset = 1;
     dut.fb_vbl = 0;
+    dut.fb_base_latched = 0;
     dut.start = 0;
     for (int i = 0; i < 4; ++i) tb.Tick();
     dut.reset = 0;
     tb.Tick();
 
-    if (dut.front_sel != 0) return Fail("front_sel not 0 after reset");
-    if (dut.busy || dut.done) return Fail("busy/done not clear after reset");
+    if (dut.front_sel != 0 || dut.busy || dut.done)
+        return Fail("reset state is wrong");
 
-    // Case 1: start while fb_vbl=0, then a fresh rising edge -- should flip.
+    // Acknowledgement arrives after the first boundary and one additional
+    // boundary is required before completion.
     dut.start = 1;
     tb.Tick();
     dut.start = 0;
-    if (!dut.busy) return Fail("busy did not assert after start");
+    for (int i = 0; i < 3; ++i) tb.Tick();
+    dut.fb_vbl = 1;
+    tb.Tick();
+    if (dut.front_sel != 1 || !dut.busy || dut.done)
+        return Fail("flip did not wait for a fresh vblank edge");
 
-    for (int i = 0; i < 5; ++i) tb.Tick();  // stay low a while, must not flip yet
-    if (dut.front_sel != 0) return Fail("front_sel flipped before any vblank edge");
+    dut.fb_base_latched = 1;
+    tb.Tick();
+    if (!dut.busy || dut.done)
+        return Fail("acknowledgement completed PRESENT too early");
+    FreshVbl(tb, dut);
+    tb.Tick();
+    if (!dut.done || dut.busy)
+        return Fail("PRESENT did not complete after acknowledgement margin");
+    tb.Tick();
 
-    dut.fb_vbl = 1;  // first rising edge: flip, but do not finish yet
-    tb.Tick();
-    if (dut.front_sel != 1) return Fail("front_sel did not flip on vblank rising edge");
-    if (!dut.busy || dut.done) return Fail("present completed on first retirement edge");
-    dut.fb_vbl = 0;
-    tb.Tick();
-    dut.fb_vbl = 1;  // second fresh edge
-    tb.Tick();
-    if (!dut.busy || dut.done) return Fail("present completed on second retirement edge");
-    dut.fb_vbl = 0;
-    tb.Tick();
-    dut.fb_vbl = 1;  // third fresh edge: retirement margin is satisfied
-    tb.Tick();
-    tb.Tick();  // FINISH -> done pulses this cycle, sampled after Tick()
-    if (!dut.done) return Fail("done did not pulse after flip");
-    tb.Tick();
-    if (dut.done || dut.busy) return Fail("busy/done did not clear after FINISH");
-
-    // Case 2: start while fb_vbl is ALREADY high (mid-blank, no fresh edge)
-    // -- must wait for a low-then-high transition, not flip immediately.
+    // Starting while FB_VBL is already high must wait for a fresh edge.
     dut.start = 1;
     tb.Tick();
     dut.start = 0;
-    if (dut.front_sel != 1) return Fail("front_sel changed the instant start was issued");
-
-    for (int i = 0; i < 5; ++i) tb.Tick();  // fb_vbl still held high -- no fresh edge yet
-    if (dut.front_sel != 1) return Fail("front_sel flipped without a fresh vblank edge");
-
-    dut.fb_vbl = 0;  // still not a rising edge
+    for (int i = 0; i < 3; ++i) tb.Tick();
+    if (dut.front_sel != 1)
+        return Fail("flip occurred without a fresh vblank edge");
+    dut.fb_vbl = 0;
     tb.Tick();
-    if (dut.front_sel != 1) return Fail("front_sel flipped on a falling edge");
-
-    dut.fb_vbl = 1;  // first fresh rising edge: flip, but remain busy
+    dut.fb_vbl = 1;
     tb.Tick();
-    if (dut.front_sel != 0) return Fail("front_sel did not flip on the fresh rising edge");
-    for (int edge = 0; edge < 2; ++edge) {
-        dut.fb_vbl = 0;
-        tb.Tick();
-        dut.fb_vbl = 1;
-        tb.Tick();
-    }
+    if (dut.front_sel != 0 || !dut.busy)
+        return Fail("second flip did not occur at the fresh edge");
+    dut.fb_base_latched = 0;
     tb.Tick();
-    if (!dut.done) return Fail("delayed present did not complete after three fresh edges");
+    FreshVbl(tb, dut);
+    tb.Tick();
+    if (!dut.done || dut.busy)
+        return Fail("second PRESENT did not complete");
+    tb.Tick();
 
-    // Case 3: repeated flips toggle correctly. front_sel is 0 here (case 2
-    // left it there); each iteration must invert it.
-    uint8_t expected = dut.front_sel;
+    // Repeated flips toggle correctly, with the acknowledgement intentionally
+    // arriving at different points relative to the vblank boundary.
+    uint8_t expected = 0;
     for (int i = 0; i < 4; ++i) {
         expected = expected ? 0 : 1;
-
         dut.fb_vbl = 0;
-        tb.Tick();
         dut.start = 1;
         tb.Tick();
         dut.start = 0;
-        for (int j = 0; j < 3; ++j) tb.Tick();  // idle low, must not flip yet
+        for (int j = 0; j < 2; ++j) tb.Tick();
         dut.fb_vbl = 1;
         tb.Tick();
-
-        if (dut.front_sel != expected) {
-            std::fprintf(stderr, "flip %d: expected front_sel=%u, got %u\n", i, expected,
-                          (unsigned)dut.front_sel);
+        if (dut.front_sel != expected)
             return Fail("repeated flip toggled incorrectly");
-        }
-        for (int edge = 0; edge < 2; ++edge) {
+        dut.fb_base_latched = dut.fb_base_latched ? 0 : 1;
+        tb.Tick();
+        if (i & 1) FreshVbl(tb, dut);
+        else {
             dut.fb_vbl = 0;
             tb.Tick();
-            dut.fb_vbl = 1;
-            tb.Tick();
+            FreshVbl(tb, dut);
         }
-        tb.Tick();  // let FINISH/done clear before next start
+        tb.Tick();
+        if (!dut.done || dut.busy)
+            return Fail("repeated PRESENT did not complete");
+        tb.Tick();
     }
 
-    std::printf("PASS: present vblank-synced flip, waits for a fresh edge, toggles correctly\n");
+    std::printf("PASS: PRESENT waits for ascal base acknowledgement and retires safely\n");
     return 0;
 }

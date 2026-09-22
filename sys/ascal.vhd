@@ -252,6 +252,9 @@ ENTITY ascal IS
 		avl_read           : OUT   std_logic;
 		avl_byteenable     : OUT   std_logic_vector(N_DW/8-1 DOWNTO 0);
 
+		-- Toggles when the Avalon-domain reader latches o_fb_base.
+		o_fb_base_latched  : OUT   std_logic := '0';
+
 		------------------------------------
 		reset_na           : IN    std_logic
 		);
@@ -1153,7 +1156,11 @@ ARCHITECTURE rtl OF ascal IS
 
 		RETURN v;
 	END FUNCTION;
+
+	SIGNAL fb_base_latched_toggle : std_logic := '0';
 BEGIN
+
+	o_fb_base_latched <= fb_base_latched_toggle;
 
 	-----------------------------------------------------------------------------
 	i_reset_na<='0'   WHEN reset_na='0' ELSE '1' WHEN rising_edge(i_clk);
@@ -1679,6 +1686,7 @@ BEGIN
 			avl_read_sr<='0';
 			avl_readdataack<='0';
 			avl_readack<='0';
+			fb_base_latched_toggle<='0';
 
 		ELSIF rising_edge(avl_clk) THEN
 			----------------------------------
@@ -1715,6 +1723,7 @@ BEGIN
 				-- Copy framebuffer base address at VS falling edge
 				avl_o_offset0<=o_fb_base; -- <ASYNC>
 				avl_o_offset1<=o_fb_base; -- <ASYNC>
+				fb_base_latched_toggle<=NOT fb_base_latched_toggle;
 			END IF;
 
 			avl_i_offset0<=buf_offset(o_ibuf0,RAMBASE,RAMSIZE);  -- <ASYNC>
