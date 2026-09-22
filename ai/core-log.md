@@ -212,3 +212,42 @@ None.
 - [x] Passed
 
 ---
+
+## 7 COMMIT Unreleased 285b3cd 2026-09-22T00:21:22-07:00
+
+#### Coming From:
+
+Unreleased 1c39477
+
+#### Purpose:
+
+Implement BLIT_COPY (BLIT-001's straight-blit op) end to end and check MiSTer-Raster again before building the read path.
+
+#### Outcome:
+
+Before writing any RTL, checked aquasock/MiSTer-Raster on two questions: whether its DDR arbiter had a reusable pattern for adding DDR3 reads (yes -- a descriptor queue tagging outstanding reads by owner, useful once this project has more than one concurrent reader, though not needed yet since BLIT_COPY only ever has one outstanding read), and whether it had already solved LINK's host-command-delivery problem (no -- its host channel is the standard MiSTer mounted-file sector-read protocol, built for streaming a big file in, not for a live process pushing small draw commands; doesn't change LINK's plan). Implemented rtl/blit_copy.sv (BLIT-003) as a separate module from the proven rtl/blit.sv fill engine, reusing CMDQ-001's slot layout by giving meaning to the two words SOLID_FILL left reserved (src_addr, src_pitch). Replaced rtl/ddram_write_adapter.sv with rtl/ddram_adapter.sv (DDR-003), adding a generic single-outstanding read port. cmdq.sv now decodes opcode 2 and dispatches to whichever engine is active via a new latch. Verified with a new Verilator testbench against a read+write Avalon-MM memory model, independently-misaligned source and destination addresses, different pitches; caught and fixed a testbench-only bug (cmd_test_trigger's busy/done reflect CMDQ accepting the command, not the engine finishing -- same mistake as an earlier cycle, same fix: wait for the actual write count). `make sim` passes all five testbenches. Wired a "Blit Copy Test" OSD button into Noodles.sv, sharing CMDQ with "Draw Test" through a small priority mux. `quartus_sh --flow compile Noodles` completed with 0 errors, no timing violations. Deployed as Noodles_20260922a.rbf; not yet tested on hardware.
+
+#### Next Steps:
+
+Get user confirmation that "Blit Copy Test" actually shows a distinct 8x8 square in the corner of the magenta surface (content will look like arbitrary DDR3 noise, not a chosen color, by design) and that nothing else broke. BLIT-001's third op, hardware noise/static-fill, is still unimplemented. After that, per the user's stated plan, move to LINK-001: the ring buffer is now the only piece standing between this project and a real host-driven command stream, and every OSD-button trigger built so far (marker test, draw test, blit copy test) is scaffolding LINK will replace, not extend.
+
+#### Files Modified:
+
+- Noodles.sv
+- rtl/blit_copy.sv
+- rtl/ddram_adapter.sv
+- rtl/cmdq.sv
+- sim/cmd_copy_trigger_dut.sv
+- sim/tb_cmd_copy_trigger.cpp
+- sim/cmd_trigger_dut.sv
+- sim/engine_dut.sv
+- sim/engine_ddram_dut.sv
+- Makefile
+- files.qip
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
