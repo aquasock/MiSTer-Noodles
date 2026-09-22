@@ -412,3 +412,35 @@ LINK-001 is now proven correct end to end on real hardware, including color, clo
 - [x] Passed
 
 ---
+
+## 13 COMMIT Unreleased b301df4 2026-09-22T07:08:09-07:00
+
+#### Coming From:
+
+Unreleased 3929105
+
+#### Purpose:
+
+Build the real ARM-side host API (LINK-004) so a caller no longer needs to hand-roll /dev/mem mmap code to push a command, and prove it on hardware in one build cycle before considering an FPGA-side completion counter.
+
+#### Outcome:
+
+Added lib/noodles_link.h/.c: open/close the ring's DDR3 mapping, noodles_rgb (BLIT-004's color byte order), a generic 8-word command push, and typed noodles_push_solid_fill/noodles_push_blit_copy wrappers. Discussed whether to also add RTL-side completion signaling (CMDQ already knows engine_done; nothing currently publishes it to DRAM) against just shipping the ARM library, and deferred the RTL side deliberately -- no current feature needs readback or safe BLIT_COPY source-reuse, and it would mean touching link_ring.sv's FSM again right after the previous entries' hardware debugging cycle, for a capability nothing yet uses. Documented as LINK-004's consequence rather than a silent gap. tools/link_push.c was refactored onto the library rather than left duplicating its old inline mmap code, then rebuilt and pushed on real hardware: the library-based push landed the correct cyan at 0x30000000, confirmed by direct memory readback (matching the exact raw bytes the pre-library version produced) and by the user seeing the display change. `make sim` still passes all six testbenches (no RTL touched this entry).
+
+#### Next Steps:
+
+Per the plan agreed with the user, the next milestone is the FPGA-side completion counter LINK-004 deferred -- a new DRAM-visible field CMDQ/link_ring writes once engine_done fires, giving the host a real fence instead of only dispatch-time read_ptr advancement. That will need its own sim testbench coverage and hardware verification cycle, same discipline as DDR-005. Beyond that, BLIT-001's third op (hardware noise/static-fill) and retiring the OSD test triggers (Marker Test, Draw Test, Blit Copy Test -- now genuinely unnecessary since LINK no longer needs them as a bring-up fallback) remain open.
+
+#### Files Modified:
+
+- lib/noodles_link.h
+- lib/noodles_link.c
+- tools/link_push.c
+- Makefile
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
