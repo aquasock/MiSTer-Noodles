@@ -432,7 +432,7 @@ ARCHITECTURE rtl OF ascal IS
 	SIGNAL avl_o_vs_sync,avl_o_vs : std_logic;
 	SIGNAL avl_fb_ena : std_logic;
 	SIGNAL avl_read_outstanding : natural RANGE 0 TO 8;
-	SIGNAL avl_retire_pending : std_logic;
+	SIGNAL avl_retire_pending,avl_base_latched_after_boundary : std_logic;
 	SIGNAL fb_boundary_toggle,fb_boundary_sync,fb_boundary_sync2,fb_boundary_seen : std_logic;
 
 	FUNCTION buf_next(a,b : natural RANGE 0 TO 2; freeze : std_logic := '0') RETURN natural IS
@@ -1698,6 +1698,7 @@ BEGIN
 			fb_retired_toggle<='0';
 			avl_read_outstanding<=0;
 			avl_retire_pending<='0';
+			avl_base_latched_after_boundary<='0';
 			fb_boundary_sync<='0';
 			fb_boundary_sync2<='0';
 			fb_boundary_seen<='0';
@@ -1708,7 +1709,9 @@ BEGIN
 			IF fb_boundary_sync2/=fb_boundary_seen THEN
 				fb_boundary_seen<=fb_boundary_sync2;
 				avl_retire_pending<='1';
-			ELSIF avl_retire_pending='1' AND avl_read_outstanding=0 AND
+				avl_base_latched_after_boundary<='0';
+			ELSIF avl_retire_pending='1' AND avl_base_latched_after_boundary='1' AND
+					avl_read_outstanding=0 AND
 					avl_readdatavalid='0' AND avl_state=sIDLE THEN
 				fb_retired_toggle<=NOT fb_retired_toggle;
 				avl_retire_pending<='0';
@@ -1748,6 +1751,9 @@ BEGIN
 				avl_o_offset0<=o_fb_base; -- <ASYNC>
 				avl_o_offset1<=o_fb_base; -- <ASYNC>
 				fb_base_latched_toggle<=NOT fb_base_latched_toggle;
+				IF avl_retire_pending='1' THEN
+					avl_base_latched_after_boundary<='1';
+				END IF;
 			END IF;
 
 			avl_i_offset0<=buf_offset(o_ibuf0,RAMBASE,RAMSIZE);  -- <ASYNC>
