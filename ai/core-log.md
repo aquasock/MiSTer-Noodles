@@ -975,3 +975,32 @@ None.
 - [x] Passed
 
 ---
+
+## 30 COMMIT Unreleased d3cb985 2026-09-22T11:20:00-07:00
+
+#### Coming From:
+
+Unreleased d3cb985
+
+#### Purpose:
+
+Build and hardware-test the external `mister_noodles_fix.tar` PRESENT implementation against the recurring 64-sprite flicker.
+
+#### Outcome:
+
+Inspected the tarball without importing its historical `ai/core-log.md`, applied its replacement `rtl/present.sv` in an isolated checkout, and completed a full Quartus 17.0.2 build with 0 errors and 57 warnings. The resulting 2.3 MB `Noodles_fix_20260922.rbf` was copied to the MiSTer as a separate file with SHA-256 `72ea056e5a824447d762d439c28e02325e10318a6666256a502a7b08c6c4f84d`. The user loaded that test build and reported that the flicker remained about as frequent as before, so this alternate PRESENT implementation did not resolve OUT-005.
+
+#### Next Steps:
+
+Do not treat either three-edge PRESENT implementation as a fix. Continue the investigation at ascal's independent output-vsync and internal buffer-retirement boundary, using a measurement or synchronization signal that directly reflects when scanout has stopped consuming the old surface before the host reuses it.
+
+#### Files Modified:
+
+None.
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
