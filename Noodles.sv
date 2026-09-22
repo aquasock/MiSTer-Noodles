@@ -48,9 +48,18 @@
 // out over HDMI via MISTER_FB -- gated behind a "draw ever completed" latch
 // so nothing is displayed (FB_EN stays 0) until that button has actually
 // been pressed once, rather than showing whatever was in memory at boot.
-// This is still a hardcoded, single test command, not LINK's ring buffer --
-// see LINK-001's still-open consequence and CMDQ-002.
-// See OUT-001/OUT-002, SURF-001/SURF-002/SURF-003/SURF-004 and DDR-001/DDR-002.
+// A second button, "Blit Copy Test", fires a hardcoded BLIT_COPY (BLIT-003)
+// copying an 8x8 rect from an arbitrary safe address into the visible
+// surface's corner -- the source is never pre-filled by anything, so its
+// content is whatever happened to already be in that DDR3, not a chosen
+// color; the point is proving the real read+write path on hardware, not a
+// pretty picture. Both buttons feed the same single CMDQ instance through a
+// small priority mux, since only one hardcoded test command exists per
+// button and CMDQ only accepts one at a time anyway.
+// This is all still hardcoded test commands, not LINK's ring buffer -- see
+// LINK-001's still-open consequence and CMDQ-002.
+// See OUT-001/OUT-002, SURF-001/SURF-002/SURF-003/SURF-004, BLIT-002/BLIT-003
+// and DDR-001/DDR-002/DDR-003.
 
 module emu
 (
@@ -127,6 +136,14 @@ localparam logic [255:0] DRAW_TEST_COMMAND = {
 	32'd0, 32'd0, 32'h00FF00FF, 32'd64, 32'd64, 32'd256, 32'h30000000, 32'd1
 };
 
+// CMDQ-002/BLIT-003: "Blit Copy Test" -- opcode=2 (BLIT_COPY), copies an 8x8
+// rect from 0x30010000 (arbitrary safe address, content whatever it already
+// is) into the visible surface's top-left corner. Must stay identical to
+// sim/cmd_copy_trigger_dut.sv's default, which is what `make sim` verifies.
+localparam logic [255:0] BLIT_COPY_TEST_COMMAND = {
+	32'd32, 32'h3001_0000, 32'd0, 32'd8, 32'd8, 32'd256, 32'h3000_0000, 32'd2
+};
+
 wire        engine_cmd_ready;
 wire [31:0] engine_wr_addr, engine_wr_data;
 wire        engine_wr_en, engine_wr_ready;
@@ -135,7 +152,16 @@ wire [31:0] blit_dst_addr, blit_color;
 wire [15:0] blit_dst_pitch, blit_width, blit_height;
 wire        draw_trigger_busy, draw_done;
 wire [255:0] draw_cmd_data;
-wire         draw_cmd_valid;
+wire         draw_cmd_valid, draw_cmd_ready;
+
+wire        copy_start, copy_busy, copy_done;
+wire [31:0] copy_dst_addr, copy_src_addr;
+wire [15:0] copy_dst_pitch, copy_src_pitch, copy_width, copy_height;
+wire        copytest_busy, copytest_done;
+wire [255:0] copytest_cmd_data;
+wire         copytest_cmd_valid, copytest_cmd_ready;
+wire [31:0] copy_wr_addr, copy_wr_data, copy_rd_addr, copy_rd_data;
+wire        copy_wr_en, copy_wr_ready, copy_rd_en, copy_rd_ready, copy_rd_valid;
 
 cmd_test_trigger #(
 	.COMMAND(DRAW_TEST_COMMAND)
@@ -148,15 +174,37 @@ cmd_test_trigger #(
 	.done     (draw_done),
 	.cmd_data (draw_cmd_data),
 	.cmd_valid(draw_cmd_valid),
-	.cmd_ready(engine_cmd_ready)
+	.cmd_ready(draw_cmd_ready)
 );
+
+cmd_test_trigger #(
+	.COMMAND(BLIT_COPY_TEST_COMMAND)
+) copy_test
+(
+	.clk      (clk_sys),
+	.reset    (reset),
+	.trigger  (status[3]),
+	.busy     (copytest_busy),
+	.done     (copytest_done),
+	.cmd_data (copytest_cmd_data),
+	.cmd_valid(copytest_cmd_valid),
+	.cmd_ready(copytest_cmd_ready)
+);
+
+// Priority mux feeding CMDQ's single command front end -- stands in for
+// LINK's not-yet-built ring buffer, which will replace this entirely.
+wire        cmd_sel_draw = draw_cmd_valid;
+wire [255:0] engine_cmd_data  = cmd_sel_draw ? draw_cmd_data  : copytest_cmd_data;
+wire         engine_cmd_valid = cmd_sel_draw ? draw_cmd_valid : copytest_cmd_valid;
+assign draw_cmd_ready     = cmd_sel_draw ? engine_cmd_ready : 1'b0;
+assign copytest_cmd_ready = cmd_sel_draw ? 1'b0             : engine_cmd_ready;
 
 cmdq cmdq
 (
 	.clk           (clk_sys),
 	.reset         (reset),
-	.cmd_valid     (draw_cmd_valid),
-	.cmd_data      (draw_cmd_data),
+	.cmd_valid     (engine_cmd_valid),
+	.cmd_data      (engine_cmd_data),
 	.cmd_ready     (engine_cmd_ready),
 	.blit_start    (blit_start),
 	.blit_dst_addr (blit_dst_addr),
@@ -165,7 +213,16 @@ cmdq cmdq
 	.blit_height   (blit_height),
 	.blit_color    (blit_color),
 	.blit_busy     (blit_busy),
-	.blit_done     (blit_done)
+	.blit_done     (blit_done),
+	.copy_start    (copy_start),
+	.copy_dst_addr (copy_dst_addr),
+	.copy_dst_pitch(copy_dst_pitch),
+	.copy_src_addr (copy_src_addr),
+	.copy_src_pitch(copy_src_pitch),
+	.copy_width    (copy_width),
+	.copy_height   (copy_height),
+	.copy_busy     (copy_busy),
+	.copy_done     (copy_done)
 );
 
 blit blit
@@ -184,6 +241,30 @@ blit blit
 	.wr_data  (engine_wr_data),
 	.wr_en    (engine_wr_en),
 	.wr_ready (engine_wr_ready)
+);
+
+blit_copy blit_copy
+(
+	.clk      (clk_sys),
+	.reset    (reset),
+	.start    (copy_start),
+	.dst_addr (copy_dst_addr),
+	.dst_pitch(copy_dst_pitch),
+	.src_addr (copy_src_addr),
+	.src_pitch(copy_src_pitch),
+	.width    (copy_width),
+	.height   (copy_height),
+	.busy     (copy_busy),
+	.done     (copy_done),
+	.rd_addr  (copy_rd_addr),
+	.rd_en    (copy_rd_en),
+	.rd_ready (copy_rd_ready),
+	.rd_data  (copy_rd_data),
+	.rd_valid (copy_rd_valid),
+	.wr_addr  (copy_wr_addr),
+	.wr_data  (copy_wr_data),
+	.wr_en    (copy_wr_en),
+	.wr_ready (copy_wr_ready)
 );
 
 // Deliberately, individually triggered by one OSD button -- writes ONE
@@ -216,33 +297,45 @@ ddram_marker_test #(
 	.wr_ready(marker_wr_ready)
 );
 
-// Single-master mux into the DDRAM write adapter. BLIT can never assert
-// wr_en (cmd_valid is tied to 0 above), so the marker test always has a
-// clear path whenever it fires; this priority is arbitrary since the two
-// sources are never simultaneously active.
-wire        adapter_wr_addr_sel = marker_wr_en;
-wire [31:0] adapter_wr_addr = adapter_wr_addr_sel ? marker_wr_addr : engine_wr_addr;
-wire [31:0] adapter_wr_data = adapter_wr_addr_sel ? marker_wr_data : engine_wr_data;
-wire        adapter_wr_en   = adapter_wr_addr_sel ? marker_wr_en   : engine_wr_en;
+// 3-way priority mux into the DDRAM adapter's write port: marker_test,
+// blit's fill writes, blit_copy's copy writes. None of the three can ever
+// be simultaneously active by construction of CMDQ's own single-engine
+// dispatch (blit and blit_copy) plus marker_test's independent OSD trigger,
+// so this priority is a tie-breaker, not load-bearing arbitration -- same
+// caveat as DDR-003's read/write mux. blit_copy is also the adapter's only
+// reader; its read port connects straight through, no mux needed.
+wire        wr_sel_marker = marker_wr_en;
+wire        wr_sel_copy   = !wr_sel_marker && copy_wr_en;
+wire [31:0] adapter_wr_addr = wr_sel_marker ? marker_wr_addr : wr_sel_copy ? copy_wr_addr : engine_wr_addr;
+wire [31:0] adapter_wr_data = wr_sel_marker ? marker_wr_data : wr_sel_copy ? copy_wr_data : engine_wr_data;
+wire        adapter_wr_en   = wr_sel_marker ? marker_wr_en   : wr_sel_copy ? copy_wr_en   : engine_wr_en;
 wire        adapter_wr_ready;
-assign marker_wr_ready = adapter_wr_addr_sel ? adapter_wr_ready : 1'b0;
-assign engine_wr_ready = adapter_wr_addr_sel ? 1'b0 : adapter_wr_ready;
+assign marker_wr_ready = wr_sel_marker ? adapter_wr_ready : 1'b0;
+assign copy_wr_ready   = wr_sel_copy   ? adapter_wr_ready : 1'b0;
+assign engine_wr_ready = (wr_sel_marker || wr_sel_copy) ? 1'b0 : adapter_wr_ready;
 
-ddram_write_adapter ddram_write_adapter
+ddram_adapter ddram_adapter
 (
-	.clk           (clk_sys),
-	.wr_addr       (adapter_wr_addr),
-	.wr_data       (adapter_wr_data),
-	.wr_en         (adapter_wr_en),
-	.wr_ready      (adapter_wr_ready),
-	.ddram_clk     (DDRAM_CLK),
-	.ddram_busy    (DDRAM_BUSY),
-	.ddram_burstcnt(DDRAM_BURSTCNT),
-	.ddram_addr    (DDRAM_ADDR),
-	.ddram_din     (DDRAM_DIN),
-	.ddram_be      (DDRAM_BE),
-	.ddram_we      (DDRAM_WE),
-	.ddram_rd      (DDRAM_RD)
+	.clk             (clk_sys),
+	.wr_addr         (adapter_wr_addr),
+	.wr_data         (adapter_wr_data),
+	.wr_en           (adapter_wr_en),
+	.wr_ready        (adapter_wr_ready),
+	.rd_addr         (copy_rd_addr),
+	.rd_en           (copy_rd_en),
+	.rd_ready        (copy_rd_ready),
+	.rd_data         (copy_rd_data),
+	.rd_valid        (copy_rd_valid),
+	.ddram_clk       (DDRAM_CLK),
+	.ddram_busy      (DDRAM_BUSY),
+	.ddram_burstcnt  (DDRAM_BURSTCNT),
+	.ddram_addr      (DDRAM_ADDR),
+	.ddram_dout      (DDRAM_DOUT),
+	.ddram_dout_ready(DDRAM_DOUT_READY),
+	.ddram_din       (DDRAM_DIN),
+	.ddram_be        (DDRAM_BE),
+	.ddram_we        (DDRAM_WE),
+	.ddram_rd        (DDRAM_RD)
 );
 
 //////////////////////////////////////////////////////////////////
@@ -257,8 +350,9 @@ localparam CONF_STR = {
 	"T[0],Reset;",
 	"R[0],Reset and close OSD;",
 	"-;",
-	"T[1],Marker Test -- writes ONE word to phys 0x20000000!;",
+	"T[1],Marker Test -- writes ONE word to phys 0x30000000!;",
 	"T[2],Draw Test -- fills a 64x64 test surface via CMDQ/BLIT;",
+	"T[3],Blit Copy Test -- copies 8x8 into the surface via CMDQ/BLIT_COPY;",
 	"v,0;",
 	"V,v",`BUILD_DATE
 };

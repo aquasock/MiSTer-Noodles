@@ -33,7 +33,18 @@ module engine_dut (
         .blit_height    (blit_height),
         .blit_color     (blit_color),
         .blit_busy      (blit_busy),
-        .blit_done      (blit_done)
+        .blit_done      (blit_done),
+        /* verilator lint_off PINCONNECTEMPTY */
+        .copy_start     (),
+        .copy_dst_addr  (),
+        .copy_dst_pitch (),
+        .copy_src_addr  (),
+        .copy_src_pitch (),
+        .copy_width     (),
+        .copy_height    (),
+        /* verilator lint_on PINCONNECTEMPTY */
+        .copy_busy      (1'b0),
+        .copy_done      (1'b0)
     );
 
     blit blit_i (

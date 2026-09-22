@@ -3,6 +3,7 @@ set_global_assignment -name SDC_FILE Noodles.sdc
 set_global_assignment -name SYSTEMVERILOG_FILE Noodles.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cmdq.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/blit.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/ddram_write_adapter.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/blit_copy.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/ddram_adapter.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/ddram_marker_test.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cmd_test_trigger.sv

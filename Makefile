@@ -32,16 +32,18 @@ SOLID_FILL_SIM    := $(SIM_DIR)/solid_fill/Vengine_dut
 DDRAM_ADAPTER_SIM := $(SIM_DIR)/ddram_adapter/Vengine_ddram_dut
 MARKER_TEST_SIM   := $(SIM_DIR)/marker_test/Vmarker_test_dut
 CMD_TRIGGER_SIM   := $(SIM_DIR)/cmd_trigger/Vcmd_trigger_dut
+CMD_COPY_SIM      := $(SIM_DIR)/cmd_copy_trigger/Vcmd_copy_trigger_dut
 
 .PHONY: all host deploy sim clean
 
 all: $(ARMBIN) $(ARMTOG) $(ARMMARKER) $(ARMSCAN)
 
-sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(MARKER_TEST_SIM) $(CMD_TRIGGER_SIM)
+sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(MARKER_TEST_SIM) $(CMD_TRIGGER_SIM) $(CMD_COPY_SIM)
 	$(SOLID_FILL_SIM)
 	$(DDRAM_ADAPTER_SIM)
 	$(MARKER_TEST_SIM)
 	$(CMD_TRIGGER_SIM)
+	$(CMD_COPY_SIM)
 
 $(SOLID_FILL_SIM): rtl/cmdq.sv rtl/blit.sv sim/engine_dut.sv sim/tb_solid_fill.cpp
 	@mkdir -p $(dir $@)
@@ -49,11 +51,11 @@ $(SOLID_FILL_SIM): rtl/cmdq.sv rtl/blit.sv sim/engine_dut.sv sim/tb_solid_fill.c
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
 		rtl/cmdq.sv rtl/blit.sv sim/engine_dut.sv sim/tb_solid_fill.cpp -o $(notdir $@)
 
-$(DDRAM_ADAPTER_SIM): rtl/cmdq.sv rtl/blit.sv rtl/ddram_write_adapter.sv sim/engine_ddram_dut.sv sim/tb_ddram_adapter.cpp
+$(DDRAM_ADAPTER_SIM): rtl/cmdq.sv rtl/blit.sv rtl/ddram_adapter.sv sim/engine_ddram_dut.sv sim/tb_ddram_adapter.cpp
 	@mkdir -p $(dir $@)
 	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module engine_ddram_dut \
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
-		rtl/cmdq.sv rtl/blit.sv rtl/ddram_write_adapter.sv sim/engine_ddram_dut.sv sim/tb_ddram_adapter.cpp -o $(notdir $@)
+		rtl/cmdq.sv rtl/blit.sv rtl/ddram_adapter.sv sim/engine_ddram_dut.sv sim/tb_ddram_adapter.cpp -o $(notdir $@)
 
 $(MARKER_TEST_SIM): rtl/ddram_marker_test.sv sim/marker_test_dut.sv sim/tb_marker_test.cpp
 	@mkdir -p $(dir $@)
@@ -66,6 +68,12 @@ $(CMD_TRIGGER_SIM): rtl/cmd_test_trigger.sv rtl/cmdq.sv rtl/blit.sv sim/cmd_trig
 	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module cmd_trigger_dut \
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
 		rtl/cmd_test_trigger.sv rtl/cmdq.sv rtl/blit.sv sim/cmd_trigger_dut.sv sim/tb_cmd_trigger.cpp -o $(notdir $@)
+
+$(CMD_COPY_SIM): rtl/cmd_test_trigger.sv rtl/cmdq.sv rtl/blit.sv rtl/blit_copy.sv rtl/ddram_adapter.sv sim/cmd_copy_trigger_dut.sv sim/tb_cmd_copy_trigger.cpp
+	@mkdir -p $(dir $@)
+	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module cmd_copy_trigger_dut \
+		--Wall --Wno-fatal -Wno-DECLFILENAME \
+		rtl/cmd_test_trigger.sv rtl/cmdq.sv rtl/blit.sv rtl/blit_copy.sv rtl/ddram_adapter.sv sim/cmd_copy_trigger_dut.sv sim/tb_cmd_copy_trigger.cpp -o $(notdir $@)
 
 $(ARMBIN): src/spike_fb.c | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ $< $(LDLIBS)
