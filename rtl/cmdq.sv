@@ -1,14 +1,10 @@
-// CMDQ: command processor. v1 decodes one 32-byte command slot at a time,
+// CMDQ: command processor. Decodes one 32-byte command slot at a time,
 // presented on a simple valid/ready front end, and dispatches it to BLIT
-// (SOLID_FILL) or blit_copy (BLIT_COPY). The front end that fetches slots
-// from a host-built command list over the HPS-FPGA link (LINK-001) is not
-// implemented yet -- see core-reference.md LINK-001's consequence. Today
-// cmd_valid/cmd_data are driven directly by whatever front end exists
-// (currently the simulation testbenches and Noodles.sv's hardcoded OSD test
-// triggers).
+// (SOLID_FILL) or blit_copy (BLIT_COPY / BLIT_COPY_KEY -- both dispatch to
+// the same engine, differing only in whether colorkey transparency is on).
 //
 // ai/core-reference.md CMDQ-001 defines the command slot layout this module
-// decodes; BLIT-002/BLIT-003 define what each opcode's fields mean.
+// decodes; BLIT-002/BLIT-003/BLIT-006 define what each opcode's fields mean.
 
 module cmdq #(
     parameter int ADDR_WIDTH = 32,
@@ -39,6 +35,8 @@ module cmdq #(
     output logic [15:0]           copy_src_pitch,
     output logic [15:0]           copy_width,
     output logic [15:0]           copy_height,
+    output logic                  copy_key_enable,
+    output logic [DATA_WIDTH-1:0] copy_key_value,
     input  logic                  copy_busy,
     input  logic                  copy_done
 );
@@ -50,10 +48,12 @@ module cmdq #(
     //   [127: 96] width     (only [15:0] used)
     //   [159:128] height    (only [15:0] used)
     //   [191:160] color                          (SOLID_FILL only)
-    //   [223:192] src_addr                       (BLIT_COPY only)
-    //   [255:224] src_pitch (only [15:0] used)    (BLIT_COPY only)
-    localparam logic [7:0] OP_SOLID_FILL = 8'h01;
-    localparam logic [7:0] OP_BLIT_COPY  = 8'h02;
+    //                                             (BLIT_COPY_KEY: colorkey value)
+    //   [223:192] src_addr                       (BLIT_COPY/BLIT_COPY_KEY only)
+    //   [255:224] src_pitch (only [15:0] used)    (BLIT_COPY/BLIT_COPY_KEY only)
+    localparam logic [7:0] OP_SOLID_FILL    = 8'h01;
+    localparam logic [7:0] OP_BLIT_COPY     = 8'h02;
+    localparam logic [7:0] OP_BLIT_COPY_KEY = 8'h03;
 
     wire [7:0]  op          = cmd_data[7:0];
     wire [31:0] c_dst_addr  = cmd_data[63:32];
@@ -88,6 +88,8 @@ module cmdq #(
             copy_src_pitch <= '0;
             copy_width     <= '0;
             copy_height    <= '0;
+            copy_key_enable<= 1'b0;
+            copy_key_value <= '0;
         end else begin
             blit_start <= 1'b0;
             copy_start <= 1'b0;
@@ -95,7 +97,7 @@ module cmdq #(
             unique case (state)
                 IDLE: begin
                     // An unrecognized opcode is accepted and dropped: only
-                    // two opcodes exist until a later milestone adds more.
+                    // three opcodes exist until a later milestone adds more.
                     if (cmd_valid && !blit_busy && !copy_busy) begin
                         if (op == OP_SOLID_FILL) begin
                             blit_dst_addr  <= c_dst_addr;
@@ -106,13 +108,15 @@ module cmdq #(
                             blit_start     <= 1'b1;
                             active_copy    <= 1'b0;
                             state          <= WAIT_DONE;
-                        end else if (op == OP_BLIT_COPY) begin
+                        end else if (op == OP_BLIT_COPY || op == OP_BLIT_COPY_KEY) begin
                             copy_dst_addr  <= c_dst_addr;
                             copy_dst_pitch <= c_dst_pitch;
                             copy_width     <= c_width;
                             copy_height    <= c_height;
                             copy_src_addr  <= c_src_addr;
                             copy_src_pitch <= c_src_pitch;
+                            copy_key_enable<= (op == OP_BLIT_COPY_KEY);
+                            copy_key_value <= c_color;
                             copy_start     <= 1'b1;
                             active_copy    <= 1'b1;
                             state          <= WAIT_DONE;

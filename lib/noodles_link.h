@@ -74,6 +74,18 @@ int noodles_push_blit_copy(noodles_link_t *link, uint32_t dst_addr, uint16_t dst
                             uint32_t src_addr, uint16_t src_pitch, uint16_t width,
                             uint16_t height);
 
+// BLIT_COPY_KEY (opcode 3, BLIT-006): same as noodles_push_blit_copy, but
+// any source pixel exactly equal to colorkey is skipped -- the destination
+// pixel underneath is left untouched instead of being overwritten. This is
+// colorkey transparency (SDL_SetColorKey + SDL_BlitSurface's model), the
+// mechanism sprite compositing needs so a sprite doesn't carry a solid
+// rectangle around it. colorkey uses the same R|(G<<8)|(B<<16) packing as
+// noodles_rgb -- pick one color the sprite's own art never legitimately
+// uses. Returns 0 on success, -1 if the ring is full.
+int noodles_push_blit_copy_key(noodles_link_t *link, uint32_t dst_addr, uint16_t dst_pitch,
+                                uint32_t src_addr, uint16_t src_pitch, uint16_t width,
+                                uint16_t height, uint32_t colorkey);
+
 // Count of commands successfully pushed through THIS handle since
 // noodles_link_open() -- NOT an absolute, cross-session count (the library
 // has no way to know that). Only meaningful compared against

@@ -17,6 +17,7 @@
 
 #define NOODLES_OP_SOLID_FILL 1u
 #define NOODLES_OP_BLIT_COPY 2u
+#define NOODLES_OP_BLIT_COPY_KEY 3u
 
 int noodles_link_open(noodles_link_t *link) {
     memset(link, 0, sizeof(*link));
@@ -79,6 +80,15 @@ int noodles_push_blit_copy(noodles_link_t *link, uint32_t dst_addr, uint16_t dst
                             uint16_t height) {
     const uint32_t command[8] = {
         NOODLES_OP_BLIT_COPY, dst_addr, dst_pitch, width, height, 0, src_addr, src_pitch,
+    };
+    return noodles_push_command(link, command);
+}
+
+int noodles_push_blit_copy_key(noodles_link_t *link, uint32_t dst_addr, uint16_t dst_pitch,
+                                uint32_t src_addr, uint16_t src_pitch, uint16_t width,
+                                uint16_t height, uint32_t colorkey) {
+    const uint32_t command[8] = {
+        NOODLES_OP_BLIT_COPY_KEY, dst_addr, dst_pitch, width, height, colorkey, src_addr, src_pitch,
     };
     return noodles_push_command(link, command);
 }

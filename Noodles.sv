@@ -146,6 +146,8 @@ wire [15:0] blit_dst_pitch, blit_width, blit_height;
 wire        copy_start, copy_busy, copy_done;
 wire [31:0] copy_dst_addr, copy_src_addr;
 wire [15:0] copy_dst_pitch, copy_src_pitch, copy_width, copy_height;
+wire        copy_key_enable;
+wire [31:0] copy_key_value;
 wire [31:0] copy_wr_addr, copy_wr_data, copy_rd_addr, copy_rd_data;
 wire        copy_wr_en, copy_wr_ready, copy_rd_en, copy_rd_ready, copy_rd_valid;
 
@@ -224,6 +226,8 @@ cmdq cmdq
 	.copy_src_pitch(copy_src_pitch),
 	.copy_width    (copy_width),
 	.copy_height   (copy_height),
+	.copy_key_enable(copy_key_enable),
+	.copy_key_value(copy_key_value),
 	.copy_busy     (copy_busy),
 	.copy_done     (copy_done)
 );
@@ -257,6 +261,8 @@ blit_copy blit_copy
 	.src_pitch(copy_src_pitch),
 	.width    (copy_width),
 	.height   (copy_height),
+	.key_enable(copy_key_enable),
+	.key_value(copy_key_value),
 	.busy     (copy_busy),
 	.done     (copy_done),
 	.rd_addr  (copy_rd_addr),

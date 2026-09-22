@@ -1,11 +1,12 @@
 // Simulation-only wiring of CMDQ + blit_copy + the real DDRAM adapter (read
-// and write sides): the full CMDQ-dispatch-to-pixel path for BLIT_COPY
-// (BLIT-003, DDR-003), exposing the real DDRAM_* signal names so the
-// testbench can drive one behavioral Avalon-MM memory model that must serve
-// both the read and the write side correctly. cmd_valid/cmd_data are driven
-// directly by the testbench (same pattern as sim/engine_ddram_dut.sv), not
-// through an OSD-style trigger -- there is no trigger left in the real core
-// to test now that LINK-001 proves the ring-buffer path end to end.
+// and write sides): the full CMDQ-dispatch-to-pixel path for BLIT_COPY and
+// BLIT_COPY_KEY (BLIT-003/BLIT-006, DDR-003), exposing the real DDRAM_*
+// signal names so the testbench can drive one behavioral Avalon-MM memory
+// model that must serve both the read and the write side correctly.
+// cmd_valid/cmd_data are driven directly by the testbench (same pattern as
+// sim/engine_ddram_dut.sv), not through an OSD-style trigger -- there is no
+// trigger left in the real core to test now that LINK-001 proves the
+// ring-buffer path end to end.
 
 module engine_copy_dut (
     input  logic          clk,
@@ -34,6 +35,8 @@ module engine_copy_dut (
     logic        copy_start, copy_busy, copy_done;
     logic [31:0] copy_dst_addr, copy_src_addr;
     logic [15:0] copy_dst_pitch, copy_src_pitch, copy_width, copy_height;
+    logic        copy_key_enable;
+    logic [31:0] copy_key_value;
 
     logic [31:0] wr_addr, wr_data;
     logic        wr_en, wr_ready;
@@ -61,6 +64,8 @@ module engine_copy_dut (
         .copy_src_pitch (copy_src_pitch),
         .copy_width     (copy_width),
         .copy_height    (copy_height),
+        .copy_key_enable(copy_key_enable),
+        .copy_key_value (copy_key_value),
         .copy_busy      (copy_busy),
         .copy_done      (copy_done)
     );
@@ -95,8 +100,10 @@ module engine_copy_dut (
         .dst_pitch(copy_dst_pitch),
         .src_addr (copy_src_addr),
         .src_pitch(copy_src_pitch),
-        .width    (copy_width),
-        .height   (copy_height),
+        .width      (copy_width),
+        .height     (copy_height),
+        .key_enable (copy_key_enable),
+        .key_value  (copy_key_value),
         .busy     (copy_busy),
         .done     (copy_done),
         .rd_addr  (rd_addr),

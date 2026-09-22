@@ -5,7 +5,7 @@ set -e
 
 HOST="${1:-${MISTER_HOST:-mister.local}}"
 DEST="${DEST:-/media/fat/pet}"
-BINS="build/arm/link-push build/arm/link-slot-dump build/arm/mem-scan build/arm/blit-copy-push build/arm/solid-fill-push"
+BINS="build/arm/link-push build/arm/link-slot-dump build/arm/mem-scan build/arm/blit-copy-push build/arm/solid-fill-push build/arm/blit-copy-key-push"
 
 for b in $BINS; do [ -f "$b" ] || { echo "missing $b -- run make first" >&2; exit 1; }; done
 
@@ -24,3 +24,7 @@ echo "  $DEST/blit-copy-push [r_hex] [g_hex] [b_hex]"
 echo
 echo "fill an arbitrary rect (e.g. a sub-region of the visible surface):"
 echo "  $DEST/solid-fill-push <dst_addr_hex> <pitch_dec> <width_dec> <height_dec> <r_hex> <g_hex> <b_hex>"
+echo
+echo "prove BLIT_COPY_KEY (colorkey transparency): a red square with a magenta"
+echo "colorkey border, composited onto a blue background -- border shouldn't overwrite it:"
+echo "  $DEST/blit-copy-key-push"

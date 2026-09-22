@@ -18,11 +18,13 @@ ARMSLOTDUMP := build/arm/link-slot-dump
 ARMMEMSCAN  := build/arm/mem-scan
 ARMCOPYPUSH := build/arm/blit-copy-push
 ARMFILLPUSH := build/arm/solid-fill-push
+ARMKEYPUSH  := build/arm/blit-copy-key-push
 HOSTLINK    := build/host/link-push
 HOSTSLOTDUMP:= build/host/link-slot-dump
 HOSTMEMSCAN := build/host/mem-scan
 HOSTCOPYPUSH:= build/host/blit-copy-push
 HOSTFILLPUSH:= build/host/solid-fill-push
+HOSTKEYPUSH := build/host/blit-copy-key-push
 
 HOST    ?= mister.local
 DEST    ?= /media/fat/pet
@@ -38,7 +40,7 @@ LINK_FENCE_SIM    := $(SIM_DIR)/link_fence/Vlink_fence_dut
 
 .PHONY: all host deploy sim clean
 
-all: $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH)
+all: $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH)
 
 sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(BLIT_COPY_SIM) $(LINK_RING_SIM) $(LINK_FENCE_SIM)
 	$(SOLID_FILL_SIM)
@@ -92,7 +94,10 @@ $(ARMCOPYPUSH): tools/blit_copy_push.c lib/noodles_link.c lib/noodles_link.h | b
 $(ARMFILLPUSH): tools/solid_fill_push.c lib/noodles_link.c lib/noodles_link.h | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ tools/solid_fill_push.c lib/noodles_link.c
 
-host: $(HOSTLINK) $(HOSTSLOTDUMP) $(HOSTMEMSCAN) $(HOSTCOPYPUSH) $(HOSTFILLPUSH)
+$(ARMKEYPUSH): tools/blit_copy_key_push.c lib/noodles_link.c lib/noodles_link.h | build/arm
+	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ tools/blit_copy_key_push.c lib/noodles_link.c
+
+host: $(HOSTLINK) $(HOSTSLOTDUMP) $(HOSTMEMSCAN) $(HOSTCOPYPUSH) $(HOSTFILLPUSH) $(HOSTKEYPUSH)
 
 $(HOSTLINK): tools/link_push.c lib/noodles_link.c lib/noodles_link.h | build/host
 	$(HOSTCC) $(CFLAGS) -o $@ tools/link_push.c lib/noodles_link.c
@@ -109,10 +114,13 @@ $(HOSTCOPYPUSH): tools/blit_copy_push.c lib/noodles_link.c lib/noodles_link.h | 
 $(HOSTFILLPUSH): tools/solid_fill_push.c lib/noodles_link.c lib/noodles_link.h | build/host
 	$(HOSTCC) $(CFLAGS) -o $@ tools/solid_fill_push.c lib/noodles_link.c
 
+$(HOSTKEYPUSH): tools/blit_copy_key_push.c lib/noodles_link.c lib/noodles_link.h | build/host
+	$(HOSTCC) $(CFLAGS) -o $@ tools/blit_copy_key_push.c lib/noodles_link.c
+
 build/arm build/host:
 	mkdir -p $@
 
-deploy: $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH)
+deploy: $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH)
 	scripts/deploy.sh $(HOST)
 
 clean:
