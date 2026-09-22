@@ -117,13 +117,9 @@ always @(posedge clk_sys or posedge reset)
 assign LED_POWER = {1'b1, link_dispatch_ever};
 assign BUTTONS = 0;
 
-// present_done_ever gates FB_EN so nothing is displayed until a frame has
-// actually been presented once -- otherwise the screen would show whatever
-// happened to be in memory at boot, or a partially-drawn back buffer before
-// its first flip. Keyed on present_done (OUT-004), not blit_done/copy_done
-// directly -- with double buffering, a completed draw only means the BACK
-// buffer changed; nothing should appear on screen until that buffer has
-// actually become front via a PRESENT command.
+// Keep the framebuffer path enabled from reset so ascal can acknowledge its
+// first FB_BASE latch; FB_FORCE_BLANK remains asserted until a PRESENT has
+// completed, so uninitialized memory is never displayed.
 reg present_done_ever;
 always @(posedge clk_sys or posedge reset)
 	if (reset) present_done_ever <= 1'b0;
@@ -150,7 +146,7 @@ always @(posedge clk_sys or posedge reset)
 // hit and fixed on this exact platform. front_sel (from present.sv,
 // flipped by PRESENT) selects which buffer FB_BASE currently points at;
 // the host draws into whichever one is NOT front.
-assign FB_EN = present_done_ever;
+assign FB_EN = 1'b1;
 assign FB_FORMAT = {2'b00, 3'b110};
 assign FB_WIDTH = 12'd640;
 assign FB_HEIGHT = 12'd480;
