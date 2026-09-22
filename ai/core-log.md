@@ -42,6 +42,35 @@ Wire CMDQ and BLIT into Noodles.sv for real: design and implement the DDRAM writ
 
 ---
 
+## 38 COMMIT Unreleased 3fa589a 2026-09-22T13:22:00-07:00
+
+#### Coming From:
+
+Unreleased 3231cda
+
+#### Purpose:
+
+Track every outstanding Avalon framebuffer burst before acknowledging scanout retirement.
+
+#### Outcome:
+
+The single-bit response flag was replaced with an outstanding-burst counter that increments on each accepted Avalon read and decrements only on the final response beat, including correct handling when acceptance and completion coincide. `FB_RETIRED` now waits for the counter to reach zero after the synchronized output boundary. `make sim` passes all six testbenches and the full Quartus compile completes with 0 errors and 57 warnings; hardware validation is pending.
+
+#### Next Steps:
+
+Run all simulations and a full Quartus compile, deploy the resulting RBF, and repeat the ten-trial 64-sprite workload while watching for incomplete or stale scanout frames.
+
+#### Files Modified:
+
+- sys/ascal.vhd
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
+
 ## 37 COMMIT Unreleased 491f8fb 2026-09-22T13:15:00-07:00
 
 #### Coming From:

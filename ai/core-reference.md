@@ -479,6 +479,16 @@ OUT-005: "OUT-004's single-fresh-vblank-edge PRESENT margin is not reliably suff
   decision: "sys/ascal.vhd synchronizes the output-domain frame-boundary toggle into avl_clk, tracks each accepted framebuffer read until its final avl_readdatavalid beat, and toggles FB_RETIRED only after the boundary has been observed with no Avalon response outstanding."
   consequence: "The retirement handshake now covers delayed memory responses that are invisible to the output-domain read and copy counters. It remains a two-buffer design and retains the existing synchronized toggle interface; hardware validation must determine whether ascal's internal buffer transition introduces any additional ownership interval."
 
+- record_id: OUT-010
+  kind: INTERFACE
+  component_id: OUT
+  title: "PRESENT retirement tracks every outstanding Avalon framebuffer burst"
+  status: DECIDED
+  decided_date: 2026-09-22
+  supersedes: "OUT-009"
+  decision: "sys/ascal.vhd maintains an outstanding-read count in avl_clk, incrementing for each accepted framebuffer read and decrementing only on the final avl_readdatavalid beat, with simultaneous acceptance and completion treated as a net-zero count change. FB_RETIRED is emitted only after the synchronized output boundary and a zero outstanding-read count."
+  consequence: "A first completed burst can no longer clear a shared busy bit while later bursts remain outstanding. The interface and two-buffer model are unchanged; hardware validation remains required."
+
 ## 6. Record template
 
 ```yaml
