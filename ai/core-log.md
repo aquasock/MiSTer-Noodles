@@ -546,3 +546,63 @@ Both items proposed as "what's next" after the OSD cleanup are now resolved in t
 - [x] Passed
 
 ---
+
+## 17 COMMIT Unreleased a8cdcac 2026-09-22T08:38:47-07:00
+
+#### Coming From:
+
+Unreleased 9cf69fa
+
+#### Purpose:
+
+Add a general-purpose SOLID_FILL push tool and demo it by filling a red square into the top-right corner of the visible surface, at the user's request.
+
+#### Outcome:
+
+Added tools/solid_fill_push.c: pushes one SOLID_FILL anywhere, any size/color, over the real LINK path, as a general complement to link_push.c (fixed full-surface fill) and blit_copy_push.c (needs a source to copy). Verified on real hardware: a 16x16 red square filled at 0x300000c0 (top-right corner, 64x64 surface, pitch 256) landed exactly as expected, confirmed via a video capture card screenshot -- correct size, correct position, the rest of the surface (teal, left over from the previous test) untouched. Mid-task the user asked why the project was porting the Menu core's specific static-noise algorithm for BLIT-001's still-unbuilt third op, and after tracing the requirement back through BLIT-001's own consequence text and the README, confirmed it traced to the project's original, different premise (a pet character composited over the Menu core's static via a Linux-framebuffer overlay) rather than the current standalone-core direction. The user confirmed that premise is abandoned. This entry's commit ended up also carrying the resulting file deletions (src/spike_fb.c, src/fbterm_toggle.c, docs/mister-framebuffer.md, install/user-startup.sh.example, scripts/stage.sh, scripts/hw-test.sh) due to a staging mix-up, not by design -- the next entry covers the rest of that cleanup.
+
+#### Next Steps:
+
+Finish the menu-integration-abandonment cleanup: Makefile/deploy.sh/README.md still reference or build the now-removed spike/fbterm-toggle tools, and BLIT-001's third op needs a real decision (drop vs. redefine generically) recorded in core-reference.md.
+
+#### Files Modified:
+
+- tools/solid_fill_push.c
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
+
+## 18 COMMIT Unreleased 7421ae7 2026-09-22T08:38:47-07:00
+
+#### Coming From:
+
+Unreleased a8cdcac
+
+#### Purpose:
+
+Finish abandoning the menu-integration concept: update the build/deploy scripts, rewrite README.md, and record BLIT-001's third op as dropped rather than deferred.
+
+#### Outcome:
+
+Makefile no longer builds misterpet-spike/fbterm-toggle (ARMBIN/ARMTOG/HOSTBIN targets and their rules removed); deploy.sh's BINS list and usage hints updated to match. README.md is rewritten from scratch -- the old one was almost entirely about the abandoned pet-on-menu-background premise (Linux fbdev overlay, F9/uinput handling, VT switching); the new one describes the actual current project: LINK/CMDQ/BLIT architecture, the host API, build instructions, pointing to core-reference.md/core-log.md as the authoritative sources rather than duplicating their content. core-reference.md gained BLIT-005, marking BLIT-001 SUPERSEDED: the milestone is considered met with its first two ops (SOLID_FILL, BLIT_COPY, both proven over the real LINK path) rather than blocked on a third op whose whole justification (a measured 12fps software bottleneck redrawing Menu's static in the Linux framebuffer) no longer describes anything this project does. Also fixed, incidentally, a real pre-existing formatting bug in core-reference.md found while editing nearby: DDR-003's own "- record_id: DDR-003" line had been lost in an earlier session's edit, making it read as a continuation of BLIT-004's YAML mapping instead of its own record -- record/kind/decision/consequence/status counts now all match (27 each). `make`/`make host`/`make sim` all verified clean after the removal; no RTL changed, so no new Quartus build was needed.
+
+#### Next Steps:
+
+The project's control file, ai/core.md, still carries the old premise in its own title ("# MiSTer-Pet") and Purpose line ("MiSTer-Noodles is tamagochi style pet for the MiSTer FPGA") -- core.md is RESTRICTED per its own Agent Recovery Policy and was not touched here; flagged to the user directly rather than edited. With BLIT-001's milestone now considered complete, the project has no single obvious "next" item from prior scope -- next steps are open pending user direction.
+
+#### Files Modified:
+
+- Makefile
+- scripts/deploy.sh
+- README.md
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
