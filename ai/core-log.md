@@ -908,9 +908,37 @@ Deploy the built core and rerun `stress-demo` at 10, 30, 50, and 64 sprites for 
 #### Files Modified:
 
 - rtl/present.sv
-- rtl/present.sv
 - sim/present_dut.sv
 - sim/tb_present.cpp
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
+
+## 28 COMMIT Unreleased d3cb985 2026-09-22T10:54:01-07:00
+
+#### Coming From:
+
+Unreleased d3cb985
+
+#### Purpose:
+
+Run the 64-sprite stress workload against the PRESENT retirement-margin build on the MiSTer hardware.
+
+#### Outcome:
+
+Deployed host-side tools were already present on the MiSTer at 10.10.0.22, and `stress-demo assets/sprite.bmp 64 15` completed successfully. The run uploaded the 48x48 sprite, rendered 64 bouncing sprites for 15.1 seconds, produced 214 frames, and averaged 14.2 fps. The process reported no ring-full or fence-timeout errors. This console result confirms the workload executes through the LINK/fence path under load; it does not by itself confirm whether the display showed ghosting.
+
+#### Next Steps:
+
+Inspect the display during a repeated 64-sprite run and report whether any previous-position ghosting remains with the three-edge PRESENT margin. If the image is clean, record the hardware pass; if ghosting remains, continue the OUT-005 investigation from ascal's independent `avl_o_vs` and output-buffer retirement timing.
+
+#### Files Modified:
+
+None.
 
 #### Status:
 
