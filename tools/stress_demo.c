@@ -24,7 +24,8 @@
 //
 // Usage, as root on the MiSTer:
 //   ./stress-demo [sprite.bmp] [count] [seconds] [mode]
-// mode is "sprites" (default), "plain", "clear", "present", or "static". The latter
+// mode is "sprites" (default), "plain", "key-never", "key-all", "key-checker", "clear",
+// "present", or "static". The latter
 // modes isolate framebuffer clearing and PRESENT/scanout from compositing.
 
 #define _POSIX_C_SOURCE 199309L
@@ -121,13 +122,18 @@ int main(int argc, char **argv) {
     const char *mode = (argc > 4) ? argv[4] : "sprites";
     int do_sprites = strcmp(mode, "sprites") == 0;
     int do_plain = strcmp(mode, "plain") == 0;
+    int do_key_never = strcmp(mode, "key-never") == 0;
+    int do_key_all = strcmp(mode, "key-all") == 0;
+    int do_key_checker = strcmp(mode, "key-checker") == 0;
     int do_clear = do_sprites || do_plain || strcmp(mode, "clear") == 0;
     int do_present_only = strcmp(mode, "present") == 0;
     int do_static = strcmp(mode, "static") == 0;
 
-    if ((!do_sprites && !do_plain && !do_clear && !do_present_only && !do_static) ||
-        ((do_sprites || do_plain) && (count < 1 || count > MAX_SPRITES))) {
-        fprintf(stderr, "mode must be sprites, plain, clear, present, or static; count 1-%d\n",
+    if ((!do_sprites && !do_plain && !do_key_never && !do_key_all && !do_key_checker && !do_clear &&
+         !do_present_only && !do_static) ||
+        ((do_sprites || do_plain || do_key_never || do_key_all || do_key_checker) &&
+         (count < 1 || count > MAX_SPRITES))) {
+        fprintf(stderr, "mode must be sprites, plain, key-never, key-all, key-checker, clear, present, or static; count 1-%d\n",
                 MAX_SPRITES);
         return 1;
     }
@@ -135,6 +141,20 @@ int main(int argc, char **argv) {
     uint32_t sprite_w, sprite_h;
     uint32_t *converted = noodles_bmp_load(path, &sprite_w, &sprite_h);
     if (!converted) return 1;
+    if (do_key_all) {
+        uint32_t key_pixel = noodles_rgb(COLORKEY_R, COLORKEY_G, COLORKEY_B);
+        for (size_t i = 0; i < (size_t)sprite_w * sprite_h; ++i)
+            converted[i] = key_pixel;
+    } else if (do_key_checker) {
+        uint32_t key_pixel = noodles_rgb(COLORKEY_R, COLORKEY_G, COLORKEY_B);
+        uint32_t draw_pixel = noodles_rgb(0xFF, 0xA0, 0x20);
+        for (uint32_t y = 0; y < sprite_h; ++y) {
+            for (uint32_t x = 0; x < sprite_w; ++x) {
+                converted[(size_t)y * sprite_w + x] =
+                    ((x ^ y) & 1u) ? key_pixel : draw_pixel;
+            }
+        }
+    }
 
     noodles_link_t link;
     if (noodles_link_open(&link) != 0) {
@@ -178,6 +198,9 @@ int main(int argc, char **argv) {
 
     printf("mode=%s, %s for %.1fs...\n", mode,
            do_sprites ? "bouncing sprites" : do_plain ? "plain copies" :
+                        do_key_never ? "key copies (never match)" :
+                        do_key_all ? "key copies (always match)" :
+                        do_key_checker ? "key copies (checkerboard)" :
                         do_clear ? "clearing back buffer" :
                         do_static ? "one PRESENT then idle" : "presenting prefilled buffers",
            run_seconds);
@@ -220,14 +243,16 @@ int main(int argc, char **argv) {
             break;
         }
 
-        for (int i = 0; (do_sprites || do_plain) && i < count; ++i) {
+        for (int i = 0; (do_sprites || do_plain || do_key_never || do_key_all ||
+                         do_key_checker) && i < count; ++i) {
             uint32_t dst = back + (uint32_t)sprites[i].y * NOODLES_BUFFER_PITCH +
                             (uint32_t)sprites[i].x * 4;
+            uint32_t frame_key = do_key_never ? 0xFFFFFFFFu : colorkey;
             int copy_failed = do_plain
                 ? push_copy_retry(&link, dst, NOODLES_BUFFER_PITCH, SPRITE_SRC_ADDR, sprite_pitch,
                                   (uint16_t)sprite_w, (uint16_t)sprite_h)
                 : push_key_retry(&link, dst, NOODLES_BUFFER_PITCH, SPRITE_SRC_ADDR, sprite_pitch,
-                                 (uint16_t)sprite_w, (uint16_t)sprite_h, colorkey);
+                                 (uint16_t)sprite_w, (uint16_t)sprite_h, frame_key);
             if (copy_failed) {
                 fprintf(stderr, "frame %ld: ring stuck compositing sprite %d\n", frame, i);
                 failed = 1;
@@ -242,7 +267,8 @@ int main(int argc, char **argv) {
             break;
         }
 
-        for (int i = 0; (do_sprites || do_plain) && i < count; ++i) {
+        for (int i = 0; (do_sprites || do_plain || do_key_never || do_key_all ||
+                         do_key_checker) && i < count; ++i) {
             sprites[i].x += sprites[i].dx;
             sprites[i].y += sprites[i].dy;
             if (sprites[i].x <= 0 || sprites[i].x >= max_x) {
