@@ -62,7 +62,7 @@ module ddram_adapter (
     // request, regardless of its word length) and the total number of
     // response words that may be outstanding across all queued descriptors
     // combined -- a single rd64 request may itself claim up to DEPTH words.
-    localparam int DEPTH = 32;
+    localparam int DEPTH = 16;
     localparam int PTR_W = $clog2(DEPTH);
     localparam int MAX_BURST = DEPTH;
 

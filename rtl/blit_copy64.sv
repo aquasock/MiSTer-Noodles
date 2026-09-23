@@ -13,7 +13,7 @@
 // consumed by the unchanged response/write-out logic below.
 module blit_copy64 #(
     parameter int ADDR_WIDTH = 32,
-    parameter int FIFO_DEPTH = 32
+    parameter int FIFO_DEPTH = 16
 ) (
     input logic clk, input logic reset,
     input logic start,
