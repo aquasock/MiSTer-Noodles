@@ -1,113 +1,3 @@
-## 42 COMMIT Unreleased ddram-queued-arbiter-rejected 2026-09-22T15:00:00-07:00
-
-#### Coming From:
-
-Unreleased fixed-colorkey-diagnostic
-
-#### Purpose:
-
-Test whether a registered read/write phase scheduler could improve DDRAM arbitration without replacing the existing client handshakes.
-
-#### Outcome:
-
-Rejected. The scheduler was re-applied after simulation reset wiring was repaired, but `make sim` failed the DDRAM adapter pixel-value test: the phase transition dropped the first accepted fill write. Reverting the scheduler restored all seven simulation benches, including the adapter's intermittent-backpressure coverage. This confirms that changing ready/grant timing in place is not a safe arbitration redesign.
-
-The next queued-arbiter attempt must capture read and write request fields into explicit registered queues, issue registered grants, and return ordered read responses independently of the client request signals. No Quartus build or hardware deployment was performed for the rejected scheduler.
-
-#### Next Steps:
-
-Design and verify a standalone mixed read/write transaction-queue module before integrating it into `ddram_adapter.sv` or changing `Noodles.sv` arbitration.
-
-#### Files Modified:
-
-- rtl/ddram_adapter.sv
-- ai/core-log.md
-
-#### Status:
-
-- [x] Built
-- [x] Passed
-
----
-
-## 43 COMMIT Unreleased ddram-queued-arbiter-hardware 2026-09-22T17:10:00-07:00
-
-#### Coming From:
-
-Unreleased ddram-queued-arbiter-rejected
-
-#### Purpose:
-
-Validate the explicit registered DDRAM transaction queues on the target hardware and measure whether removing client/physical-bus arbitration coupling improves the sprite-batch throughput ceiling.
-
-#### Outcome:
-
-The queued arbiter compiled with 0 Quartus errors, no combinational-loop or critical-warning reports, 0.591 ns worst-case setup slack, and 0.249 ns hold slack. The RBF was loaded on the QMTech MiSTer and the standard 64-sprite, 10-second `sprites-batch` workload completed four times without ring-full or fence-timeout errors:
-
-| Trial | Frames | FPS |
-|---|---:|---:|
-| 1 | 155 | 15.5 |
-| 2 | 153 | 15.3 |
-| 3 | 149 | 14.8 |
-| 4 | 144 | 14.4 |
-
-Average throughput was **15.0 FPS**, versus the validated three-pixel baseline of 13.15 FPS (+14%). The gradual spread across trials is still visible, so this is a throughput improvement rather than proof that all frame-time variance has been eliminated.
-
-#### Next Steps:
-
-Keep the queued arbiter as the active baseline. Repeat visual inspection under the same heavy workload and then profile whether the remaining variance comes from DDRAM service time or the serial descriptor/compositor pipeline before attempting further arbitration changes.
-
-#### Files Modified:
-
-- rtl/ddram_adapter.sv
-- rtl/cmdq.sv
-- Noodles.sv
-- sim/engine_ddram_dut.sv
-- sim/engine_copy_dut.sv
-- sim/engine_dut.sv
-- sim/cmdq_batch_dut.sv
-- sim/tb_ddram_adapter.cpp
-- ai/core-log.md
-
-#### Status:
-
-- [x] Built
-- [x] Deployed
-- [x] Passed
-
----
-
-## 41 COMMIT Unreleased fixed-colorkey-diagnostic 2026-09-22T14:27:29-07:00
-
-#### Coming From:
-
-Unreleased a6106cb
-
-#### Purpose:
-
-Separate moving/overlapping sprite behavior from the real colorkey copy path with a deterministic fixed-position workload.
-
-#### Outcome:
-
-Added a `fixed` stress-demo mode that clears the back buffer before each frame and places up to eight real colorkey sprites at deterministic inset coordinates (80/240/400/560 by 80 and 320), with no movement. The deployed eight-sprite, 15-second hardware run completed at 20 FPS. Visual inspection showed all eight sprites intact and no flicker. The earlier fixed-mode run was invalid because it inherited the orange checkerboard surface; that diagnostic flaw was corrected before this result.
-
-This establishes that the real colorkey copy path is stable for a cleared, fixed, non-overlapping workload. It does not yet isolate overlap, motion, or high command-count contention from the original 64-sprite failure.
-
-#### Next Steps:
-
-Run controlled fixed overlap and moving workloads, then compare sprite counts and overlap against the original intermittent 64-sprite case. Keep the framebuffer retirement changes unchanged until a copy-path-specific failure is reproduced.
-
-#### Files Modified:
-
-- tools/stress_demo.c
-- ai/core-log.md
-
-#### Status:
-
-- [x] Built
-- [x] Deployed
-- [x] Passed
-
 ## 1 COMMIT Unreleased 466cd9b 2026-09-21T22:32:51-07:00
 
 #### Coming From:
@@ -144,279 +34,6 @@ Wire CMDQ and BLIT into Noodles.sv for real: design and implement the DDRAM writ
 - .gitignore
 - LICENSE
 - clean.bat
-
-#### Status:
-
-- [x] Built
-- [ ] Passed
-
----
-
-## 40 COMMIT Unreleased 0b58b29 2026-09-22T13:53:00-07:00
-
-#### Coming From:
-
-Unreleased fd8c39a
-
-#### Purpose:
-
-Synchronize host back-buffer tracking with the FPGA's persistent front-buffer parity.
-
-#### Outcome:
-
-Repeated four-second trials showed a deterministic odd/even pattern: each new host process assumed buffer A was front, while the FPGA retained `front_sel` across process launches. The completion fence now publishes the actual front parity in its high bit, and the host masks that bit from the completion count while seeding its local buffer state from it. Simulation, host builds, and Quartus validation pass; hardware validation is pending.
-
-#### Next Steps:
-
-Deploy the parity-aware FPGA and host tool, then repeat alternating short sprite runs to verify that every process starts drawing into the actual back buffer and that the colorkey path no longer exhibits the parity-dependent flicker.
-
-#### Files Modified:
-
-- rtl/link_fence.sv
-- Noodles.sv
-- sim/link_fence_dut.sv
-- lib/noodles_link.c
-- lib/noodles_link.h
-
-#### Status:
-
-- [x] Built
-- [ ] Passed
-
----
-
-## 39 COMMIT Unreleased 3746dc7 2026-09-22T13:30:00-07:00
-
-#### Coming From:
-
-Unreleased 005324e
-
-#### Purpose:
-
-Require an Avalon framebuffer-base latch after the output boundary before declaring scanout retirement.
-
-#### Outcome:
-
-`FB_RETIRED` now requires the output-domain boundary, the subsequent Avalon-domain `o_fb_base` latch, and a zero outstanding-read count with the Avalon reader idle. This closes the phase where the output boundary could be acknowledged before the new base was accepted by the memory reader. Simulation and Quartus validation pass; hardware validation is pending.
-
-#### Next Steps:
-
-Deploy the new RBF and repeat the 64-sprite workload while watching for incomplete scanout frames; if the artifact remains, the remaining fault is likely internal ascal buffer ownership rather than framebuffer-base acceptance.
-
-#### Files Modified:
-
-- sys/ascal.vhd
-
-#### Status:
-
-- [x] Built
-- [ ] Passed
-
----
-
-## 38 COMMIT Unreleased 3fa589a 2026-09-22T13:22:00-07:00
-
-#### Coming From:
-
-Unreleased 3231cda
-
-#### Purpose:
-
-Track every outstanding Avalon framebuffer burst before acknowledging scanout retirement.
-
-#### Outcome:
-
-The single-bit response flag was replaced with an outstanding-burst counter that increments on each accepted Avalon read and decrements only on the final response beat, including correct handling when acceptance and completion coincide. `FB_RETIRED` now waits for the counter to reach zero after the synchronized output boundary. `make sim` passes all six testbenches and the full Quartus compile completes with 0 errors and 57 warnings; hardware validation is pending.
-
-#### Next Steps:
-
-Run all simulations and a full Quartus compile, deploy the resulting RBF, and repeat the ten-trial 64-sprite workload while watching for incomplete or stale scanout frames.
-
-#### Files Modified:
-
-- sys/ascal.vhd
-
-#### Status:
-
-- [x] Built
-- [ ] Passed
-
----
-
-## 37 COMMIT Unreleased 491f8fb 2026-09-22T13:15:00-07:00
-
-#### Coming From:
-
-Unreleased 4d32cc8
-
-#### Purpose:
-
-Make framebuffer retirement wait for the Avalon read response that completes each scaler burst.
-
-#### Outcome:
-
-The current acknowledgement can still be early because `o_readlev` and `o_copylev` are reset at the output VS boundary while delayed Avalon data may remain in flight. The proposed change will track accepted Avalon read bursts through their final `avl_readdatavalid` beat, synchronize the output boundary into the Avalon domain, and emit `FB_RETIRED` only after the boundary has been observed with no response outstanding.
-
-#### Next Steps:
-
-Implement the cross-domain boundary marker and Avalon response-busy tracking without adding a framebuffer, then run simulation, a full Quartus compile, and repeated hardware trials before deciding whether the ownership evidence is sufficient.
-
-#### Files Modified:
-
-- sys/ascal.vhd
-
-#### Status:
-
-- [ ] Built
-- [ ] Passed
-
----
-
-## 36 COMMIT Unreleased ae7d9c4 2026-09-22T12:59:49-07:00
-
-#### Coming From:
-
-Unreleased 8ff9bfa
-
-#### Purpose:
-
-Instrument ascal's framebuffer read ownership to establish a retirement acknowledgement after scanout has stopped consuming the old surface.
-
-#### Outcome:
-
-The output-domain retirement event is now deferred until after the frame boundary is synchronized into the Avalon domain and all accepted read bursts have completed their final `avl_readdatavalid` beat. This preserves the two-buffer design and changes only `sys/ascal.vhd`; `make sim` passes all six testbenches and the full Quartus compile completes with 0 errors and 57 warnings. Hardware validation is still pending.
-
-#### Next Steps:
-
-Deploy the compiled RBF and repeat the 64-sprite workload at least ten times; if flicker remains, inspect ascal's buffer-selection transition because this build directly accounts for delayed Avalon burst responses.
-
-#### Files Modified:
-
-- sys/ascal.vhd
-- sys/ascal.vhd
-
-#### Status:
-
-- [x] Built
-- [ ] Passed
-
----
-
-## 35 COMMIT Unreleased 8ff9bfa 2026-09-22T12:59:17-07:00
-
-#### Coming From:
-
-Unreleased 8ff9bfa
-
-#### Purpose:
-
-Measure the output-domain ascal retirement acknowledgement against repeated heavy-load flicker trials.
-
-#### Outcome:
-
-The user ran the deployed `FB_RETIRED` build ten times with `stress-demo assets/sprite.bmp 64 15`. Four runs still showed visible flicker, so the output-domain VS-boundary acknowledgement reduces neither the defect frequency nor the uncertainty enough to count as a fix. The handshake itself is operational because all runs completed, but the observed boundary still occurs before the old surface is demonstrably safe to reuse under this workload.
-
-#### Next Steps:
-
-Stop iterating on PRESENT acknowledgement timing alone and instrument ascal's actual output-buffer selection and memory-read activity, or change the scanout ownership model so the host never reuses a surface until direct evidence shows its last read has completed. Preserve the two-buffer constraint unless the FPGA scanout path is redesigned together with any additional buffer.
-
-#### Files Modified:
-
-- None.
-
-#### Status:
-
-- [x] Built
-- [ ] Passed
-
----
-
-## 34 COMMIT Unreleased 8ff9bfa 2026-09-22T12:48:15-07:00
-
-#### Coming From:
-
-Unreleased 3c8ba95
-
-#### Purpose:
-
-Replace the insufficient ascal framebuffer-base acknowledgement with an output-domain retirement acknowledgement for PRESENT.
-
-#### Outcome:
-
-Exported a toggle from ascal's output-clock process at its internal output VS boundary, synchronized that toggle into `clk_sys` as `FB_RETIRED`, and changed PRESENT to wait for this output-domain event after flipping the front buffer. The earlier base-latch acknowledgement remains wired for diagnosis but no longer defines PRESENT completion. `make sim` passes all six testbenches and `quartus_sh --flow compile Noodles` completes with 0 errors and 57 warnings.
-
-#### Next Steps:
-
-Deploy the corrected RBF and repeat the 64-sprite workload for multiple trials, recording whether the output-domain retirement event changes the ghosting frequency.
-
-#### Files Modified:
-
-- sys/ascal.vhd
-- sys/sys_top.v
-- sys/emu_ports.vh
-- rtl/present.sv
-- Noodles.sv
-- sim/present_dut.sv
-- sim/tb_present.cpp
-
-#### Status:
-
-- [x] Built
-- [ ] Passed
-
----
-
-## 33 COMMIT Unreleased 3c8ba95 2026-09-22T12:47:46-07:00
-
-#### Coming From:
-
-Unreleased 3c8ba95
-
-#### Purpose:
-
-Hardware-test the ascal framebuffer-base acknowledgement against the recurring 64-sprite flicker.
-
-#### Outcome:
-
-After correcting the FB_EN/PRESENT deadlock, the user ran `stress-demo assets/sprite.bmp 64 15` on the acknowledgement build. PRESENT completed normally and the workload rendered 173 frames in 15.1 seconds at 11.5 fps, but visible flicker remained about as frequent as with the previous three-FB_VBL implementation. This validates that the acknowledgement reaches PRESENT but does not prove that ascal has retired all outstanding reads from the old surface; OUT-005 remains unresolved.
-
-#### Next Steps:
-
-Continue from ascal's output-domain buffer-retirement logic rather than the framebuffer-base latch: identify or export an acknowledgement after the old `o_obuf` data has stopped being consumed, synchronize that event into clk_sys, and retain two-buffer operation. Any replacement must be simulation-covered and rerun against repeated 64-sprite trials.
-
-#### Files Modified:
-
-- None.
-
-#### Status:
-
-- [x] Built
-- [ ] Passed
-
----
-
-## 32 COMMIT Unreleased 3c8ba95 2026-09-22T12:44:16-07:00
-
-#### Coming From:
-
-Unreleased 398cd6c
-
-#### Purpose:
-
-Fix the PRESENT/ascal acknowledgement deadlock found during the first hardware run.
-
-#### Outcome:
-
-The first acknowledgement build could not complete even a one-frame PRESENT because FB_EN was gated on present completion, while ascal only latches o_fb_base with framebuffer mode enabled. FB_EN is now asserted from reset and FB_FORCE_BLANK remains active until the first PRESENT completes, allowing ascal to acknowledge the initial base without exposing uninitialized memory. `make sim` passes all six testbenches and the full Quartus compile completes with 0 errors and 57 warnings.
-
-#### Next Steps:
-
-Load the corrected RBF and rerun present-demo followed by repeated 64-sprite stress trials; the previous hardware result was a handshake deadlock and does not assess ghosting.
-
-#### Files Modified:
-
-- Noodles.sv
-- ai/core-reference.md
 
 #### Status:
 
@@ -1422,7 +1039,314 @@ Deploy the compiled core and repeat the 64-sprite workload for multiple 15-secon
 - [ ] Passed
 
 ---
-## 42 COMMIT Unreleased overlap-colorkey-diagnostic 2026-09-22T14:28:45-07:00
+
+## 32 COMMIT Unreleased 3c8ba95 2026-09-22T12:44:16-07:00
+
+#### Coming From:
+
+Unreleased 398cd6c
+
+#### Purpose:
+
+Fix the PRESENT/ascal acknowledgement deadlock found during the first hardware run.
+
+#### Outcome:
+
+The first acknowledgement build could not complete even a one-frame PRESENT because FB_EN was gated on present completion, while ascal only latches o_fb_base with framebuffer mode enabled. FB_EN is now asserted from reset and FB_FORCE_BLANK remains active until the first PRESENT completes, allowing ascal to acknowledge the initial base without exposing uninitialized memory. `make sim` passes all six testbenches and the full Quartus compile completes with 0 errors and 57 warnings.
+
+#### Next Steps:
+
+Load the corrected RBF and rerun present-demo followed by repeated 64-sprite stress trials; the previous hardware result was a handshake deadlock and does not assess ghosting.
+
+#### Files Modified:
+
+- Noodles.sv
+- ai/core-reference.md
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
+
+## 33 COMMIT Unreleased 3c8ba95 2026-09-22T12:47:46-07:00
+
+#### Coming From:
+
+Unreleased 3c8ba95
+
+#### Purpose:
+
+Hardware-test the ascal framebuffer-base acknowledgement against the recurring 64-sprite flicker.
+
+#### Outcome:
+
+After correcting the FB_EN/PRESENT deadlock, the user ran `stress-demo assets/sprite.bmp 64 15` on the acknowledgement build. PRESENT completed normally and the workload rendered 173 frames in 15.1 seconds at 11.5 fps, but visible flicker remained about as frequent as with the previous three-FB_VBL implementation. This validates that the acknowledgement reaches PRESENT but does not prove that ascal has retired all outstanding reads from the old surface; OUT-005 remains unresolved.
+
+#### Next Steps:
+
+Continue from ascal's output-domain buffer-retirement logic rather than the framebuffer-base latch: identify or export an acknowledgement after the old `o_obuf` data has stopped being consumed, synchronize that event into clk_sys, and retain two-buffer operation. Any replacement must be simulation-covered and rerun against repeated 64-sprite trials.
+
+#### Files Modified:
+
+- None.
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
+
+## 34 COMMIT Unreleased 8ff9bfa 2026-09-22T12:48:15-07:00
+
+#### Coming From:
+
+Unreleased 3c8ba95
+
+#### Purpose:
+
+Replace the insufficient ascal framebuffer-base acknowledgement with an output-domain retirement acknowledgement for PRESENT.
+
+#### Outcome:
+
+Exported a toggle from ascal's output-clock process at its internal output VS boundary, synchronized that toggle into `clk_sys` as `FB_RETIRED`, and changed PRESENT to wait for this output-domain event after flipping the front buffer. The earlier base-latch acknowledgement remains wired for diagnosis but no longer defines PRESENT completion. `make sim` passes all six testbenches and `quartus_sh --flow compile Noodles` completes with 0 errors and 57 warnings.
+
+#### Next Steps:
+
+Deploy the corrected RBF and repeat the 64-sprite workload for multiple trials, recording whether the output-domain retirement event changes the ghosting frequency.
+
+#### Files Modified:
+
+- sys/ascal.vhd
+- sys/sys_top.v
+- sys/emu_ports.vh
+- rtl/present.sv
+- Noodles.sv
+- sim/present_dut.sv
+- sim/tb_present.cpp
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
+
+## 35 COMMIT Unreleased 8ff9bfa 2026-09-22T12:59:17-07:00
+
+#### Coming From:
+
+Unreleased 8ff9bfa
+
+#### Purpose:
+
+Measure the output-domain ascal retirement acknowledgement against repeated heavy-load flicker trials.
+
+#### Outcome:
+
+The user ran the deployed `FB_RETIRED` build ten times with `stress-demo assets/sprite.bmp 64 15`. Four runs still showed visible flicker, so the output-domain VS-boundary acknowledgement reduces neither the defect frequency nor the uncertainty enough to count as a fix. The handshake itself is operational because all runs completed, but the observed boundary still occurs before the old surface is demonstrably safe to reuse under this workload.
+
+#### Next Steps:
+
+Stop iterating on PRESENT acknowledgement timing alone and instrument ascal's actual output-buffer selection and memory-read activity, or change the scanout ownership model so the host never reuses a surface until direct evidence shows its last read has completed. Preserve the two-buffer constraint unless the FPGA scanout path is redesigned together with any additional buffer.
+
+#### Files Modified:
+
+- None.
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
+
+## 36 COMMIT Unreleased ae7d9c4 2026-09-22T12:59:49-07:00
+
+#### Coming From:
+
+Unreleased 8ff9bfa
+
+#### Purpose:
+
+Instrument ascal's framebuffer read ownership to establish a retirement acknowledgement after scanout has stopped consuming the old surface.
+
+#### Outcome:
+
+The output-domain retirement event is now deferred until after the frame boundary is synchronized into the Avalon domain and all accepted read bursts have completed their final `avl_readdatavalid` beat. This preserves the two-buffer design and changes only `sys/ascal.vhd`; `make sim` passes all six testbenches and the full Quartus compile completes with 0 errors and 57 warnings. Hardware validation is still pending.
+
+#### Next Steps:
+
+Deploy the compiled RBF and repeat the 64-sprite workload at least ten times; if flicker remains, inspect ascal's buffer-selection transition because this build directly accounts for delayed Avalon burst responses.
+
+#### Files Modified:
+
+- sys/ascal.vhd
+- sys/ascal.vhd
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
+
+## 37 COMMIT Unreleased 491f8fb 2026-09-22T13:15:00-07:00
+
+#### Coming From:
+
+Unreleased 4d32cc8
+
+#### Purpose:
+
+Make framebuffer retirement wait for the Avalon read response that completes each scaler burst.
+
+#### Outcome:
+
+The current acknowledgement can still be early because `o_readlev` and `o_copylev` are reset at the output VS boundary while delayed Avalon data may remain in flight. The proposed change will track accepted Avalon read bursts through their final `avl_readdatavalid` beat, synchronize the output boundary into the Avalon domain, and emit `FB_RETIRED` only after the boundary has been observed with no response outstanding.
+
+#### Next Steps:
+
+Implement the cross-domain boundary marker and Avalon response-busy tracking without adding a framebuffer, then run simulation, a full Quartus compile, and repeated hardware trials before deciding whether the ownership evidence is sufficient.
+
+#### Files Modified:
+
+- sys/ascal.vhd
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
+
+## 38 COMMIT Unreleased 3fa589a 2026-09-22T13:22:00-07:00
+
+#### Coming From:
+
+Unreleased 3231cda
+
+#### Purpose:
+
+Track every outstanding Avalon framebuffer burst before acknowledging scanout retirement.
+
+#### Outcome:
+
+The single-bit response flag was replaced with an outstanding-burst counter that increments on each accepted Avalon read and decrements only on the final response beat, including correct handling when acceptance and completion coincide. `FB_RETIRED` now waits for the counter to reach zero after the synchronized output boundary. `make sim` passes all six testbenches and the full Quartus compile completes with 0 errors and 57 warnings; hardware validation is pending.
+
+#### Next Steps:
+
+Run all simulations and a full Quartus compile, deploy the resulting RBF, and repeat the ten-trial 64-sprite workload while watching for incomplete or stale scanout frames.
+
+#### Files Modified:
+
+- sys/ascal.vhd
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
+
+## 39 COMMIT Unreleased 3746dc7 2026-09-22T13:30:00-07:00
+
+#### Coming From:
+
+Unreleased 005324e
+
+#### Purpose:
+
+Require an Avalon framebuffer-base latch after the output boundary before declaring scanout retirement.
+
+#### Outcome:
+
+`FB_RETIRED` now requires the output-domain boundary, the subsequent Avalon-domain `o_fb_base` latch, and a zero outstanding-read count with the Avalon reader idle. This closes the phase where the output boundary could be acknowledged before the new base was accepted by the memory reader. Simulation and Quartus validation pass; hardware validation is pending.
+
+#### Next Steps:
+
+Deploy the new RBF and repeat the 64-sprite workload while watching for incomplete scanout frames; if the artifact remains, the remaining fault is likely internal ascal buffer ownership rather than framebuffer-base acceptance.
+
+#### Files Modified:
+
+- sys/ascal.vhd
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
+
+## 40 COMMIT Unreleased 0b58b29 2026-09-22T13:53:00-07:00
+
+#### Coming From:
+
+Unreleased fd8c39a
+
+#### Purpose:
+
+Synchronize host back-buffer tracking with the FPGA's persistent front-buffer parity.
+
+#### Outcome:
+
+Repeated four-second trials showed a deterministic odd/even pattern: each new host process assumed buffer A was front, while the FPGA retained `front_sel` across process launches. The completion fence now publishes the actual front parity in its high bit, and the host masks that bit from the completion count while seeding its local buffer state from it. Simulation, host builds, and Quartus validation pass; hardware validation is pending.
+
+#### Next Steps:
+
+Deploy the parity-aware FPGA and host tool, then repeat alternating short sprite runs to verify that every process starts drawing into the actual back buffer and that the colorkey path no longer exhibits the parity-dependent flicker.
+
+#### Files Modified:
+
+- rtl/link_fence.sv
+- Noodles.sv
+- sim/link_fence_dut.sv
+- lib/noodles_link.c
+- lib/noodles_link.h
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
+
+## 41 COMMIT Unreleased 3f71eb4 2026-09-22T14:27:29-07:00
+
+#### Coming From:
+
+Unreleased a6106cb
+
+#### Purpose:
+
+Separate moving/overlapping sprite behavior from the real colorkey copy path with a deterministic fixed-position workload.
+
+#### Outcome:
+
+Added a `fixed` stress-demo mode that clears the back buffer before each frame and places up to eight real colorkey sprites at deterministic inset coordinates (80/240/400/560 by 80 and 320), with no movement. The deployed eight-sprite, 15-second hardware run completed at 20 FPS. Visual inspection showed all eight sprites intact and no flicker. The earlier fixed-mode run was invalid because it inherited the orange checkerboard surface; that diagnostic flaw was corrected before this result.
+
+This establishes that the real colorkey copy path is stable for a cleared, fixed, non-overlapping workload. It does not yet isolate overlap, motion, or high command-count contention from the original 64-sprite failure.
+
+#### Next Steps:
+
+Run controlled fixed overlap and moving workloads, then compare sprite counts and overlap against the original intermittent 64-sprite case. Keep the framebuffer retirement changes unchanged until a copy-path-specific failure is reproduced.
+
+#### Files Modified:
+
+- tools/stress_demo.c
+- ai/core-log.md
+
+#### Status:
+
+- [x] Built
+- [x] Deployed
+- [x] Passed
+
+---
+
+## 42 COMMIT Unreleased 4cc5a31 2026-09-22T14:28:45-07:00
 
 #### Coming From:
 
@@ -1452,7 +1376,10 @@ Run the same overlap geometry with two and four sprites to determine whether the
 - [x] Built
 - [x] Deployed
 - [x] Passed
-## 43 COMMIT Unreleased fence-parity-latch 2026-09-22T14:35:37-07:00
+
+---
+
+## 43 COMMIT Unreleased 71534df 2026-09-22T14:35:37-07:00
 
 #### Coming From:
 
@@ -1483,7 +1410,10 @@ Reload the deployed RBF, run consecutive short two-sprite overlap launches, and 
 - [x] Passed
 
 Hardware validation: after reloading the parity-fix RBF and deploying the extended-wait tool, ten four-second trials of the original 64 moving real-colorkey sprites completed at approximately 8 FPS with no visible flicker in any run. This confirms the deterministic odd/even launch failure is fixed.
-## 44 COMMIT Unreleased present-wait-budget 2026-09-22T14:43:23-07:00
+
+---
+
+## 44 COMMIT Unreleased 33bc8cb 2026-09-22T14:43:23-07:00
 
 #### Coming From:
 
@@ -1513,11 +1443,46 @@ Visually check the two-sprite overlap run, then repeat the odd/even launch test 
 - [x] Built
 - [x] Deployed
 - [ ] Passed
-## 42 COMMIT Unreleased paired-solid-fill 2026-09-22T15:27:00-07:00
+
+---
+
+## 45 COMMIT Unreleased b6834d0 2026-09-22T15:00:00-07:00
 
 #### Coming From:
 
-Unreleased pipelined-blit baseline
+Unreleased 3f71eb4
+
+#### Purpose:
+
+Test whether a registered read/write phase scheduler could improve DDRAM arbitration without replacing the existing client handshakes.
+
+#### Outcome:
+
+Rejected. The scheduler was re-applied after simulation reset wiring was repaired, but `make sim` failed the DDRAM adapter pixel-value test: the phase transition dropped the first accepted fill write. Reverting the scheduler restored all seven simulation benches, including the adapter's intermittent-backpressure coverage. This confirms that changing ready/grant timing in place is not a safe arbitration redesign.
+
+The next queued-arbiter attempt must capture read and write request fields into explicit registered queues, issue registered grants, and return ordered read responses independently of the client request signals. No Quartus build or hardware deployment was performed for the rejected scheduler.
+
+#### Next Steps:
+
+Design and verify a standalone mixed read/write transaction-queue module before integrating it into `ddram_adapter.sv` or changing `Noodles.sv` arbitration.
+
+#### Files Modified:
+
+- rtl/ddram_adapter.sv
+- ai/core-log.md
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
+
+## 46 COMMIT Unreleased b6834d0 2026-09-22T15:27:00-07:00
+
+#### Coming From:
+
+Unreleased b6834d0
 
 #### Purpose:
 
@@ -1558,3 +1523,81 @@ Complete Quartus validation, deploy the RBF, and compare repeated
 
 - [x] Built
 - [ ] Passed
+
+---
+
+## 47 COMMIT Unreleased b6834d0 2026-09-22T17:10:00-07:00
+
+#### Coming From:
+
+Unreleased b6834d0
+
+#### Purpose:
+
+Validate the explicit registered DDRAM transaction queues on the target hardware and measure whether removing client/physical-bus arbitration coupling improves the sprite-batch throughput ceiling.
+
+#### Outcome:
+
+The queued arbiter compiled with 0 Quartus errors, no combinational-loop or critical-warning reports, 0.591 ns worst-case setup slack, and 0.249 ns hold slack. The RBF was loaded on the QMTech MiSTer and the standard 64-sprite, 10-second `sprites-batch` workload completed four times without ring-full or fence-timeout errors:
+
+| Trial | Frames | FPS |
+|---|---:|---:|
+| 1 | 155 | 15.5 |
+| 2 | 153 | 15.3 |
+| 3 | 149 | 14.8 |
+| 4 | 144 | 14.4 |
+
+Average throughput was **15.0 FPS**, versus the validated three-pixel baseline of 13.15 FPS (+14%). The gradual spread across trials is still visible, so this is a throughput improvement rather than proof that all frame-time variance has been eliminated.
+
+#### Next Steps:
+
+Keep the queued arbiter as the active baseline. Repeat visual inspection under the same heavy workload and then profile whether the remaining variance comes from DDRAM service time or the serial descriptor/compositor pipeline before attempting further arbitration changes.
+
+#### Files Modified:
+
+- rtl/ddram_adapter.sv
+- rtl/cmdq.sv
+- Noodles.sv
+- sim/engine_ddram_dut.sv
+- sim/engine_copy_dut.sv
+- sim/engine_dut.sv
+- sim/cmdq_batch_dut.sv
+- sim/tb_ddram_adapter.cpp
+- ai/core-log.md
+
+#### Status:
+
+- [x] Built
+- [x] Deployed
+- [x] Passed
+
+---
+
+## 48 COMMIT Unreleased de91934 2026-09-22T19:56:57-07:00
+
+#### Coming From:
+
+Unreleased b6834d0
+
+#### Purpose:
+
+Bring the locally developed `aquasock-fictional-waffle` recovery branch onto `main` and repair the structural damage it left in `core-log.md`.
+
+#### Outcome:
+
+Merged `aquasock-fictional-waffle` (`a6b2bd0`) into `main` with a non-fast-forward merge so every short hash cited by entries 31 through 47, `docs/BUILD.md`, and `docs/QUALIFICATION.md` stays valid; the only difference between the merge result and `a6b2bd0` is the `core.md` hash-verified-RBF rule from `81e7a97`. The branch had left the log out of order: entries 32 through 40 were inserted in reverse near the top of the file, entries 41 through 43 were placed above entry 1, and the header numbers 42 and 43 were each reused. Entries are now in sequence with 1 through 40 at their original numbers and the later branch entries renumbered 41 through 47 in timestamp order. Label placeholders in header and Coming From fields were replaced with real short hashes: `fixed-colorkey-diagnostic` is `3f71eb4`, `overlap-colorkey-diagnostic` is `4cc5a31`, `fence-parity-latch` is `71534df`, `present-wait-budget` is `33bc8cb`, and the queued-arbiter rejection, paired SOLID_FILL, and queued-arbiter hardware entries all map to `b6834d0` because that single checkpoint commit carries their source changes; the unresolvable `pipelined-blit baseline` reference was set to the preceding entry. Missing `---` terminators were added. No entry body text was changed, verified by line-multiset comparison against the `a6b2bd0` log. Settled entries that still violate `core-syntax.md` (a third Status box, Outcome tables, `ai/core-log.md` in Files Modified) are left as historical record. The uncommitted present-stutter debug probe in the `aquasock-fictional-waffle` worktree was not merged; its wait counter saturates after about 0.65 ms and is reset at every frame boundary, so it cannot observe multi-frame retirement misses as written.
+
+#### Next Steps:
+
+Fix the debug probe to use a wide wait counter and to count frame boundaries that pass while retirement is pending, rebuild, deploy, and correlate its output with the 64-sprite `stress-demo` frame-time spikes before choosing between an ascal arbitration change and a native timing generator.
+
+#### Files Modified:
+
+None.
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
