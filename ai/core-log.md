@@ -2037,7 +2037,7 @@ Proceed to entry 61's step 2: vendor and adapt an sdram.sv controller (N64_MiSTe
 
 ---
 
-## 63 COMMIT Unreleased ??? 2026-09-23T09:36:06-07:00
+## 63 COMMIT Unreleased 6ba0569 2026-09-23T09:36:06-07:00
 
 #### Coming From:
 
