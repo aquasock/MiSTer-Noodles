@@ -42,6 +42,32 @@
 #include "../lib/noodles_link.h"
 #include "bmp_loader.h"
 
+// Integer sqrt (Newton's method), just enough precision for the sprite
+// downsample sizing below -- no need to pull in <math.h>/libm for one call.
+static uint32_t isqrt32(uint64_t v) {
+    if (v == 0) return 0;
+    uint64_t x = v, y = (x + 1) / 2;
+    while (y < x) { x = y; y = (x + v / x) / 2; }
+    return (uint32_t)x;
+}
+
+// Nearest-neighbor downsample: sprite_batch's copy engines have no scaling
+// hardware, so shrinking a sprite for a high-count stress run has to happen
+// on the host, once, before upload -- not per-frame.
+static uint32_t *downsample_nearest(const uint32_t *src, uint32_t src_w, uint32_t src_h,
+                                     uint32_t dst_w, uint32_t dst_h) {
+    uint32_t *dst = malloc((size_t)dst_w * dst_h * sizeof(uint32_t));
+    if (!dst) return NULL;
+    for (uint32_t y = 0; y < dst_h; ++y) {
+        uint32_t sy = (y * src_h) / dst_h;
+        for (uint32_t x = 0; x < dst_w; ++x) {
+            uint32_t sx = (x * src_w) / dst_w;
+            dst[(size_t)y * dst_w + x] = src[(size_t)sy * src_w + sx];
+        }
+    }
+    return dst;
+}
+
 #define SPRITE_SRC_ADDR 0x31400000u
 #define MAX_SPRITES 64
 // sprites-batch can issue more than one 64-descriptor CMDQ batch per frame
@@ -136,6 +162,28 @@ static int present_retry(noodles_link_t *link) {
     return 1;
 }
 
+// sprite_batch's descriptor table lives at one fixed DRAM address (RTL:
+// "the descriptor address is deliberately fixed in sprite_batch") -- there
+// is no per-command base address to point separate batches at separate
+// buffers. noodles_push_sprite_batch() uploads there directly and returns
+// as soon as the ring accepts the SPRITE_BATCH command, without waiting for
+// the hardware to actually finish consuming those descriptors. With more
+// than one batch pushed per frame this is a real race: overwriting the
+// descriptor table for batch N+1 before batch N's SPRITE_BATCH has
+// actually executed silently corrupts batch N's in-flight positions with
+// batch N+1's, which is exactly what made 4 batches/frame look like only
+// 64 distinct sprites moving (in lockstep groups of ~4) instead of 256
+// independent ones. Fence-wait on LINK-005's completion count after each
+// batch push, before touching the descriptor table again.
+static int wait_for_fence(noodles_link_t *link, uint32_t target) {
+    struct timespec delay = {.tv_sec = 0, .tv_nsec = PUSH_RETRY_DELAY_NS};
+    for (int i = 0; i < PUSH_RETRY_ITERS; ++i) {
+        if ((int32_t)(noodles_link_done_count(link) - target) >= 0) return 0;
+        nanosleep(&delay, NULL);
+    }
+    return 1;
+}
+
 int main(int argc, char **argv) {
     const char *path = (argc > 1) ? argv[1] : "assets/sprite.bmp";
     int count = (argc > 2) ? atoi(argv[2]) : 10;
@@ -189,6 +237,31 @@ int main(int argc, char **argv) {
                 converted[(size_t)y * sprite_w + x] =
                     ((x ^ y) & 1u) ? key_pixel : draw_pixel;
             }
+        }
+    }
+
+    // sprite_batch's copy engines have no scaling hardware -- at full 48x48
+    // size, count sprites (up to 256 at batches=4) cover more area than the
+    // 640x480 buffer holds, so most would occlude each other and only a
+    // fraction would ever be visible at once, making "N independently
+    // bouncing sprites" misleading for high counts. Downsample once on the
+    // host, before upload, to keep total coverage under half the buffer.
+    if (do_sprites_batch && batches > 1) {
+        const uint64_t buffer_area = (uint64_t)NOODLES_BUFFER_WIDTH * NOODLES_BUFFER_HEIGHT;
+        const uint32_t target_side = isqrt32((buffer_area / 2) / (uint64_t)count);
+        uint32_t new_w = target_side < sprite_w ? target_side : sprite_w;
+        uint32_t new_h = target_side < sprite_h ? target_side : sprite_h;
+        if (new_w < 8) new_w = 8;
+        if (new_h < 8) new_h = 8;
+        if (new_w != sprite_w || new_h != sprite_h) {
+            uint32_t *resized = downsample_nearest(converted, sprite_w, sprite_h, new_w, new_h);
+            if (!resized) { free(converted); return 1; }
+            free(converted);
+            converted = resized;
+            printf("downsampled sprite from source size to %ux%u so %d sprites fit without heavy overlap\n",
+                   new_w, new_h, count);
+            sprite_w = new_w;
+            sprite_h = new_h;
         }
     }
 
@@ -312,6 +385,16 @@ int main(int argc, char **argv) {
                 }
                 if (push_batch_retry(&link, descriptors, MAX_SPRITES)) {
                     fprintf(stderr, "frame %ld: ring stuck uploading sprite batch %d\n", frame, b);
+                    failed = 1;
+                    break;
+                }
+                // Must not overwrite the (single, fixed-address) descriptor
+                // table with the next batch's positions until this one has
+                // actually finished executing -- see wait_for_fence()'s
+                // comment for why.
+                const uint32_t target = link.done_baseline + link.submitted;
+                if (wait_for_fence(&link, target)) {
+                    fprintf(stderr, "frame %ld: sprite batch %d never completed\n", frame, b);
                     failed = 1;
                     break;
                 }

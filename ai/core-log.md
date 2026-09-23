@@ -1947,3 +1947,32 @@ Treat sprites-batch and key-checker as passing stress-demo modes going forward, 
 - [x] Passed
 
 ---
+
+## 60 COMMIT Unreleased ??? 2026-09-23T08:34:00-07:00
+
+#### Coming From:
+
+Unreleased fa18dda
+
+#### Purpose:
+
+Push sprites-batch harder than one 64-descriptor batch/frame for further stress testing, and investigate why a 4-batches/frame (256 sprite) run visually looked like only ~64 sprites moving in small lockstep groups instead of 256 independent ones.
+
+#### Outcome:
+
+Added a `batches` argument to stress-demo's sprites-batch mode (up to 4, count = 64*batches) that issues that many independent SPRITE_BATCH pushes per frame; batches=4 (256 sprites) measured 15-16.5fps, in the requested range. A screenshot at that setting showed real 48x48 sprites covering 1.92x the 640x480 buffer's area, so heavy stacking/occlusion alone explained looking like fewer sprites -- fixed by adding a host-side nearest-neighbor downsample (no scaling hardware exists in blit_copy64.sv) that shrinks the uploaded sprite so total coverage stays under half the buffer (24x24 at 256 sprites). After that fix the user still counted only ~64 distinct moving sprites, in visible groups of ~4 moving together. The real cause was in lib/noodles_link.c's noodles_push_sprite_batch(): sprite_batch.sv's descriptor table lives at one fixed DRAM address with no per-command base, and the push only waits for the ring to accept the SPRITE_BATCH command, not for the hardware to finish consuming those descriptors -- stress-demo's existing multi-batches-per-frame loop pipelined all 4 pushes back to back with no wait between them, so batch N+1's descriptor upload overwrote batch N's positions before hardware had read them, silently corrupting most of the 4 batches down to whichever descriptor content landed last. Fixed by fence-waiting (LINK-005's completion count) after each individual batch push and before building the next batch's descriptors, at a measured cost of pipelining (28.5fps to 24.7fps at batches=4, since batches within a frame can no longer overlap execution). The user visually confirmed the fix: all 256 sprites move independently now, no more grouped/lockstep motion.
+
+#### Next Steps:
+
+Treat multi-batch sprites-batch stress runs as validated: 256 independently-moving sprites, correctly downsampled and correctly fenced between batches. If a future change adds a real per-command descriptor base address to sprite_batch.sv (removing the single-fixed-address constraint), the fence-wait between batches could be relaxed back to pipelined for higher fps, since the corruption is purely a shared-buffer race, not a hardware limitation on batch throughput itself.
+
+#### Files Modified:
+
+- tools/stress_demo.c
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
