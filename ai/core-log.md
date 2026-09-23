@@ -1856,3 +1856,32 @@ None.
 - [x] Passed
 
 ---
+
+## 57 COMMIT Unreleased 5c2a053 2026-09-23T07:07:21-07:00
+
+#### Coming From:
+
+Unreleased ec0f52d
+
+#### Purpose:
+
+Resolve OUT-005 by identifying and removing the actual throughput ceiling in present.sv's retirement margin, since prior entries had already ruled out DDRAM read bandwidth and FIFO depth as its cause.
+
+#### Outcome:
+
+Reading present.sv's state machine against ascal.vhd's avl_clk-domain retirement gating showed the per-PRESENT cost is roughly three 60Hz vblank periods: one waiting for the next fresh FB_VBL edge to flip front_sel, one to two (per present-probe-dump's alternating roughly 1.67 million and 3.33 million avl_clk-cycle samples) waiting for ascal's own fb_retired toggle, and one additional fixed margin vblank from present.sv's RETIRE_VBLANKS parameter, which had defaulted to 1 since the OUT-004 flicker fix recorded earlier in this log. That total (about 50ms) matches the measured 16.2 to 16.9fps ceiling from entry 56 almost exactly, independent of DEPTH, confirming present.sv's own vsync-synchronized state machine, not DDRAM bandwidth or queue depth, was the actual bottleneck. Overriding RETIRE_VBLANKS to 0 at the Noodles.sv instantiation removes the extra margin vblank, relying only on ascal's own fb_retired toggle as the safety signal rather than an additional fixed wait on top of it. make sim passed all eight testbenches including tb_present's delayed-completion and already-high-blank-at-start cases, and a clean quartus_sh --flow compile Noodles completed in 4m27s with 0 errors and 58 warnings. Deployed to the QMTech MiSTer and ran the 64-sprite stress-demo three times: 23.8, 24.6, and 25.4 fps, a roughly 40 to 50 percent improvement over entry 56's 16.2 to 16.9fps baseline. The user directly watched a live run afterward and confirmed no flicker, tearing, or ghosting, meaning the margin was unnecessary for this workload's actual timing and this closes out the OUT-005 investigation as resolved rather than merely worked around.
+
+#### Next Steps:
+
+Treat OUT-005 as resolved; if a future, heavier workload (larger sprite counts, different buffer sizes, or a different display timing) reintroduces visible flicker or ghosting, that is new evidence the RETIRE_VBLANKS=0 margin is insufficient for that specific case and RETIRE_VBLANKS should be raised again for that workload rather than assuming this fix generalizes untested to all future configurations. No further FIFO depth or DDRAM bandwidth work is warranted from this thread since both were already ruled out as the bottleneck before this fix.
+
+#### Files Modified:
+
+- Noodles.sv
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
