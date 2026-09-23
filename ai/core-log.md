@@ -1638,3 +1638,38 @@ Add a focused temporary retirement-gate diagnostic to identify whether delayed r
 - [x] Passed
 
 ---
+
+## 50 COMMIT Unreleased ??? 2026-09-22T20:57:26-07:00
+
+#### Coming From:
+
+Unreleased 210b8f4
+
+#### Purpose:
+
+Identify which `ascal` retirement predicate blocks the measured multi-frame PRESENT delays before changing framebuffer arbitration or scanout design.
+
+#### Outcome:
+
+Plan: extend the temporary retirement probe with a four-bit, per-retirement gate-reason mask accumulated while retirement is pending: base latch absent, outstanding scanout reads nonzero, read-data valid asserted, and Avalon state non-idle. Publish the mask in the unused top nibble of the existing metadata word at `0x30030004`, report it from `present-probe-dump`, and preserve the current 32-bit wait count, missed-boundary count, read-peak count, and lowest-priority write placement. Validate with ARM and host builds, RTL simulation, a full Quartus compile, deployment, and the standard 64-sprite workload to distinguish scanout read drainage from base-latch or Avalon-state stalls.
+
+#### Next Steps:
+
+Use the captured gate-reason distribution to select the narrowest corrective path, either scanout/DDRAM arbitration, retirement-handshake sequencing, or a fixed-resolution native timing generator, then remove the temporary diagnostic after the fix is qualified.
+
+#### Files Modified:
+
+- rtl/dbg_present_probe.sv
+- sys/ascal.vhd
+- sys/emu_ports.vh
+- sys/sys_top.v
+- Noodles.sv
+- tools/present_probe_dump.c
+- ai/core-log.md
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
