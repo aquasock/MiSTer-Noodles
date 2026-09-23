@@ -2396,3 +2396,32 @@ The remaining -0.099ns gap is small enough that seed variance alone (observed ra
 - [x] Passed
 
 ---
+
+## 74 COMMIT Unreleased ??? 2026-09-23T15:34:24-07:00
+
+#### Coming From:
+
+Unreleased 329ad7a
+
+#### Purpose:
+
+Attempt to close the remaining -0.099ns clk_sys 100MHz setup violation from entry 73 by sweeping additional seeds, per the user's request to try three more.
+
+#### Outcome:
+
+Ran three more parallel seeds (4/5/6) against the unchanged entry-73 RTL. Seed 4 closed timing outright: setup slack +0.056ns (TNS 0.000), hold slack +0.250ns, both positive with no code changes -- confirming the earlier prediction that the small remaining gap was within normal seed-to-seed placement variance rather than a fourth distinct logic bottleneck. Seeds 5 and 6 did not close (-0.391ns and -0.032ns respectively), underscoring that seed variance alone is not reliable and a specific seed had to be identified and pinned. make sim was not re-run since no RTL changed from entry 73's already-passing state. Deployed seed 4's rbf to the QMTech MiSTer: the established 128px sprites-batch benchmark measured 15.1fps, matching prior (still vsync-relevant at this size) runs. The more telling result was blit-bench (uncapped, no PRESENT/vsync wait) at 128px: 79.07 Mpixel/s, up from 58.36 Mpixel/s at 65MHz, a 1.355x gain -- much closer to entry 71's 1.54x clock-ratio prediction than the 1.25x measured back when 100MHz was still timing-violated, evidence that closing timing (not just raising the clock number) is what unlocks the predicted scaling.
+
+#### Next Steps:
+
+100MHz is now closed and hardware-confirmed at both the logic and throughput level. Chase the entry 69 CMDQ ring host-side descriptor-absorption limit (currently capping stress-demo at 4 batches/frame) next, since that is now the more relevant ceiling on measuring further throughput than clk_sys timing. Also still pending from earlier entries: remove dbg_present_probe (19 registers), and revisit unifying clk_sys/clk_sdram onto one clock net now that clk_sys timing is proven closed at 100MHz.
+
+#### Files Modified:
+
+- Noodles.qsf
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
