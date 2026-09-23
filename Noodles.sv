@@ -262,33 +262,6 @@ link_fence link_fence
 	.wr_ready  (fence_wr_ready)
 );
 
-// Temporary diagnostic (present-stage stutter investigation): publish
-// ascal's per-retirement debug counters to DRAM. See
-// rtl/dbg_present_probe.sv.
-reg  fb_retired_prev;
-always_ff @(posedge clk_sys or posedge reset)
-	if (reset) fb_retired_prev <= 1'b0;
-	else       fb_retired_prev <= FB_RETIRED;
-wire fb_retired_edge = FB_RETIRED != fb_retired_prev;
-
-wire [31:0] dbg_wr_addr, dbg_wr_data;
-wire        dbg_wr_en, dbg_wr_ready;
-
-dbg_present_probe dbg_present_probe
-(
-	.clk                (clk_sys),
-	.reset              (reset),
-	.retired_edge       (fb_retired_edge),
-	.retire_wait_cyc    (DBG_RETIRE_WAIT_CYC),
-	.missed_boundaries  (DBG_MISSED_BOUNDARIES),
-	.read_outstanding_pk(DBG_READ_OUTSTANDING_PK),
-	.retire_gate_mask   (DBG_RETIRE_GATE_MASK),
-	.wr_addr            (dbg_wr_addr),
-	.wr_data            (dbg_wr_data),
-	.wr_en              (dbg_wr_en),
-	.wr_ready           (dbg_wr_ready)
-);
-
 cmdq cmdq
 (
 	.clk           (clk_sys),
@@ -396,8 +369,7 @@ sprite_batch sprite_batch
 
 // 4-way priority mux into the DDRAM adapter's write port: blit_copy's copy
 // writes, link_ring's writes (INIT + read_ptr writeback), blit's fill
-// writes, link_fence's writes (INIT + completion-count publish), and the
-// temporary dbg_present_probe (present-stage stutter investigation). None
+// writes, and link_fence's writes (INIT + completion-count publish). None
 // can ever be simultaneously active by construction of CMDQ's own
 // single-engine dispatch (blit and blit_copy) and link_ring only writing
 // while idle/finishing a dispatch, so this priority is a tie-breaker, not
@@ -406,26 +378,21 @@ sprite_batch sprite_batch
 // (the host only needs the count to arrive eventually, not within any
 // particular cycle), and by the time it wants to write, the engine that
 // just triggered it (blit/blit_copy) has already stopped writing.
-// dbg_present_probe sits lowest of all: same non-time-critical reasoning,
-// and it is not part of the real design -- it must never be able to delay
-// a real client's write.
 wire        wr_sel_batch  = batch_busy;
 wire        wr_sel_copy   = !wr_sel_batch && copy_busy;
 wire        wr_sel_link   = !wr_sel_batch && !wr_sel_copy && link_wr_en;
 wire        wr_sel_engine = !wr_sel_batch && !wr_sel_copy && !wr_sel_link &&
                             blit_busy;
 wire        wr_sel_fence  = !wr_sel_batch && !wr_sel_copy && !wr_sel_link && !wr_sel_engine && fence_wr_en;
-wire        wr_sel_dbg    = !wr_sel_batch && !wr_sel_copy && !wr_sel_link && !wr_sel_engine && !wr_sel_fence && dbg_wr_en;
-wire [31:0] adapter_wr_addr = wr_sel_batch ? batch_wr_addr : wr_sel_copy ? copy_wr_addr : wr_sel_link ? link_wr_addr : wr_sel_engine ? engine_wr_addr : wr_sel_fence ? fence_wr_addr : dbg_wr_addr;
-wire [31:0] adapter_wr_data = wr_sel_batch ? batch_wr_data : wr_sel_copy ? copy_wr_data : wr_sel_link ? link_wr_data : wr_sel_engine ? engine_wr_data : wr_sel_fence ? fence_wr_data : dbg_wr_data;
-wire        adapter_wr_en   = wr_sel_batch ? batch_wr_en : wr_sel_copy ? copy_wr_en   : wr_sel_link ? link_wr_en   : wr_sel_engine ? engine_wr_en   : wr_sel_fence ? fence_wr_en : dbg_wr_en;
+wire [31:0] adapter_wr_addr = wr_sel_batch ? batch_wr_addr : wr_sel_copy ? copy_wr_addr : wr_sel_link ? link_wr_addr : wr_sel_engine ? engine_wr_addr : fence_wr_addr;
+wire [31:0] adapter_wr_data = wr_sel_batch ? batch_wr_data : wr_sel_copy ? copy_wr_data : wr_sel_link ? link_wr_data : wr_sel_engine ? engine_wr_data : fence_wr_data;
+wire        adapter_wr_en   = wr_sel_batch ? batch_wr_en : wr_sel_copy ? copy_wr_en   : wr_sel_link ? link_wr_en   : wr_sel_engine ? engine_wr_en   : fence_wr_en;
 assign batch_wr_ready  = wr_sel_batch ? adapter_wr_ready : 1'b0;
 wire        adapter_wr_ready;
 assign copy_wr_ready   = wr_sel_copy   ? adapter_wr_ready : 1'b0;
 assign link_wr_ready   = wr_sel_link   ? adapter_wr_ready : 1'b0;
 assign engine_wr_ready = wr_sel_engine ? adapter_wr_ready : 1'b0;
 assign fence_wr_ready  = wr_sel_fence  ? adapter_wr_ready : 1'b0;
-assign dbg_wr_ready    = wr_sel_dbg    ? adapter_wr_ready : 1'b0;
 wire adapter_wr64_en = (wr_sel_engine && engine_wr64_en) ||
                        (wr_sel_batch && batch_wr64_en);
 wire        adapter_wr64_ready;

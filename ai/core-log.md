@@ -2425,3 +2425,34 @@ Ran three more parallel seeds (4/5/6) against the unchanged entry-73 RTL. Seed 4
 - [x] Passed
 
 ---
+
+## 75 COMMIT Unreleased ??? 2026-09-23T15:45:00-07:00
+
+#### Coming From:
+
+Unreleased a9158fd
+
+#### Purpose:
+
+Harden the closed 100MHz baseline by removing dbg_present_probe, a temporary present-stage stutter-investigation debug module the code's own comments flagged as never meant to stay, before further cleanup work.
+
+#### Outcome:
+
+Deleted rtl/dbg_present_probe.sv and its files.qip entry. In Noodles.sv, removed the fb_retired_prev/fb_retired_edge edge-detector, the dbg_wr_addr/data/en/ready wires, and the dbg_present_probe instantiation, then collapsed the DDRAM-adapter write-port priority mux from a 5-way (batch/copy/link/engine/fence/dbg) down to the original 4-way (batch/copy/link/engine/fence), removing wr_sel_dbg and every dbg_* term from the mux and ready-fanout assigns, and updating the mux's explanatory comment to drop the dbg_present_probe references. FB_VBL and FB_RETIRED (the framework signals it was reading) are untouched and still feed present.sv normally. make sim ran clean, 15/15 testbenches passing with cycle counts unchanged (295745 sprite_batch, 175526 sprite_batch_sdram), confirming this was pure subtraction with no behavioral effect.
+
+#### Next Steps:
+
+Rebuild with the 3-seed workflow (SEED 4 pinned in Noodles.qsf per entry 74) to confirm removing 19 registers' worth of debug logic doesn't hurt the +0.056ns/+0.250ns closed margin, then hardware-check with the 128px sprites-batch and blit-bench benchmarks. After that, proceed to the next hardening item: investigating collapsing clk_sys/clk_sdram onto a single PLL output net and removing sdram_cdc.sv, since both clocks are already numerically 100MHz.
+
+#### Files Modified:
+
+- Noodles.sv
+- files.qip
+- rtl/dbg_present_probe.sv (deleted)
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
