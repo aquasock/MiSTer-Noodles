@@ -353,12 +353,6 @@ module blit_copy64 #(
                                   (retire_now ? {{(LENB-1){1'b0}}, 1'b1} : {LENB{1'b0}});
                 if (scalar_advance)
                     scalar_second <= 1'b1;
-                if (retire_now) begin
-                    valid_fifo[rd_ptr] <= 1'b0;
-                    rd_ptr <= rd_ptr + 1'b1;
-                    pairs_done <= pairs_done + 1'b1;
-                    scalar_second <= 1'b0;
-                end
                 // Completion must be gated on pairs_done (every pair
                 // actually WRITTEN), not pairs_issued/pair_count -- a burst
                 // request marks pairs_issued as soon as it is FORMED, which

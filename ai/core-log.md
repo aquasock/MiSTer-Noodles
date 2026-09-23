@@ -2456,3 +2456,32 @@ Rebuild with the 3-seed workflow (SEED 4 pinned in Noodles.qsf per entry 74) to 
 - [ ] Passed
 
 ---
+
+## 76 COMMIT Unreleased ??? 2026-09-23T16:23:00-07:00
+
+#### Coming From:
+
+Unreleased a8d62d9
+
+#### Purpose:
+
+Fix the real critical-path cause behind the -0.048ns to -0.597ns spread seen across seeds 4-12 after entry 75's dbg_present_probe removal, rather than continuing to hunt for a lucky seed.
+
+#### Outcome:
+
+Fast STA on the best of those seeds (seed5, -0.048ns) showed the new worst path running from rd_ptr[3] combinationally into a duplicated rd_ptr[0] flip-flop -- i.e. rd_ptr's own next-state logic. Inspecting blit_copy64.sv's main always_ff block found the actual cause: a stray "if (retire_now) begin valid_fifo[rd_ptr] <= 0; rd_ptr <= rd_ptr + 1; pairs_done <= pairs_done + 1; scalar_second <= 0; end" block sitting after the reserved_count update, which is an exact functional duplicate of what the "case ({rd64_valid, retire_now})" block above it already does in its 2'b01 and 2'b11 arms whenever retire_now is asserted. Both blocks are nonblocking assignments to the same four targets with the same values, so simulation behavior was always identical either way (last write wins) -- but having two separate driving structures for rd_ptr/valid_fifo/pairs_done/scalar_second gave the synthesizer redundant logic to fold, plausibly explaining the rd_ptr[0]~DUPLICATE register-duplication artifact TimeQuest reported. Deleted the redundant stray block, keeping only the case statement's handling. make sim: 15/15 passing, cycle counts unchanged (295745/175526), confirming zero behavioral difference.
+
+#### Next Steps:
+
+Rebuild with the 3-seed workflow to confirm this removes the regression from entry 75 and gets back to (or past) entry 74's +0.056ns closed margin, then hardware-check with the 128px sprites-batch and blit-bench benchmarks. If still not closed, this rd_ptr fanout point (feeding data_fifo[rd_ptr]/dst0_fifo[rd_ptr]/valid_fifo[rd_ptr] muxes plus dst1_cur's adder) is the next candidate for a genuine PREPARE/COMMIT split if it turns out to still be the worst path. After timing is reconfirmed closed, proceed to the clk_sys/clk_sdram unification hardening item.
+
+#### Files Modified:
+
+- rtl/blit_copy64.sv
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
