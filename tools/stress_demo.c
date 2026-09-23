@@ -69,14 +69,6 @@ static uint32_t *downsample_nearest(const uint32_t *src, uint32_t src_w, uint32_
 }
 
 #define SPRITE_SRC_ADDR 0x31400000u
-// SDR-004 (step 5b): sprites-batch mode's sprite pixel data is loaded into
-// SDRAM (via OP_LOAD_SDRAM) and read from there by sprite_batch's
-// blit_copy64 engine (see rtl/sdram_adapter.sv) -- a separate, FPGA-only
-// 128MB address space from DDR3, not to be confused with SPRITE_SRC_ADDR
-// above (still used as the DDR3 staging address noodles_link_upload()
-// writes the decoded bitmap to before the FPGA-side copy runs). Page 0,
-// already page-aligned as sdram_loader.sv's dst_addr requires.
-#define SDRAM_SPRITE_ADDR 0x00000000u
 #define MAX_SPRITES 64
 // sprites-batch can issue more than one 64-descriptor CMDQ batch per frame
 // (BATCHES > 1) purely to multiply compositing load for stress testing --
@@ -145,16 +137,6 @@ static int push_batch_retry(noodles_link_t *link,
     struct timespec delay = {.tv_sec = 0, .tv_nsec = PUSH_RETRY_DELAY_NS};
     for (int i = 0; i < PUSH_RETRY_ITERS; ++i) {
         if (noodles_push_sprite_batch(link, descriptors, count) == 0) return 0;
-        nanosleep(&delay, NULL);
-    }
-    return 1;
-}
-
-static int push_load_sdram_retry(noodles_link_t *link, uint32_t sdram_dst,
-                                  uint32_t ddr3_src, uint32_t length) {
-    struct timespec delay = {.tv_sec = 0, .tv_nsec = PUSH_RETRY_DELAY_NS};
-    for (int i = 0; i < PUSH_RETRY_ITERS; ++i) {
-        if (noodles_push_load_sdram(link, sdram_dst, ddr3_src, length) == 0) return 0;
         nanosleep(&delay, NULL);
     }
     return 1;
@@ -305,25 +287,11 @@ int main(int argc, char **argv) {
     printf("uploaded sprite %ux%u (%zu bytes) from %s to 0x%08x\n", sprite_w, sprite_h,
            sprite_bytes, path, SPRITE_SRC_ADDR);
 
-    // SDR-004 (step 5b): sprites-batch mode reads its sprite source pixels
-    // via sdram_adapter now, not ddram_adapter -- so the bitmap must
-    // actually be copied into SDRAM before any batch descriptor points at
-    // SDRAM_SPRITE_ADDR. length is rounded up to whole 1KB pages
-    // internally by sdram_loader.sv; no explicit host-side wait is needed
-    // beyond this push succeeding: CMDQ's WAIT_DONE state (cmdq.sv) blocks
-    // the ring from dispatching the FOLLOWING sprites-batch command until
-    // this load has actually finished, so hardware ordering alone
-    // guarantees the copy is complete before any read against it.
-    if (do_sprites_batch) {
-        if (push_load_sdram_retry(&link, SDRAM_SPRITE_ADDR, SPRITE_SRC_ADDR,
-                                   (uint32_t)sprite_bytes)) {
-            fprintf(stderr, "ring stuck pushing OP_LOAD_SDRAM\n");
-            noodles_link_close(&link);
-            return 1;
-        }
-        printf("queued DDR3->SDRAM load of %zu bytes to SDRAM window 0x%08x\n",
-               sprite_bytes, SDRAM_SPRITE_ADDR);
-    }
+    // SDR-007: sprites-batch reads its sprite source pixels back through
+    // ddram_adapter/DDR3 again, so descriptors point straight at
+    // SPRITE_SRC_ADDR and no DDR3->SDRAM preload is required. The
+    // OP_LOAD_SDRAM opcode and sdram_loader remain implemented and
+    // available; this path simply no longer needs them.
 
     if (sprite_w >= NOODLES_BUFFER_WIDTH || sprite_h >= NOODLES_BUFFER_HEIGHT) {
         fprintf(stderr, "sprite too large to bounce within the buffer\n");
@@ -417,7 +385,7 @@ int main(int argc, char **argv) {
                     descriptors[j].width = sprite_w;
                     descriptors[j].height = sprite_h;
                     descriptors[j].colorkey = colorkey;
-                    descriptors[j].src_addr = SDRAM_SPRITE_ADDR;
+                    descriptors[j].src_addr = SPRITE_SRC_ADDR;
                     descriptors[j].src_pitch = sprite_pitch;
                     descriptors[j].flags = 1;
                 }

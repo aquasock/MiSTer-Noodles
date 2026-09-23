@@ -102,22 +102,28 @@ module ddram_adapter (
     wire rd64_fire = rd64_en && rd64_ready;
 
     // Total response-word space already spoken for: words waiting to be
-    // consumed (rsp_count) plus the declared lengths of descriptors already
-    // queued but not yet issued. A new request may only be admitted if it
-    // still fits within DEPTH once that full commitment is counted -- not
-    // just against the current rsp_count -- so multiple in-flight
-    // descriptors (of any length) can never collectively overrun the
-    // response arrays.
-    logic [8:0] pending_words;
-    always_comb begin
-        pending_words = 9'd0;
-        for (int i = 0; i < MAX_BURST; i++) begin
-            automatic logic [PTR_W-1:0] idx = rd_head + i[PTR_W-1:0];
-            if (i < int'(rd_count))
-                pending_words += rd_is64_q[idx] ? {1'b0, rd_len_q[idx]} : 9'd1;
-        end
-    end
-    wire [8:0] rsp_committed = 9'(rsp_count) + pending_words;
+    // consumed plus the declared lengths of descriptors already queued but
+    // not yet issued. A new request may only be admitted if it still fits
+    // within DEPTH once that full commitment is counted -- not just against
+    // the current rsp_count -- so multiple in-flight descriptors (of any
+    // length) can never collectively overrun the response arrays.
+    //
+    // Maintained as a running counter rather than recomputed every cycle.
+    // It was previously a combinational MAX_BURST-iteration accumulator
+    // that walked the descriptor queue from rd_head, summing a 16:1 mux of
+    // rd_len_q per iteration into a serial adder chain -- roughly 40ns of
+    // ripple, which fit under clk_sys's old 50ns period at 20MHz but blows
+    // through it by 25ns at 65MHz. A latent hazard masked by the slow clock,
+    // exactly like the sdram_cdc constraint gap.
+    //
+    // The running form is exactly equivalent because the issue step is
+    // self-cancelling: when a descriptor is issued it leaves the pending
+    // sum and enters rsp_count by the same head_len, so the total only
+    // changes when a descriptor is admitted (+its length) or a response
+    // word is consumed (-1). Underflow is impossible: read_rsp requires
+    // rsp_count != 0, which implies a nonzero commitment.
+    logic [8:0] rsp_committed;
+    wire  [8:0] admit_words = rd64_fire ? {1'b0, rd64_len} : 9'd1;
 
     assign wr_ready   = (wr_count < DEPTH);
     assign wr64_ready = (wr_count < DEPTH);
@@ -170,6 +176,7 @@ module ddram_adapter (
             rsp_head <= 0;
             rsp_tail <= 0;
             rsp_count <= 0;
+            rsp_committed <= 0;
         end else begin
             rr <= !rr;
             if (wr_fire || wr64_fire) begin
@@ -219,6 +226,9 @@ module ddram_adapter (
             // a mod-DEPTH wraparound.
             rsp_count <= rsp_count + (read_issue ? (PTR_W+1)'(head_len) : (PTR_W+1)'(0))
                                     - (read_rsp ? (PTR_W+1)'(1) : (PTR_W+1)'(0));
+            rsp_committed <= rsp_committed
+                             + ((rd_fire || rd64_fire) ? admit_words : 9'd0)
+                             - (read_rsp ? 9'd1 : 9'd0);
         end
     end
 
