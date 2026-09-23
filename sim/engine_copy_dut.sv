@@ -42,6 +42,7 @@ module engine_copy_dut (
     logic        wr_en, wr_ready;
     logic [31:0] rd_addr, rd_data;
     logic        rd_en, rd_ready, rd_valid;
+    logic        adapter_idle;
 
     cmdq cmdq_i (
         .clk            (clk),
@@ -57,6 +58,7 @@ module engine_copy_dut (
         .blit_color     (blit_color),
         .blit_busy      (blit_busy),
         .blit_done      (blit_done),
+        .memory_idle    (adapter_idle),
         .copy_start     (copy_start),
         .copy_dst_addr  (copy_dst_addr),
         .copy_dst_pitch (copy_dst_pitch),
@@ -94,7 +96,8 @@ module engine_copy_dut (
         .wr_data  (),
         .wr_en    (),
         /* verilator lint_on PINCONNECTEMPTY */
-        .wr_ready (1'b0)
+        .wr_ready (1'b0),
+        .wr64_ready(1'b0)
     );
 
     blit_copy copy_i (
@@ -124,10 +127,15 @@ module engine_copy_dut (
 
     ddram_adapter adapter_i (
         .clk             (clk),
+        .reset           (reset),
         .wr_addr         (wr_addr),
         .wr_data         (wr_data),
         .wr_en           (wr_en),
         .wr_ready        (wr_ready),
+        .wr64_addr      (32'd0),
+        .wr64_data      (64'd0),
+        .wr64_en        (1'b0),
+        .wr64_ready     (),
         .rd_addr         (rd_addr),
         .rd_en           (rd_en),
         .rd_ready        (rd_ready),
@@ -142,7 +150,8 @@ module engine_copy_dut (
         .ddram_din       (DDRAM_DIN),
         .ddram_be        (DDRAM_BE),
         .ddram_we        (DDRAM_WE),
-        .ddram_rd        (DDRAM_RD)
+        .ddram_rd        (DDRAM_RD),
+        .idle            (adapter_idle)
     );
 
 endmodule

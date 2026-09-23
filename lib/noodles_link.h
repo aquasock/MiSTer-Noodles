@@ -37,16 +37,22 @@ extern "C" {
 #define NOODLES_BUFFER_PITCH 2560u
 #define NOODLES_BUFFER_WIDTH 640u
 #define NOODLES_BUFFER_HEIGHT 480u
+#define NOODLES_SPRITE_DESCRIPTOR_ADDR 0x30022000u  // 2 KiB after the 0x30021000 ring slots
+#define NOODLES_SPRITE_DESCRIPTOR_MAX 64u
+
+typedef struct {
+    uint32_t dst_addr, dst_pitch, width, height, colorkey, src_addr, src_pitch, flags;
+} noodles_sprite_descriptor_t;
 
 typedef struct {
     int fd;
     void *map;
     size_t map_span;
-    volatile uint32_t *header;  // write_ptr at [0], read_ptr at [2], fence at [3] (LINK-005)
+    volatile uint32_t *header;  // write_ptr [0], read_ptr [2], fence/count+front [3]
     volatile uint32_t *slots;
     uint32_t write_ptr;         // host's own tracked copy; the FPGA never writes this field
     uint32_t submitted;         // count of commands pushed through THIS handle since open()
-    uint32_t presents_completed;  // count of PRESENT flips CONFIRMED done (OUT-004)
+    uint32_t presents_completed;  // current front parity: 0=A, 1=B
     uint32_t done_baseline;     // LINK-005 fence value at open() time; done_baseline + submitted
                                  // converts a per-handle submitted count into the fence's own
                                  // absolute numbering -- see noodles_present_and_wait()
@@ -100,6 +106,13 @@ int noodles_push_blit_copy_key(noodles_link_t *link, uint32_t dst_addr, uint16_t
                                 uint32_t src_addr, uint16_t src_pitch, uint16_t width,
                                 uint16_t height, uint32_t colorkey);
 
+// SPRITE_BATCH (opcode 5): uploads up to 64 fixed-format descriptors (2 KiB)
+// to the reserved DDRAM list and queues one command. Descriptor flags bit 0 enables
+// colorkeying; all other bits are reserved and must be zero.
+int noodles_push_sprite_batch(noodles_link_t *link,
+                               const noodles_sprite_descriptor_t *descriptors,
+                               uint16_t count);
+
 // Count of commands successfully pushed through THIS handle since
 // noodles_link_open() -- NOT an absolute, cross-session count (the library
 // has no way to know that). Only meaningful compared against
@@ -137,7 +150,7 @@ int noodles_present_and_wait(noodles_link_t *link);
 // Returns the buffer address the host should currently draw into (the back
 // buffer, i.e. the one NOT being scanned out right now). Starts as
 // NOODLES_BUFFER_B_ADDR (buffer A is front after an FPGA reset/core load)
-// and alternates each time noodles_present_and_wait() confirms a flip.
+// and follows the FPGA-published front parity across process launches.
 // Draw a full frame's worth of commands at this address, then call
 // noodles_present_and_wait() before reading this again.
 uint32_t noodles_link_back_buffer(const noodles_link_t *link);

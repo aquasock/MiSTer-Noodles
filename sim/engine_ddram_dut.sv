@@ -28,6 +28,10 @@ module engine_ddram_dut (
 
     logic [31:0] wr_addr, wr_data;
     logic        wr_en, wr_ready;
+    logic [31:0] wr64_addr;
+    logic [63:0] wr64_data;
+    logic        wr64_en, wr64_ready;
+    logic        adapter_idle;
 
     cmdq cmdq_i (
         .clk            (clk),
@@ -43,6 +47,7 @@ module engine_ddram_dut (
         .blit_color     (blit_color),
         .blit_busy      (blit_busy),
         .blit_done      (blit_done),
+        .memory_idle    (adapter_idle),
         /* verilator lint_off PINCONNECTEMPTY */
         .copy_start     (),
         .copy_dst_addr  (),
@@ -75,15 +80,24 @@ module engine_ddram_dut (
         .wr_addr  (wr_addr),
         .wr_data  (wr_data),
         .wr_en    (wr_en),
-        .wr_ready (wr_ready)
+        .wr_ready (wr_ready),
+        .wr64_addr(wr64_addr),
+        .wr64_data(wr64_data),
+        .wr64_en  (wr64_en),
+        .wr64_ready(wr64_ready)
     );
 
     ddram_adapter adapter_i (
         .clk             (clk),
+        .reset           (reset),
         .wr_addr         (wr_addr),
         .wr_data         (wr_data),
         .wr_en           (wr_en),
         .wr_ready        (wr_ready),
+        .wr64_addr       (wr64_addr),
+        .wr64_data       (wr64_data),
+        .wr64_en         (wr64_en),
+        .wr64_ready      (wr64_ready),
         .rd_addr         (32'd0),
         .rd_en           (1'b0),
         /* verilator lint_off PINCONNECTEMPTY */
@@ -100,7 +114,8 @@ module engine_ddram_dut (
         .ddram_din       (DDRAM_DIN),
         .ddram_be        (DDRAM_BE),
         .ddram_we        (DDRAM_WE),
-        .ddram_rd        (DDRAM_RD)
+        .ddram_rd        (DDRAM_RD),
+        .idle            (adapter_idle)
     );
 
 endmodule

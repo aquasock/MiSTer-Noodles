@@ -6,6 +6,7 @@ module link_fence_dut (
     input  logic reset,
 
     input  logic done_pulse,
+    input  logic front_sel,
 
     output logic [31:0] wr_addr,
     output logic [31:0] wr_data,
@@ -17,6 +18,7 @@ module link_fence_dut (
         .clk       (clk),
         .reset     (reset),
         .done_pulse(done_pulse),
+        .front_sel (front_sel),
         .wr_addr   (wr_addr),
         .wr_data   (wr_data),
         .wr_en     (wr_en),

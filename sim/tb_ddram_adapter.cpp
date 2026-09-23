@@ -91,12 +91,12 @@ public:
 
         dut_->clk = 0;
         dut_->eval();
+        mem.MaybeWrite(dut_->DDRAM_WE, dut_->DDRAM_BUSY, dut_->DDRAM_BURSTCNT,
+                       dut_->DDRAM_RD, dut_->DDRAM_ADDR, dut_->DDRAM_DIN,
+                       dut_->DDRAM_BE);
 
         dut_->clk = 1;
         dut_->eval();
-        mem.MaybeWrite(dut_->DDRAM_WE, dut_->DDRAM_BUSY, dut_->DDRAM_BURSTCNT,
-                        dut_->DDRAM_RD, dut_->DDRAM_ADDR, dut_->DDRAM_DIN,
-                        dut_->DDRAM_BE);
     }
 
     Vengine_ddram_dut &dut() { return *dut_; }

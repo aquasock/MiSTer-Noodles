@@ -29,6 +29,7 @@ module cmdq #(
     output logic [DATA_WIDTH-1:0] blit_color,
     input  logic                  blit_busy,
     input  logic                  blit_done,
+    input  logic                  memory_idle,
 
     output logic                  copy_start,
     output logic [ADDR_WIDTH-1:0] copy_dst_addr,
@@ -41,6 +42,11 @@ module cmdq #(
     output logic [DATA_WIDTH-1:0] copy_key_value,
     input  logic                  copy_busy,
     input  logic                  copy_done,
+
+    output logic                  batch_start,
+    output logic [15:0]           batch_count,
+    input  logic                  batch_busy,
+    input  logic                  batch_done,
 
     output logic                  present_start,
     input  logic                  present_busy,
@@ -61,6 +67,7 @@ module cmdq #(
     localparam logic [7:0] OP_BLIT_COPY     = 8'h02;
     localparam logic [7:0] OP_BLIT_COPY_KEY = 8'h03;
     localparam logic [7:0] OP_PRESENT       = 8'h04;
+    localparam logic [7:0] OP_SPRITE_BATCH  = 8'h05;
 
     wire [7:0]  op          = cmd_data[7:0];
     wire [31:0] c_dst_addr  = cmd_data[63:32];
@@ -74,17 +81,21 @@ module cmdq #(
     typedef enum logic {IDLE, WAIT_DONE} state_t;
     state_t state;
 
-    typedef enum logic [1:0] {ENGINE_BLIT, ENGINE_COPY, ENGINE_PRESENT} engine_t;
+    typedef enum logic [1:0] {ENGINE_BLIT, ENGINE_COPY, ENGINE_PRESENT, ENGINE_BATCH} engine_t;
     engine_t active_engine;
+    logic engine_done_seen;
     wire engine_busy = (active_engine == ENGINE_COPY)    ? copy_busy :
-                        (active_engine == ENGINE_PRESENT) ? present_busy : blit_busy;
+                        (active_engine == ENGINE_PRESENT) ? present_busy :
+                        (active_engine == ENGINE_BATCH) ? batch_busy : blit_busy;
     wire engine_done = (active_engine == ENGINE_COPY)    ? copy_done :
-                        (active_engine == ENGINE_PRESENT) ? present_done : blit_done;
+                        (active_engine == ENGINE_PRESENT) ? present_done :
+                        (active_engine == ENGINE_BATCH) ? batch_done : blit_done;
 
     always_ff @(posedge clk or posedge reset) begin
         if (reset) begin
             state          <= IDLE;
             active_engine  <= ENGINE_BLIT;
+            engine_done_seen<= 1'b0;
             blit_start     <= 1'b0;
             blit_dst_addr  <= '0;
             blit_dst_pitch <= '0;
@@ -100,16 +111,18 @@ module cmdq #(
             copy_height    <= '0;
             copy_key_enable<= 1'b0;
             copy_key_value <= '0;
+            batch_start    <= 1'b0;
+            batch_count    <= '0;
             present_start  <= 1'b0;
         end else begin
             blit_start    <= 1'b0;
             copy_start    <= 1'b0;
             present_start <= 1'b0;
+            batch_start    <= 1'b0;
 
             unique case (state)
                 IDLE: begin
-                    // An unrecognized opcode is accepted and dropped: only
-                    // four opcodes exist until a later milestone adds more.
+                    // Unknown opcodes are accepted and dropped.
                     if (cmd_valid && !blit_busy && !copy_busy && !present_busy) begin
                         if (op == OP_SOLID_FILL) begin
                             blit_dst_addr  <= c_dst_addr;
@@ -136,12 +149,23 @@ module cmdq #(
                             present_start <= 1'b1;
                             active_engine <= ENGINE_PRESENT;
                             state         <= WAIT_DONE;
+                        end else if (op == OP_SPRITE_BATCH && c_width != 0 && c_width <= 64) begin
+                            // The descriptor address is deliberately fixed
+                            // in sprite_batch; width is the descriptor count.
+                            batch_count <= c_width;
+                            batch_start <= 1'b1;
+                            active_engine <= ENGINE_BATCH;
+                            state <= WAIT_DONE;
                         end
                     end
                 end
 
                 WAIT_DONE: begin
-                    if (engine_done) state <= IDLE;
+                    if (engine_done) engine_done_seen <= 1'b1;
+                    if ((engine_done || engine_done_seen) && memory_idle) begin
+                        state <= IDLE;
+                        engine_done_seen <= 1'b0;
+                    end
                 end
 
                 default: state <= IDLE;

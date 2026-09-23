@@ -21,6 +21,7 @@
 #define NOODLES_OP_BLIT_COPY 2u
 #define NOODLES_OP_BLIT_COPY_KEY 3u
 #define NOODLES_OP_PRESENT 4u
+#define NOODLES_OP_SPRITE_BATCH 5u
 
 int noodles_link_open(noodles_link_t *link) {
     memset(link, 0, sizeof(*link));
@@ -41,8 +42,9 @@ int noodles_link_open(noodles_link_t *link) {
     link->slots =
         (volatile uint32_t *)((char *)link->map + (NOODLES_SLOT_BASE_ADDR - NOODLES_HEADER_ADDR));
     link->write_ptr = link->header[0];  // sync with whatever is already published
-    link->done_baseline = link->header[3];  // LINK-005's fence value at open time -- see
-                                             // noodles_present_and_wait()'s use of it
+    uint32_t fence_state = link->header[3];
+    link->done_baseline = fence_state & 0x7fffffffu;
+    link->presents_completed = (fence_state >> 31) & 1u;
 
     return 0;
 }
@@ -98,10 +100,22 @@ int noodles_push_blit_copy_key(noodles_link_t *link, uint32_t dst_addr, uint16_t
     return noodles_push_command(link, command);
 }
 
+int noodles_push_sprite_batch(noodles_link_t *link,
+                              const noodles_sprite_descriptor_t *descriptors,
+                              uint16_t count) {
+    if (!descriptors || count == 0 || count > NOODLES_SPRITE_DESCRIPTOR_MAX) return -1;
+    if (noodles_link_upload(link, NOODLES_SPRITE_DESCRIPTOR_ADDR, descriptors,
+                             (size_t)count * sizeof(*descriptors)) != 0) return -1;
+    const uint32_t command[8] = {
+        NOODLES_OP_SPRITE_BATCH, NOODLES_SPRITE_DESCRIPTOR_ADDR, 0, count, 0, 0, 0, 0,
+    };
+    return noodles_push_command(link, command);
+}
+
 uint32_t noodles_link_submitted_count(const noodles_link_t *link) { return link->submitted; }
 
 uint32_t noodles_link_done_count(const noodles_link_t *link) {
-    return link->header[3];  // +12 bytes = index 3 of a uint32_t array
+    return link->header[3] & 0x7fffffffu;
 }
 
 int noodles_present_and_wait(noodles_link_t *link) {
@@ -125,7 +139,12 @@ int noodles_present_and_wait(noodles_link_t *link) {
     // Vblank-synced on the FPGA side (present.sv), so this can legitimately
     // take up to roughly one frame -- poll rather than a single short wait.
     struct timespec delay = {.tv_sec = 0, .tv_nsec = 1000000};  // 1ms
-    for (int i = 0; i < 200; ++i) {
+    // A PRESENT may sit behind a full frame of DDRAM work before the
+    // vblank-synchronized flip can complete. Keep the wait long enough for
+    // that queued work plus the retirement acknowledgement; the command has
+    // already been submitted, so timing out here would only make callers
+    // report a false failure.
+    for (int i = 0; i < 2000; ++i) {
         if (noodles_link_done_count(link) >= target) {
             link->presents_completed += 1;
             return 0;

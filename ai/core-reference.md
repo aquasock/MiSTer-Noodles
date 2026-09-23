@@ -93,6 +93,7 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 | Where does the ring buffer live in memory? | LINK component records | LINK-002 |
 | How does CMDQ actually find and fetch a queued command? | LINK component records | LINK-003 |
 | Why does a shared read port need a "who's mid-request" signal, not just rd_en? | DDR/LINK component records | DDR-005 |
+| How are mixed DDRAM reads and writes captured and retired? | DDR component records | DDR-006 |
 | How do I pack an R,G,B color into SOLID_FILL's color field? | BLIT component records | BLIT-004 |
 | Why doesn't the engine have a third (noise-fill) op? | BLIT component records | BLIT-005 |
 | How do I composite a sprite over a background without a bounding box? | BLIT component records | BLIT-006 |
@@ -101,6 +102,7 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 | How does real image/asset data (not a SOLID_FILL rect) get into a surface? | LINK component records | LINK-006 |
 | Is it safe to pipeline several commands (including a PRESENT) without fence-waiting each one individually? | LINK component records | LINK-007 |
 | Does OUT-004's single-vblank-edge PRESENT margin actually hold under heavy per-frame draw load? | OUT component records | OUT-005 |
+| When has ascal reached its output-domain frame retirement boundary? | OUT component records | OUT-007 |
 
 ---
 
@@ -122,6 +124,8 @@ DDR-002: "DDRAM_ADDR is a direct, unwindowed physical word address (word N = byt
 CMDQ-002: "SUPERSEDED by CMDQ-003 -- 'Draw Test' OSD button and rtl/cmd_test_trigger.sv no longer exist"
 OUT-003: "MISTER_FB surface: 64x64, 32bpp, pitch 256, base 0x30000000; FB_EN gated on a fill having completed at least once"
 OUT-004: "PRESENT (opcode 4): vblank-synced double-buffer flip between BUFFER_A (0x30000000) and BUFFER_B (0x30008000); noodles_link_back_buffer()/noodles_present_and_wait() are the host API"
+OUT-006: "SUPERSEDED by OUT-007 -- base-latch acknowledgement alone was insufficient"
+OUT-007: "PRESENT waits for ascal's synchronized output-domain retirement acknowledgement, then one additional fresh FB_VBL edge before completing"
 CMDQ-003: "OSD test scaffolding (Marker/Draw/Blit Copy Test) retired once LINK-004/LINK-005 proved the real ring-buffer path end to end; CMDQ's command front end is link_ring-only again"
 SURF-004: "Physical 0x20000000 itself is unsafe -- MiSTer's own system video scaler uses it; 0x30000000 is the proven-safe address (per aquasock/MiSTer-Raster's hardware-learned fix)"
 SURF-005: "Surfaces sized up to 640x480 (StarCraft/OpenBW-scale, was 64x64 bring-up size); BUFFER_A/BUFFER_B moved to 2MB-aligned slots at 0x31000000/0x31200000"
@@ -373,6 +377,15 @@ OUT-005: "OUT-004's single-fresh-vblank-edge PRESENT margin is not reliably suff
   decision: "Noodles.sv's 2-way read-port mux (link_ring vs blit_copy, feeding the one shared ddram_adapter per DDR-003) originally keyed its selector on rd_en alone (`rd_sel_link = link_rd_en`). rd_en is a requester's one-shot REQ-phase pulse -- link_ring's own rd_en is (state==POLL_REQ)||(state==FETCH_REQ), dropping the instant a request is accepted and the requester moves to its WAIT phase. But the response (rd_valid/rd_data) arrives during that WAIT phase, sometimes many cycles later. With rd_en as the selector, the mux fell through to the OTHER client's (idle, address 0) signals for the entire WAIT window, so by the time rd_valid actually pulsed, ddram_adapter's byte-half-select (`rd_addr[2] ? dout[63:32] : dout[31:0]`) used the wrong client's (idle) address bit instead of the real requester's pinned one. Found on real hardware: a link-pushed SOLID_FILL's dst_addr field (word_idx=1, upper half of the same aligned DDRAM word as word_idx=0/opcode) consistently read back as opcode's own raw value (1) -- the lower half of that same word -- because copy_rd_addr's idle value (0, bit[2]=0) selected the wrong half at the moment link_ring's response landed. CMDQ/BLIT never saw this as an error: blit_start still fired (a valid-looking, just wrong, dst_addr) and blit_done still fired (once width/height happened to also read correctly), so the failure was silent -- no busy/stuck state, no dropped command, just a write that landed at physical address 1 instead of 0x30000000 and was never found by a memory scan of the address it was expected at. Fixed by giving link_ring a new rd_active output (POLL_REQ||POLL_WAIT||FETCH_REQ||FETCH_WAIT -- the same REQ+WAIT span rd_addr itself was already pinned across) and using that, not rd_en, as the mux selector."
   consequence: "Any future shared-port mux between two request/response clients on this DDRAM adapter must select on a signal spanning the full REQ+WAIT lifetime of a pending transaction, never on the requester's own rd_en/wr_en (which by design only pulses during the REQ phase). This bug was invisible to `make sim`'s link_ring testbench (sim/link_ring_dut.sv) because that DUT wires link_ring directly to its own ddram_adapter instance with no second client and no mux at all -- it never exercised the failure mode that only exists once a real mux with an idle-but-present second client is in the loop. Simulation coverage for shared-bus arbitration bugs requires a testbench that actually includes the mux and a plausible idle second client, not just the module in isolation; no such testbench exists yet for this specific mux, so this class of bug could recur for BLIT-003's own read requests if ddram_adapter ever gains a third client without the same rd_active-style pattern."
 
+- record_id: DDR-006
+  kind: ARCHITECTURE
+  component_id: DDR
+  title: "DDRAM requests are captured in independent registered queues before physical-bus arbitration"
+  status: DECIDED
+  decided_date: 2026-09-22
+  decision: "rtl/ddram_adapter.sv captures scalar and 64-bit write requests in a registered write queue and read requests in a registered read queue. A registered response-metadata queue preserves read order, 32-bit half selection, and 64-bit response type. The physical DDRAM port issues one captured transaction at a time, prioritizing a queued read when response capacity is available and otherwise issuing a queued write. Client ready signals describe queue capacity, not DDRAM_BUSY or the current physical grant, so a client request remains a valid handshake independent of physical-bus backpressure."
+  consequence: "New DDRAM clients must use the queue handshake and must not infer physical acceptance from DDRAM_BUSY. CMDQ command retirement waits for both the engine completion pulse and the adapter's idle signal, which includes queued and outstanding transactions. Replacing this with a combinational phase scheduler or grant-dependent ready logic is not permitted without a new interface decision and mixed-traffic simulation coverage."
+
 - record_id: LINK-002
   kind: INTERFACE
   component_id: LINK
@@ -436,6 +449,76 @@ OUT-005: "OUT-004's single-fresh-vblank-edge PRESENT margin is not reliably suff
   decision: "Investigated after the user's stress test (tools/stress_demo.c, N sprites bouncing simultaneously) showed intermittent visible ghosting/flicker -- images from a sprite's previous position bleeding into the current frame -- that persisted even after LINK-007's real present_and_wait() bug was fixed. Threshold-tested on real hardware at count=10,30,50,64 (multiple runs each): 30 sprites (draws complete within ~1-2 vsync periods, 20fps=60/3Hz) ran clean across the samples taken; 50 and 64 sprites (draws span ~3-4 vsync periods, 15fps=60/4Hz and ~14.3fps) flickered intermittently, roughly half of repeated runs; even a single 10-sprite run (normally clean at 30fps=60/2Hz) flickered once. The intermittency (not deterministic per sprite count) ruled out a simple logic bug in rtl/present.sv, whose front_sel-flip-on-fresh-FB_VBL-edge logic was re-read and confirmed correct in isolation. Root cause identified by reading the vendored scaler IP directly (sys/ascal.vhd): ascal does NOT latch a new fb_base on our core's FB_VBL edge (the signal rtl/present.sv actually watches) -- it latches avl_o_offset0/avl_o_offset1 from o_fb_base only on the rising edge of avl_o_vs (ascal.vhd ~line 1714-1717), ascal's OWN internally-generated output vsync, synchronized into a SEPARATE Avalon memory clock domain (avl_clk) via a 2-stage synchronizer, explicitly marked <ASYNC> in the source. ascal additionally has its own internal double-buffering (o_obuf0/o_obuf1, ascal.vhd ~line 1940-1967) governing when it actually re-fetches frame data, decoupled from FB_VBL entirely. There is therefore no guaranteed timing relationship between 'rtl/present.sv flipped front_sel on a fresh FB_VBL edge' and 'ascal actually started reading pixels from the new address' -- the phase relationship between our FB_VBL and ascal's independent avl_o_vs/internal buffer state can drift, and when it drifts unfavorably, the host can start drawing the next frame into a buffer ascal has not yet finished consuming as the (logically) old front buffer, producing visible ghosting. This is exactly the uncertainty OUT-004's own decision text already flagged as accepted risk ('not depending on undocumented assumptions about ascal's own prefetch timing') -- this record confirms that risk is real and measurable, not just theoretical."
   consequence: "OUT-004's mechanism (front_sel, vblank-gated flip) is not wrong, but its margin (wait for exactly one fresh FB_VBL edge) is insufficient once per-frame draw work grows large enough to span multiple vsync periods -- which any real multi-sprite scene will do past a low sprite count on this hardware today (BLIT_COPY's DDR-003 throughput gap is the reason draw work takes as long as it does; a future throughput fix would raise the sprite count before this margin problem starts, not eliminate the underlying margin gap itself). No fix is implemented yet. Two directions were identified but not attempted: (1) empirical mitigation -- have rtl/present.sv wait for multiple fresh FB_VBL edges (not just one) before considering a flip's prior frame fully retired, trading latency for margin against ascal's drift, cheap to try but not root-cause-verified; (2) deeper study of ascal's configuration (RAMBASE/RAMSIZE, buffering/low-latency mode parameters passed to it in sys_top.v) to find an actually-guaranteed-safe relationship between FB_VBL and avl_o_vs, or a different synchronization signal this core could watch instead. Whoever picks this up next should start from ascal.vhd's o_run/o_vsv/avl_o_vs signal chain (grep'd and referenced above) rather than re-deriving it from scratch. Safe-today guidance: draw workloads that complete within roughly 1-2 vsync periods (empirically ~30 sprites at this project's 48x48 sprite size and BLIT_COPY_KEY cost) have not shown this artifact in testing; heavier workloads may, intermittently."
 
+- record_id: OUT-006
+  kind: INTERFACE
+  component_id: OUT
+  title: "PRESENT completion is acknowledged by ascal's framebuffer-base latch, with one post-ack retirement boundary"
+  status: DECIDED
+  decided_date: 2026-09-22
+  supersedes: "OUT-005"
+  decision: "rtl/present.sv still flips front_sel only on a fresh rising edge of FB_VBL, but it no longer treats a fixed count of FB_VBL edges as evidence that scanout accepted the new surface. sys/ascal.vhd toggles an acknowledgement in its avl_clk domain at the existing assignment of avl_o_offset0/avl_o_offset1 from o_fb_base; sys/sys_top.v synchronizes that toggle into clk_sys and exposes it to the core as FB_BASE_LATCHED. PRESENT captures the acknowledgement level when it starts, waits for the level to change after flipping front_sel, and then waits one additional fresh FB_VBL edge before pulsing done. The post-ack edge is retained because accepting the new base and retiring all outstanding output-buffer activity are distinct events until hardware proves otherwise."
+  consequence: "The host-side PRESENT fence now cannot complete before the scaler has observed the requested framebuffer base, eliminating the previous fixed-delay assumption while retaining a conservative two-buffer design. FB_EN remains asserted from reset while FB_FORCE_BLANK keeps output hidden until the first PRESENT completes; this is required because ascal only latches o_fb_base while framebuffer mode is enabled. FB_BASE_LATCHED is a synchronized toggle-level indication, not a pulse; future scanout handshakes must preserve the same phase-safe cross-clock pattern. Simulation must cover acknowledgement before and after FB_VBL, arbitrary phase, and repeated toggles; hardware validation remains required to determine whether the one-edge post-ack margin is sufficient for OUT-005's ghosting workload."
+
+- record_id: OUT-007
+  kind: INTERFACE
+  component_id: OUT
+  title: "PRESENT waits for ascal's output-domain frame retirement acknowledgement"
+  status: DECIDED
+  decided_date: 2026-09-22
+  supersedes: "OUT-006"
+  decision: "sys/ascal.vhd exports a toggle from its output-clock process at the internal output VS boundary where buffered scanout advances to the next frame. sys/sys_top.v synchronizes that toggle into clk_sys and exposes it as FB_RETIRED. rtl/present.sv flips front_sel only on a fresh FB_VBL edge, captures the synchronized retirement level, waits for it to change, and then waits one additional fresh FB_VBL edge before pulsing done. The earlier FB_BASE_LATCHED acknowledgement remains wired for diagnosis but is not used for PRESENT completion."
+  consequence: "PRESENT completion now follows ascal's output-domain frame boundary rather than the Avalon-domain base-latch event, while retaining two-buffer operation and a conservative post-ack interval. FB_RETIRED is a synchronized toggle-level indication, not a pulse. Hardware validation remains required to determine whether this output-domain boundary is late enough to prevent OUT-005 ghosting."
+
+- record_id: OUT-008
+  kind: INTERFACE
+  component_id: OUT
+  title: "PRESENT retirement acknowledgement waits for ascal's output read and copy pipelines to become idle"
+  status: DECIDED
+  decided_date: 2026-09-22
+  supersedes: "OUT-007"
+  decision: "sys/ascal.vhd records the output-domain frame boundary as pending and toggles FB_RETIRED only after the boundary has passed and both o_readlev and o_copylev are zero in the idle display state. This keeps the existing synchronized toggle interface and two-buffer ownership model while preventing the unconditional VS-boundary acknowledgement from claiming retirement early."
+  consequence: "PRESENT no longer completes from the raw output VS boundary alone. The condition is still limited by ascal's counter semantics: because the output process resets these counters at VS, delayed Avalon responses may remain unrepresented, so hardware validation and any further instrumentation must establish whether this is sufficient."
+
+- record_id: OUT-009
+  kind: INTERFACE
+  component_id: OUT
+  title: "PRESENT retirement acknowledgement accounts for outstanding Avalon framebuffer bursts"
+  status: DECIDED
+  decided_date: 2026-09-22
+  supersedes: "OUT-008"
+  decision: "sys/ascal.vhd synchronizes the output-domain frame-boundary toggle into avl_clk, tracks each accepted framebuffer read until its final avl_readdatavalid beat, and toggles FB_RETIRED only after the boundary has been observed with no Avalon response outstanding."
+  consequence: "The retirement handshake now covers delayed memory responses that are invisible to the output-domain read and copy counters. It remains a two-buffer design and retains the existing synchronized toggle interface; hardware validation must determine whether ascal's internal buffer transition introduces any additional ownership interval."
+
+- record_id: OUT-010
+  kind: INTERFACE
+  component_id: OUT
+  title: "PRESENT retirement tracks every outstanding Avalon framebuffer burst"
+  status: DECIDED
+  decided_date: 2026-09-22
+  supersedes: "OUT-009"
+  decision: "sys/ascal.vhd maintains an outstanding-read count in avl_clk, incrementing for each accepted framebuffer read and decrementing only on the final avl_readdatavalid beat, with simultaneous acceptance and completion treated as a net-zero count change. FB_RETIRED is emitted only after the synchronized output boundary and a zero outstanding-read count."
+  consequence: "A first completed burst can no longer clear a shared busy bit while later bursts remain outstanding. The interface and two-buffer model are unchanged; hardware validation remains required."
+
+- record_id: OUT-011
+  kind: INTERFACE
+  component_id: OUT
+  title: "PRESENT retirement requires post-boundary framebuffer-base acceptance"
+  status: DECIDED
+  decided_date: 2026-09-22
+  supersedes: "OUT-010"
+  decision: "sys/ascal.vhd records the output-domain frame boundary, then requires the next synchronized Avalon-domain o_fb_base latch before FB_RETIRED can toggle. The existing outstanding-read counter must also be zero and the Avalon reader idle."
+  consequence: "The retirement acknowledgement cannot complete in the phase gap where output VS has advanced but the Avalon reader still uses the prior framebuffer base. Two-buffer operation and the public FB_RETIRED toggle interface remain unchanged."
+
+- record_id: OUT-012
+  kind: INTERFACE
+  component_id: OUT
+  title: "Host buffer parity is published by the FPGA completion fence"
+  status: DECIDED
+  decided_date: 2026-09-22
+  supersedes: "OUT-011"
+  decision: "rtl/link_fence.sv publishes the completion count in bits 30:0 and the persistent front_sel parity in bit 31 of the existing fence word. lib/noodles_link.c masks the count and initializes each handle's back-buffer parity from the published front bit, so process restarts do not assume buffer A is front."
+  consequence: "A host process can safely reopen the shared link after prior PRESENT commands without drawing into the current scanout surface solely because its local present counter restarted. The completion-count capacity is reduced to 31 bits."
+
 ## 6. Record template
 
 ```yaml
@@ -462,3 +545,9 @@ OUT-005: "OUT-004's single-fresh-vblank-edge PRESENT margin is not reliably suff
 ```yaml
 last_reviewed: 2026-09-21
 ```
+# DDR-005: Paired full-word SOLID_FILL writes
+
+- status: DECIDED
+- component: DDR / BLIT
+- decision: "SOLID_FILL may use an aligned 64-bit DDRAM write containing two identical 32-bit pixels when the destination span permits it. The generic 32-bit half-word write remains the fallback for misaligned starts and odd tails. The physical adapter still uses burst count 1; this optimization changes write width, not transaction ordering or framebuffer ownership."
+- consequence: "A full-width 640-pixel framebuffer clear can use one accepted DDRAM write for every two pixels. All existing command fields, fence completion semantics, PRESENT retirement behavior, and two-buffer constraints remain unchanged. The adapter must preserve read priority and steer full-word writes with byte-enable 0xff."

@@ -17,13 +17,15 @@
 // the double-buffer address layout.
 
 module present #(
-    // Empirical retirement margin for ascal's independent output buffering.
-    parameter integer RETIRE_VBLANKS = 3
+    // Keep one fresh video boundary after ascal reports its output-domain
+    // retirement boundary so outstanding activity has an extra interval.
+    parameter integer RETIRE_VBLANKS = 1
 ) (
     input  logic clk,
     input  logic reset,
 
     input  logic fb_vbl,
+    input  logic fb_retired,
 
     input  logic start,
     output logic busy,
@@ -39,9 +41,10 @@ module present #(
     end
     wire vbl_rising = fb_vbl && !fb_vbl_d;
 
-    typedef enum logic [1:0] {IDLE, WAIT_VBL, FINISH} state_t;
+    typedef enum logic [2:0] {IDLE, WAIT_VBL, WAIT_ACK, RETIRE, FINISH} state_t;
     state_t state;
     integer vbl_count;
+    logic ack_baseline;
 
     always_ff @(posedge clk or posedge reset) begin
         if (reset) begin
@@ -58,6 +61,7 @@ module present #(
                     if (start) begin
                         busy      <= 1'b1;
                         vbl_count <= 0;
+                        ack_baseline <= fb_retired;
                         state     <= WAIT_VBL;
                     end
                 end
@@ -71,6 +75,22 @@ module present #(
                     if (vbl_rising) begin
                         if (vbl_count == 0)
                             front_sel <= ~front_sel;
+                        state <= WAIT_ACK;
+                    end
+                end
+
+                WAIT_ACK: begin
+                    if (fb_retired != ack_baseline) begin
+                        vbl_count <= 0;
+                        if (RETIRE_VBLANKS == 0)
+                            state <= FINISH;
+                        else
+                            state <= RETIRE;
+                    end
+                end
+
+                RETIRE: begin
+                    if (vbl_rising) begin
                         if (vbl_count + 1 >= RETIRE_VBLANKS)
                             state <= FINISH;
                         else

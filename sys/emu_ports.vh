@@ -52,6 +52,8 @@ output [11:0] FB_HEIGHT,
 output [31:0] FB_BASE,
 output [13:0] FB_STRIDE,
 input         FB_VBL,
+input         FB_BASE_LATCHED,
+input         FB_RETIRED,
 input         FB_LL,
 output        FB_FORCE_BLANK,
 
