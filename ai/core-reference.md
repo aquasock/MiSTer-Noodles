@@ -62,6 +62,10 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 - component_id: DDR
   name: "DDRAM_* physical bus adapter"
   description: "Translates BLIT's and CMDQ's generic byte-addressed ports onto the framework's real DDRAM_* pins (the F2H SDRAM Avalon-MM bridge into HPS DDR3). Separate from SURF, which is the logical addressing model (byte address + pitch); DDR is the physical wire protocol underneath it."
+
+- component_id: SDR
+  name: "SDRAM_* board controller"
+  description: "Drives the framework's real SDRAM_* pins (the optional MiSTer SDRAM daughterboard/onboard chip, GPIO-wired to FPGA fabric only -- confirmed HPS-invisible, distinct from DDR's HPS-shared F2H DDR3 bridge). Owns a dedicated clk_sdram PLL domain separate from clk_sys. Exists to give latency-sensitive, host-write-once/FPGA-read-many data (sprite source bitmaps) a deterministic-latency path DDR3 cannot offer, at the cost of requiring the optional board."
 ```
 
 ---
@@ -104,6 +108,7 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 | Is it safe to pipeline several commands (including a PRESENT) without fence-waiting each one individually? | LINK component records | LINK-007 |
 | Does OUT-004's single-vblank-edge PRESENT margin actually hold under heavy per-frame draw load? | OUT component records | OUT-005 |
 | When has ascal reached its output-domain frame retirement boundary? | OUT component records | OUT-007 |
+| Does the FPGA's SDRAM board actually reach the HPS/Linux side at all? | SDR component records | SDR-001 |
 
 ---
 
@@ -530,7 +535,16 @@ OUT-005: "OUT-004's single-fresh-vblank-edge PRESENT margin is not reliably suff
   decision: "rtl/link_fence.sv publishes the completion count in bits 30:0 and the persistent front_sel parity in bit 31 of the existing fence word. lib/noodles_link.c masks the count and initializes each handle's back-buffer parity from the published front bit, so process restarts do not assume buffer A is front."
   consequence: "A host process can safely reopen the shared link after prior PRESENT commands without drawing into the current scanout surface solely because its local present counter restarted. The completion-count capacity is reduced to 31 bits."
 
-## 6. Record template
+- record_id: SDR-001
+  kind: ARCHITECTURE
+  component_id: SDR
+  title: "The optional SDRAM board is FPGA-fabric-only; the HPS/Linux side has no path to it"
+  status: DECIDED
+  decided_date: 2026-09-23
+  decision: "The MiSTer SDRAM daughterboard (or onboard-soldered equivalent on some clone boards) is wired to GPIO pins that only reach FPGA fabric logic -- there is no HPS/ARM-side address path to it at all, unlike DDRAM_* (DDR component records), which is HPS-owned DDR3 shared with the FPGA over the F2H bridge. rtl/sdram.sv (vendored from MiSTer-devel/NeoGeo_MiSTer's rtl/sdram.sv) is driven entirely from a dedicated ~100MHz clk_sdram PLL domain (see rtl/pll.v's outclk_1) and its own SDRAM_* pins; nothing about it is visible to lib/noodles_link.c or any other host-side code, and it never will be without new FPGA-side bridging logic that does not exist."
+  consequence: "Any data this project puts in SDRAM must be written there BY THE FPGA, not by the host -- the host can only ever write into DDR3 (as it already does today). This rules out using SDRAM for anything the host needs to update every frame (e.g. sprite_batch.sv's descriptor table, which the host uploads fresh each frame): that data structurally must stay on DDR3. SDRAM is only useful for host-write-once/FPGA-read-many data, e.g. a sprite source bitmap uploaded once at load time then read every frame thereafter by a copy engine -- the FPGA can copy such data from its one-time DDR3 upload location into SDRAM itself, after which only SDRAM is read for that data going forward. This record scopes entry 61/62's SDRAM plan down to sprite-source-bitmap reads only; the descriptor-table read path stays on DDR3 and gets its own separate improvement path (a staging-buffer bulk read, not a memory-technology change) if pursued."
+
+
 
 ```yaml
 - record_id: "<COMPONENT>-<NNN>"

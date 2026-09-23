@@ -11,3 +11,4 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/link_ring.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/link_fence.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/present.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/dbg_present_probe.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram.sv

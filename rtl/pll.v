@@ -9,7 +9,7 @@ module pll (
 		input  wire  refclk,   //  refclk.clk
 		input  wire  rst,      //   reset.reset
 		output wire  outclk_0, // outclk0.clk
-		// DDR-SDRAM-001: dedicated ~100MHz output for a future FPGA-owned
+		// SDR-001: dedicated ~100MHz output for a future FPGA-owned
 		// SDRAM controller domain, added alongside the existing 20MHz
 		// clk_sys output rather than replacing it -- see core-log entry 61.
 		output wire  outclk_1, // outclk1.clk

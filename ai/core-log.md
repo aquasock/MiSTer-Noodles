@@ -2036,3 +2036,36 @@ Proceed to entry 61's step 2: vendor and adapt an sdram.sv controller (N64_MiSTe
 - [x] Passed
 
 ---
+
+## 63 COMMIT Unreleased ??? 2026-09-23T09:36:06-07:00
+
+#### Coming From:
+
+Unreleased 69ff182
+
+#### Purpose:
+
+Execute step 2 of entry 61's SDRAM plan: vendor and wire in a real SDRAM board controller, driven by step 1's new clk_sdram domain, verified alone (initialization + refresh only, no data path yet) before touching any DDRAM-facing read/write RTL.
+
+#### Outcome:
+
+Added rtl/sdram.sv, vendored unmodified (except fixing CAS_LATENCY at 3 for the 100MHz clk_sdram domain, since the reference file's own comment says 2 for <100MHz/3 for >100MHz) from MiSTer-devel/NeoGeo_MiSTer's rtl/sdram.sv. Wired it into Noodles.sv off clk_sdram, driving real SDRAM_* pins (removing the old blanket 'Z tri-state), with init tied to ~pll_locked and a free-running refresh toggle at the standard 64ms/8192-row cadence -- but its sel/rd/wr/cpsel data-interface inputs are all tied inactive, so nothing reads or writes through it yet. Needed a files.qip fix (not Noodles.qsf) to get Quartus to actually compile the new file -- files.qip, not the .qsf, is where this project's real per-module SYSTEMVERILOG_FILE list lives; discovered via a first failed compile (Error (12006): undefined entity "sdram"). A full quartus_sh --flow compile Noodles then succeeded (0 errors, 73 warnings, worst-case setup +0.441ns / hold +0.251ns -- tighter than step 1's margins but still positive, expected since the SDRAM domain now has real logic in it). Deployed to hardware and reran the sprites-batch stress test twice: an initial run used the wrong invocation (count=64/batches=1, no descriptor-fence contention) and looked like a suspicious 50% fps jump (46fps vs step 1's 30.5fps baseline) with no plausible causal mechanism, since the SDRAM controller carries no sprite data yet. Re-ran with the actually-validated stress config from entry 60 (batches=4, 256 downsampled 24x24 sprites, fence-waited between batches) and got 25.6fps -- consistent with entry 60's established 24.7fps baseline, confirming no regression and no unexplained behavior once the correct test was used. Formalized a new SDR component and its first record, SDR-001, in core-reference.md: the SDRAM board is FPGA-fabric-only (GPIO-wired), with NO path from HPS/Linux at all -- confirmed this step, and consequential: any data placed in SDRAM must be written there by the FPGA itself, never directly by the host, which rules out ever moving sprite_batch.sv's per-frame host-uploaded descriptor table there. Renamed the ad hoc "DDR-SDRAM-001" comment tag used in step 1 to the real SDR-001 record ID throughout (Noodles.sv, rtl/pll.v, rtl/sdram.sv).
+
+#### Next Steps:
+
+Proceed to entry 61's step 3: design and simulate the clk_sys (20MHz) <-> clk_sdram (100MHz) clock-domain-crossing boundary in Verilator, with its own dedicated testbench, before any of sdram.sv's real sel/rd/wr/refresh ports are driven by request logic. Per SDR-001, only sprite-source-bitmap reads are in scope for SDRAM -- do not attempt to route the descriptor table there.
+
+#### Files Modified:
+
+- rtl/sdram.sv
+- Noodles.sv
+- files.qip
+- ai/core-reference.md
+- rtl/pll.v
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---

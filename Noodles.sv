@@ -74,7 +74,6 @@ assign ADC_BUS  = 'Z;
 assign USER_OUT = '1;
 assign {UART_RTS, UART_TXD, UART_DTR} = 0;
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
-assign {SDRAM_DQ, SDRAM_A, SDRAM_BA, SDRAM_CLK, SDRAM_CKE, SDRAM_DQML, SDRAM_DQMH, SDRAM_nWE, SDRAM_nCAS, SDRAM_nRAS, SDRAM_nCS} = 'Z;
 
 assign VGA_SL = 0;
 assign VGA_F1 = 0;
@@ -544,22 +543,87 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 ///////////////////////   CLOCKS   ///////////////////////////////
 
-// DDR-SDRAM-001: clk_sdram is a dedicated ~100MHz domain for a future
-// FPGA-owned SDRAM controller (core-log entry 61's step 1). It is not yet
-// consumed by any logic -- this step only proves the PLL itself locks at
-// the new frequency in isolation before any SDRAM RTL or clock-domain-
-// crossing logic is written. Verified via Noodles.sdc's derive_pll_clocks
-// and a hardware check that PLL_LOCKED style timing closes as expected.
-wire clk_sys, clk_sdram;
+// SDR-001: clk_sdram is a dedicated ~100MHz domain for the FPGA-
+// owned SDRAM controller below (core-log entry 61's step 1 added the
+// clock in isolation; entry 62's step 2 now drives the real sdram module
+// off it, with its data-interface inputs still tied inactive -- see the
+// sdram instance's own comment).
+wire clk_sys, clk_sdram, pll_locked;
 pll pll
 (
 	.refclk(CLK_50M),
 	.rst(0),
 	.outclk_0(clk_sys),
-	.outclk_1(clk_sdram)
+	.outclk_1(clk_sdram),
+	.locked(pll_locked)
 );
 
 wire reset = RESET | status[0] | buttons[1];
+
+// SDR-001 (core-log entry 62, step 2): the local SDRAM board
+// controller, vendored from MiSTer-devel/NeoGeo_MiSTer's rtl/sdram.sv (see
+// rtl/sdram.sv's own header). It is HPS-invisible (GPIO-wired to FPGA
+// fabric only, confirmed this step -- see core-log entry 62's discovery
+// note) and physically separate from DDRAM_*'s DDR3/F2H bridge, so it
+// cannot be reached by the host and never shares an address space with
+// SURF-003's DDR3 window. Its sel/rd/wr/refresh/copy-port inputs are all
+// tied inactive here -- this step only proves the controller initializes
+// and drives real SDRAM_* pins without breaking anything else; nothing
+// depends on it yet. Wiring real sprite-source reads onto it (step 5 of
+// entry 61's plan) needs a CDC boundary (step 3) and an adapter (step 4)
+// first.
+sdram sdram
+(
+	.init    (~pll_locked),
+	.clk     (clk_sdram),
+
+	.SDRAM_DQ  (SDRAM_DQ),
+	.SDRAM_A   (SDRAM_A),
+	.SDRAM_DQML(SDRAM_DQML),
+	.SDRAM_DQMH(SDRAM_DQMH),
+	.SDRAM_BA  (SDRAM_BA),
+	.SDRAM_nCS (SDRAM_nCS),
+	.SDRAM_nWE (SDRAM_nWE),
+	.SDRAM_nRAS(SDRAM_nRAS),
+	.SDRAM_nCAS(SDRAM_nCAS),
+	.SDRAM_CKE (SDRAM_CKE),
+	.SDRAM_CLK (SDRAM_CLK),
+	.SDRAM_EN  (1'b1),
+
+	.sel   (1'b0),
+	.addr  ('0),
+	.dout  (),
+	.din   ('0),
+	.wr    (1'b0),
+	.bs    (2'b00),
+	.rd    (1'b0),
+	.ready (),
+	.refresh(sdram_refresh),
+
+	.cpsel (1'b0),
+	.cpaddr('0),
+	.cpdin ('0),
+	.cprd  (),
+	.cpreq (1'b0),
+	.cpbusy()
+);
+
+// The controller's periodic auto-refresh is host-timed, not self-timed
+// (see rtl/sdram.sv: `if (refresh ^ refresh_old)`) -- toggling on every
+// rising edge of a free-running counter at cycles_per_refresh's own
+// cadence (780 clk_sdram cycles at 100MHz = 7.8us, the standard 64ms/8192-
+// row JEDEC refresh interval) keeps the chip refreshed even while nothing
+// is issuing real reads/writes yet.
+reg [9:0] sdram_refresh_count;
+reg       sdram_refresh;
+always_ff @(posedge clk_sdram) begin
+	if (sdram_refresh_count == 10'd779) begin
+		sdram_refresh_count <= '0;
+		sdram_refresh <= ~sdram_refresh;
+	end else begin
+		sdram_refresh_count <= sdram_refresh_count + 1'b1;
+	end
+end
 
 assign CLK_VIDEO = clk_sys;
 
