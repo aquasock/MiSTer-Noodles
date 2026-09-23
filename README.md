@@ -50,7 +50,10 @@ before the push to know when a specific command actually finished.
 
 The FPGA bitstream itself is a normal Quartus project (`Noodles.qpf`);
 `quartus_sh --flow compile Noodles` produces `output_files/Noodles.rbf` to
-load via the OSD or `/dev/MiSTer_cmd`'s `load_core`.
+load via the OSD or `/dev/MiSTer_cmd`'s `load_core`. See
+[docs/BUILD.md](docs/BUILD.md) for the full build/reproduction procedure and
+[docs/QUALIFICATION.md](docs/QUALIFICATION.md) for what has been validated,
+including a bit-for-bit reproducibility check.
 
 ## Try the host tools
 
