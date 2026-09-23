@@ -2217,3 +2217,64 @@ Step 5b closes out entry 61's SDRAM migration plan for sprite-source-bitmap read
 - [x] Passed
 
 ---
+
+## 68 COMMIT Unreleased d1e9080 2026-09-23T13:20:46-07:00
+
+#### Coming From:
+
+Unreleased 06e4fa8
+
+#### Purpose:
+
+Answer entry 67's open question -- whether the SDRAM-backed 15.1fps was an acceptable final tradeoff or whether the read path could be made faster -- by first investigating why the design was slow at all, rather than assuming the memory technology was the cause.
+
+#### Outcome:
+
+Investigation reframed the problem entirely. The regression was initially explained as "SDRAM is slower than DDR3", which was wrong as a general claim and was corrected: the real causes were implementation-specific (sdram.sv's normal read port never uses its own configured burst-length-4 mode, and sdram_cdc/sdram_adapter are deliberately single-outstanding, so every 16-bit sub-word pays a full serialized clk_sys<->clk_sdram round trip). Looking past the memory path, the deeper ceiling turned out to be clk_sys itself running at only 20MHz, gating cmdq, link_ring, sprite_batch and blit_copy64 -- and, via ddram_adapter.sv's `assign ddram_clk = clk`, the DDR3 Avalon bus as well. Raising it is safe for video because this core uses MISTER_FB scan-out (FB_EN=1), where ascal generates its own output timing rather than requiring a cycle-exact pixel clock. Scoped the ceiling by measurement instead of trial-and-error rebuilds: a 100MHz attempt failed setup at -4.081ns (TNS -8805.792ns), and quartus_sta report_timing -detail full_path against the existing database identified the limit as blit_copy64's read-pointer/key-compare chain into ddram_adapter's wr_data_q -- 9 logic levels, 13.340ns of combinational delay, launched and latched on clk_sys, so a genuine same-domain logic violation rather than a constraint artifact. That puts the as-written ceiling near 71MHz; 65MHz was chosen for margin. The 100MHz build was deployed anyway for evidence and ran, but with visible sprite corruption consistent with the violation. At 65MHz two domains then failed setup, including clk_sdram which had always passed before. Both proved to be constraint artifacts, not logic problems: every clk_sys<->clk_sdram path goes through an sdram_cdc instance, and those crossings had never been constrained. Because both clocks derive from the same PLL/VCO, TimeQuest times them synchronously, and the old 20:100MHz ratio was a clean 1:5 that happened to yield a comfortable 10ns setup relationship and masked the gap entirely; at 65:100 the edges beat against each other and the worst-case relationship collapses to ~0.768ns, which no logic can meet. Since sdram_cdc uses a toggle + 2FF-synchronizer handshake, the correct constraints are false paths on the toggle bits into their first synchronizer stage (metastability being the synchronizer's job) plus bounded max/min delay on the quasi-static addr/data payloads, which are held stable across the handshake rather than sampled on a single edge. Added these to Noodles.sdc, which previously held no core-specific constraints at all. This was a real latent hazard that had been passing on luck of clock ratio. Final build: 0 errors, setup +0.449ns, hold +0.246ns, all TNS 0.000. Hardware: 20.1/20.1/20.1 fps, visually smooth with no corruption, up from 15.1.
+
+#### Next Steps:
+
+65MHz matched the timing-violated 100MHz build's 20.1fps exactly, meaning the fps curve had gone completely flat -- strong evidence the workload was no longer clock bound but memory-latency bound on sdram_cdc's serialized per-word round trips. That pointed directly at revisiting whether SDRAM should be in the sprite read path at all (entry 69).
+
+#### Files Modified:
+
+- Noodles.sdc
+- rtl/pll/pll_0002.v
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
+
+## 69 COMMIT Unreleased 1a79034 2026-09-23T13:38:13-07:00
+
+#### Coming From:
+
+Unreleased d1e9080
+
+#### Purpose:
+
+Act on entry 68's finding that the workload had become memory-latency bound: move sprite_batch's pixel-data rd64 reads back onto ddram_adapter/DDR3, undoing entry 67's step 5b, and measure the two memory paths head-to-head at the new 65MHz clock.
+
+#### Outcome:
+
+Comparison at equal clock settled the question decisively, and not in SDRAM's favour -- but for structural reasons rather than anything inherent to SDRAM. DDR3 here is a 64-bit bus clocked directly by clk_sys (ddram_adapter.sv: `assign ddram_clk = clk`) that already issues real multi-word Avalon bursts, so raising clk_sys to 65MHz scaled its bandwidth 3.25x along with the core logic. The SDRAM path is 16-bit and pays a full serialized sdram_cdc round trip per sub-word, a cost bounded by wall-clock time rather than clk_sys, so it gained almost nothing -- confirmed by SDRAM measuring 20.1fps at both 65MHz and (timing-violated) 100MHz. Reverting the read path required restoring the rd64 arbitration mux in Noodles.sv (rd_sel_batch64 and its ready/data/valid fanout), tying sdram_adapter's client-facing rd64 port inactive as it was in step 4, and dropping stress_demo.c's OP_LOAD_SDRAM preload so descriptors point straight at SPRITE_SRC_ADDR again. The first DDR3 build at 65MHz then failed setup by an extraordinary -25.416ns (TNS -38952.111ns) -- far worse than anything seen before, and traced to rd_head -> rd_len_q inside ddram_adapter with 40.404ns of combinational delay. Root cause was pending_words: a MAX_BURST(16)-iteration always_comb accumulator that walked the descriptor queue from rd_head, summing a 16:1 mux of rd_len_q per iteration into a serial adder chain, recomputed in full every cycle. It had always been this slow; it simply fit under clk_sys's old 50ns period at 20MHz and so never surfaced -- the same class of latent hazard as entry 68's sdram_cdc constraint gap, and the second such bug that raising the clock flushed out. Replaced with a running rsp_committed counter (+admit_words when a descriptor is accepted, -1 when a response word is consumed), which is exactly equivalent because issuing is self-cancelling: a descriptor leaves the pending sum and enters rsp_count by the same head_len, so the total only changes on admit or consume. Underflow is impossible since read_rsp requires rsp_count != 0. That restored +0.291ns setup / +0.205ns hold. SDRAM was left fully instantiated but out of the data path -- sdram.sv, sdram_cdc, sdram_adapter (rd64 tied inactive) and sdram_loader all remain, together ~598 registers or roughly 5% of emu -- kept deliberately so SDRAM stays available as a potential second parallel memory channel rather than a DDR3 replacement. make sim: 13/13 pass, including the wide-row blit_copy64 case that exercises full-depth bursts (max burstcnt 16). Quartus: 0 errors, setup +0.291ns, hold +0.205ns, all TNS 0.000. Resource usage 34% ALMs, 6% block memory, 31% DSP. Hardware: 60.3/60.4/60.4 fps, versus 20.1 on SDRAM at the same clock and 25.9 on the original 20MHz DDR3 baseline. Note that 483 frames in 8.0s is 60.375fps, i.e. this workload is now capped by the 60Hz display (present waits on ascal's vsync acknowledgement) rather than by compute, so any remaining headroom is not observable with this test.
+
+#### Next Steps:
+
+The sprites-batch stress test can no longer measure this core's actual ceiling, since it is vsync-capped; a heavier or unsynchronised benchmark is needed to find the real limit. Attempting more load exposed a separate pre-existing host-side limit: stress-demo at 8 batches (512 descriptors/frame) fails on frame 0 because the CMDQ ring cannot absorb that many descriptors in one frame -- unrelated to the memory path, but currently blocking measurement past 60fps. Also still pending: dbg_present_probe remains instantiated in the build (19 registers) as leftover debug scaffolding and should be removed. Held in reserve rather than pursued: unifying clk_sys and clk_sdram onto a single 100MHz clock net, which would let sdram_cdc be deleted outright (one net makes the domains provably identical rather than merely nominally aligned, since separate PLL output counters still carry real skew) and would match sdram.sv's hardcoded 100MHz timing constants -- contingent on first pipelining blit_copy64's 13.340ns critical path, which the 34% logic utilisation leaves ample room for.
+
+#### Files Modified:
+
+- Noodles.sv
+- rtl/ddram_adapter.sv
+- tools/stress_demo.c
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
