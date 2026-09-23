@@ -1885,3 +1885,32 @@ Treat OUT-005 as resolved; if a future, heavier workload (larger sprite counts, 
 - [x] Passed
 
 ---
+
+## 58 COMMIT Unreleased ??? 2026-09-23T07:35:00-07:00
+
+#### Coming From:
+
+Unreleased 5c2a053
+
+#### Purpose:
+
+Push the 64-sprite stress-demo harder to re-lower fps for further OUT-005-class testing, since the RETIRE_VBLANKS fix raised fps into a range where visual differences are no longer perceptible.
+
+#### Outcome:
+
+`overlap` mode ran cleanly at 22.0fps, giving a working harder-stress option. But `sprites-batch` and `key-checker` both failed deterministically at frame 0 (`present failed` and `ring stuck compositing sprite 62`), which contradicts entry 47's own record of four clean `sprites-batch` trials at `b6834d0`. A three-way bisection using isolated git worktrees ruled out every candidate this log has touched today: reverting today's RETIRE_VBLANKS fix back to 1 in place reproduced the identical failure; rebuilding entry 53's pre-DDR-007 baseline (`403ad01`, DEPTH=8) reproduced it; rebuilding entry 47's exact commit (`b6834d0`) reproduced it again, directly contradicting that entry's own success record. A full power cycle of the MiSTer (not just a `load_core` hot-swap) was tried next to rule out stale hardware state, and the failure persisted unchanged. Finally, the exact ARM binary that was checked into the `b6834d0` commit tree itself (not a locally recompiled one) was deployed and tested against that same core, eliminating any possible toolchain drift, and it failed too, with the same nondeterminism in which subsystem the failure message names (`present failed`, `ring stuck clearing background`, `ring stuck compositing sprite 0`) across otherwise identical runs. `key-checker` itself has never appeared anywhere else in this log, so its failure is not a regression, only a previously untested edge case in the keyed-copy engine's handling of per-pixel-toggling colorkey patterns. `sprites-batch`'s failure is the real puzzle: every variable this log can bisect has now been excluded, so entry 47's four recorded successes could not be reproduced under any tested condition, and the discrepancy remains unexplained rather than resolved. The official DEPTH=16, RETIRE_VBLANKS=0 build was restored to hardware and re-verified at its expected 18.4 to 18.9fps range on the plain `sprites` mode before ending this investigation.
+
+#### Next Steps:
+
+Add sim coverage for the SPRITE_BATCH descriptor path under a full 64-descriptor load and for the keyed-copy engine under a checkerboard colorkey pattern, since neither `sim/tb_blit_copy64.cpp` nor the batch testbenches appear to exercise either case today. Until that lands, treat `sprites-batch` and `key-checker` as known-broken stress-demo modes rather than regressions, and do not cite entry 47's four-trial record as current evidence that the SPRITE_BATCH path works. Continuing this thread should start from simulation, not further hardware bisection, since every environmental and historical variable available on hardware has already been excluded.
+
+#### Files Modified:
+
+- ai/core-log.md
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
