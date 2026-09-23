@@ -14,15 +14,23 @@
 //     bitmap into SDRAM at boot is a separate, later step and will most
 //     likely use sdram.sv's own dedicated "cp" burst-write port rather
 //     than this read adapter.
-//   - rd64_len (burst length) is NOT supported -- every request is
-//     treated as a single 64-bit word, matching sdram_cdc's own
-//     single-outstanding contract. This mirrors this project's own
-//     DDR-003-before-DDR-007 precedent (prove one word at a time first;
-//     add bursting later only if the resulting sprite-read throughput
-//     actually needs it). A request with rd64_len != 1 is still accepted
-//     as a single word -- the extra length is simply ignored -- so a
-//     client written against ddram_adapter's fuller contract does not
-//     hang, it just doesn't get the burst speedup until this is revisited.
+//   - rd64_len (burst length, SDR-004/step 5b) IS supported, but not as a
+//     real Avalon-style burst command the way ddram_adapter.sv issues one
+//     -- sdram_cdc is single-outstanding by design (SDR-002's own header),
+//     so a length-N request here becomes N sequential single-word CDC
+//     round trips instead, each one a full 4-sub-word domain-B sequence,
+//     with the client-facing rd64_ready held low for the WHOLE burst (see
+//     the domain-A burst state machine below). This is required, not
+//     optional: blit_copy64.sv (DDR-007) accepts a burst request once and
+//     then expects exactly rd64_len separate rd64_valid pulses to follow,
+//     with no further rd64_en/rd64_ready handshake in between -- treating
+//     every request as length-1 (this module's original step-4 behavior)
+//     silently stranded blit_copy64's later pairs in a FIFO slot that
+//     never became valid, hanging sprite_batch forever the first time a
+//     real width>2 sprite tried to read through this adapter. The address
+//     for each successive sub-request advances by 8 bytes (one 64-bit
+//     word), mirroring how ddram_adapter's real Avalon burst
+//     auto-increments its own internal address per beat.
 //
 // Domain B (clk_sdram) is a small 4-step sequencer that turns one 64-bit
 // request into four consecutive 16-bit accesses through sdram.sv's normal
@@ -54,7 +62,7 @@ module sdram_adapter #(
 
     input  logic [ADDR_WIDTH-1:0] rd64_addr,
     input  logic                  rd64_en,
-    input  logic [7:0]            rd64_len,   // ignored; see header comment
+    input  logic [7:0]            rd64_len,   // sequential single-word round trips; see header
     output logic                  rd64_ready,
     output logic [63:0]           rd64_data,
     output logic                  rd64_valid,
@@ -70,7 +78,15 @@ module sdram_adapter #(
     input  logic                  sd_ready
 );
 
-    // rd64_len is intentionally unused -- see header comment.
+    // ---- Domain A: burst-to-sequential-round-trips state machine ----
+    // See header comment: a length-N rd64 request is accepted ONCE (the
+    // client never re-strobes rd64_en mid-burst) and must then produce N
+    // separate rd64_valid pulses, one per contiguous 64-bit word, with
+    // rd64_ready held low until the whole burst has round-tripped.
+    typedef enum logic {A_IDLE, A_BURST} a_state_t;
+    a_state_t              a_state;
+    logic [ADDR_WIDTH-1:0] a_next_addr;
+    logic [7:0]            a_words_left;
 
     logic [ADDR_WIDTH-1:0] a_addr_in;
     logic                  a_en_in;
@@ -78,11 +94,50 @@ module sdram_adapter #(
     logic [63:0]           a_data_out;
     logic                  a_valid_out;
 
-    assign a_addr_in  = rd64_addr;
-    assign a_en_in    = rd64_en;
-    assign rd64_ready = a_ready_out;
+    wire [7:0] a_req_len = (rd64_len == 8'd0) ? 8'd1 : rd64_len;
+    // Only accept a brand-new request once fully idle AND the CDC itself
+    // is ready (it always will be here, but this stays correct even if a
+    // future change makes idle-but-still-busy possible).
+    wire a_ready_for_client = (a_state == A_IDLE) && a_ready_out;
+
+    assign a_addr_in  = (a_state == A_IDLE) ? rd64_addr : a_next_addr;
+    assign a_en_in    = (a_state == A_IDLE) ? (rd64_en && a_ready_for_client)
+                                             : (a_words_left != 8'd0);
+    assign rd64_ready = a_ready_for_client;
     assign rd64_data  = a_data_out;
     assign rd64_valid = a_valid_out;
+
+    always_ff @(posedge clk_sys or posedge reset) begin
+        if (reset) begin
+            a_state      <= A_IDLE;
+            a_next_addr  <= '0;
+            a_words_left <= '0;
+        end else begin
+            case (a_state)
+                A_IDLE: if (rd64_en && a_ready_for_client) begin
+                    if (a_req_len > 8'd1) begin
+                        a_next_addr  <= rd64_addr + 32'd8;
+                        a_words_left <= a_req_len - 8'd1;
+                        a_state      <= A_BURST;
+                    end
+                    // a_req_len == 1: stays in A_IDLE -- the single CDC
+                    // round trip already in flight is enough; a_ready_out
+                    // dropping (via busy_a) is what blocks a second
+                    // acceptance until it completes.
+                end
+                A_BURST: if (a_en_in && a_ready_out) begin
+                    if (a_words_left == 8'd1) begin
+                        a_words_left <= 8'd0;
+                        a_state      <= A_IDLE;
+                    end else begin
+                        a_words_left <= a_words_left - 8'd1;
+                        a_next_addr  <= a_next_addr + 32'd8;
+                    end
+                end
+                default: a_state <= A_IDLE;
+            endcase
+        end
+    end
 
     logic [ADDR_WIDTH-1:0] b_addr_out;
     logic                  b_start_out;
@@ -110,7 +165,6 @@ module sdram_adapter #(
     typedef enum logic [2:0] {
         SEQ_IDLE,
         SEQ_ISSUE,
-        SEQ_WAIT_READY_LOW,
         SEQ_WAIT_READY_HIGH,
         SEQ_DONE
     } seq_state_t;
@@ -154,19 +208,34 @@ module sdram_adapter #(
                     end
                 end
                 SEQ_ISSUE: begin
-                    sd_sel    <= 1'b1;
-                    sd_rd     <= 1'b1;
-                    seq_state <= SEQ_WAIT_READY_LOW;
-                end
-                // sdram.sv drops its own `ready` the cycle after accepting
-                // sel&rd, and only re-raises it once dout is valid -- wait
-                // for that low-then-high edge rather than assuming a fixed
-                // latency, since CAS_LATENCY/refresh contention can vary
-                // the real controller's timing cycle to cycle.
-                SEQ_WAIT_READY_LOW: begin
-                    sd_sel <= 1'b0;
-                    sd_rd  <= 1'b0;
-                    if (!sd_ready) seq_state <= SEQ_WAIT_READY_HIGH;
+                    // Hold sel&rd asserted as a LEVEL, not a one-cycle
+                    // pulse, until sd_ready is actually observed to drop
+                    // -- that is sdram.sv's only real acknowledgement
+                    // that our request landed while it happened to be in
+                    // its own STATE_IDLE. A blind one-cycle pulse is NOT
+                    // safe: sdram.sv also silently ignores sel&rd for
+                    // several cycles during its own periodic auto-refresh
+                    // sequence (STATE_RFSH + 5 IDLE_x cycles, driven
+                    // independently by Noodles.sv's free-running refresh
+                    // toggle) and during the loader's copy-port bursts
+                    // (STATE_WAITCP/STATE_CP) -- and, critically, `ready`
+                    // does NOT drop during either of those windows (it
+                    // only drops for real reads/writes), so a request
+                    // that lands there would vanish with zero visible
+                    // sign of rejection. This was a real bug (hung
+                    // sprite_batch on actual hardware within the first
+                    // second, though never observed in sim's mock model,
+                    // which always accepts sel&rd immediately) --
+                    // holding the level until !sd_ready is confirmed
+                    // fixes it unconditionally, regardless of how long
+                    // the controller happens to be busy elsewhere.
+                    sd_sel <= 1'b1;
+                    sd_rd  <= 1'b1;
+                    if (!sd_ready) begin
+                        sd_sel    <= 1'b0;
+                        sd_rd     <= 1'b0;
+                        seq_state <= SEQ_WAIT_READY_HIGH;
+                    end
                 end
                 SEQ_WAIT_READY_HIGH: begin
                     if (sd_ready) begin

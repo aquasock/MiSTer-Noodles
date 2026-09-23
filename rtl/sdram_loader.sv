@@ -153,6 +153,7 @@ module sdram_loader #(
     assign handoff_dst_word = cur_dst_word;
     assign busy = (state_a != A_IDLE);
 
+
     always_ff @(posedge clk or posedge reset) begin
         if (reset) begin
             state_a         <= A_IDLE;
@@ -262,21 +263,44 @@ module sdram_loader #(
             cpbusy_prev <= cpbusy;
 
             case (state_b)
+                // cpreq is held asserted as a LEVEL (not a one-cycle
+                // pulse) until cpbusy is actually observed rising -- the
+                // same fix sdram_adapter.sv's SEQ_ISSUE applies to
+                // sd_sel/sd_rd, and for the identical reason. sdram.sv's
+                // STATE_IDLE only samples/acts on cpreq via an edge
+                // check (`~old_cpreq & cpreq & cpsel`), and old_cpreq
+                // itself is only updated while the controller is
+                // actually sitting in STATE_IDLE's real-idle branch (see
+                // its own always block): during a periodic auto-refresh
+                // (STATE_RFSH/IDLE_x) or a concurrent sdram_adapter read,
+                // STATE_IDLE's else-branch never runs, so old_cpreq is
+                // frozen. A one-cycle cpreq pulse landing entirely inside
+                // one of those windows drops back to 0 before the
+                // controller ever reaches real idle again, and the edge
+                // that would have triggered CMD_ACTIVE is gone forever --
+                // permanently hanging this state (and, transitively,
+                // cmdq.sv's WAIT_DONE, since nothing else ever follows an
+                // OP_LOAD_SDRAM that never completes). Holding cpreq
+                // high is safe here for the same reason it is for
+                // sd_sel/sd_rd: old_cpreq necessarily still lags behind
+                // (frozen at its pre-request value) the first time the
+                // controller reaches true idle after cpreq rises, so the
+                // edge condition fires correctly on that first
+                // opportunity, however long it takes to arrive.
                 B_IDLE: if (b_start) begin
                     cpreq   <= 1'b1;
                     state_b <= B_ISSUE;
                 end
-                B_ISSUE: begin
+                B_ISSUE: if (cpbusy) begin
                     cpreq   <= 1'b0;
                     state_b <= B_WAIT_RISE;
                 end
-                // Robust edge-detection (not a fixed cycle count),
-                // matching sdram_adapter.sv's step-4 methodology: wait
-                // for cpbusy's low-to-high edge (real acceptance), then
-                // its high-to-low edge (the whole burst, including
-                // sdram.sv's internal post-burst idle-wait tail, has
-                // finished).
-                B_WAIT_RISE: if (cpbusy) state_b <= B_WAIT_FALL;
+                // B_WAIT_RISE is now a one-cycle formality (cpbusy is
+                // already high on entry to B_ISSUE's transition above),
+                // kept as its own state so the cpbusy_prev-based
+                // high-to-low edge check below still has a clean prior
+                // sample to compare against.
+                B_WAIT_RISE: state_b <= B_WAIT_FALL;
                 B_WAIT_FALL: if (cpbusy_prev && !cpbusy) begin
                     b_done  <= 1'b1;
                     state_b <= B_IDLE;

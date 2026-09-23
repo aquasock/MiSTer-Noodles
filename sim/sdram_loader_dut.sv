@@ -35,6 +35,17 @@ module sdram_loader_dut (
     input  logic        clk_sdram,
     input  logic         reset_b,
 
+    // SDR-004's refresh-hang fix (sdram_adapter.sv) revealed the same
+    // one-cycle-pulse anti-pattern on this module's own cpreq write
+    // request -- this mock never modeled a "busy elsewhere" window
+    // (sdram.sv's periodic auto-refresh, or a concurrent sdram_adapter
+    // read) either, so it could not have caught it. mock_busy reproduces
+    // that: while asserted, cpreq's rising edge is silently ignored
+    // (old_cpreq is NOT updated, mirroring how sdram.sv's own old_cpreq
+    // only advances inside STATE_IDLE's real-idle branch), exactly like
+    // sdram_adapter_dut.sv's own mock_busy for sd_sel/sd_rd.
+    input  logic         mock_busy,
+
     // Exposed for the testbench to reconstruct exactly what was written.
     output logic         cp_accept_probe,
     output logic [25:0]  cp_addr_probe,
@@ -143,14 +154,16 @@ module sdram_loader_dut (
                 CP_IDLE: begin
                     cpbusy    <= 1'b0;
                     cprd      <= 1'b0;
-                    old_cpreq <= cpreq;
-                    if (~old_cpreq & cpreq & cpsel) begin
-                        cp_addr_probe <= cpaddr;
-                        cp_accept_probe_r <= 1'b1;
-                        cpbusy   <= 1'b1;
-                        cprd     <= 1'b1;
-                        cpcnt    <= 9'd511;
-                        cp_state <= CP_WAITCP;
+                    if (!mock_busy) begin
+                        old_cpreq <= cpreq;
+                        if (~old_cpreq & cpreq & cpsel) begin
+                            cp_addr_probe <= cpaddr;
+                            cp_accept_probe_r <= 1'b1;
+                            cpbusy   <= 1'b1;
+                            cprd     <= 1'b1;
+                            cpcnt    <= 9'd511;
+                            cp_state <= CP_WAITCP;
+                        end
                     end
                 end
                 CP_WAITCP: cp_state <= CP_CP;

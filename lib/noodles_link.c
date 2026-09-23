@@ -22,6 +22,7 @@
 #define NOODLES_OP_BLIT_COPY_KEY 3u
 #define NOODLES_OP_PRESENT 4u
 #define NOODLES_OP_SPRITE_BATCH 5u
+#define NOODLES_OP_LOAD_SDRAM 6u
 
 int noodles_link_open(noodles_link_t *link) {
     memset(link, 0, sizeof(*link));
@@ -108,6 +109,18 @@ int noodles_push_sprite_batch(noodles_link_t *link,
                              (size_t)count * sizeof(*descriptors)) != 0) return -1;
     const uint32_t command[8] = {
         NOODLES_OP_SPRITE_BATCH, NOODLES_SPRITE_DESCRIPTOR_ADDR, 0, count, 0, 0, 0, 0,
+    };
+    return noodles_push_command(link, command);
+}
+
+int noodles_push_load_sdram(noodles_link_t *link, uint32_t sdram_dst_addr,
+                             uint32_t ddr3_src_addr, uint32_t length) {
+    // cmdq.sv's OP_LOAD_SDRAM decode reuses dst_addr/src_addr/color as
+    // SDRAM dest/DDR3 src/byte length respectively (see cmdq.sv's own
+    // header comment) -- dst_pitch/width/height are unused for this
+    // opcode.
+    const uint32_t command[8] = {
+        NOODLES_OP_LOAD_SDRAM, sdram_dst_addr, 0, 0, 0, length, ddr3_src_addr, 0,
     };
     return noodles_push_command(link, command);
 }

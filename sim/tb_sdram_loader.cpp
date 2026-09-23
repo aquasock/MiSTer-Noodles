@@ -16,6 +16,15 @@
 //       pages always written" behavior;
 //   (d) busy/done pulse correctly bracketing the whole multi-page
 //       transfer, and varied DDR3 mock latencies don't break addressing.
+//   (e) a regression test for a real hardware-only hang this project's
+//       sdram_adapter.sv also had (SDR-004/step 5b, core-log entry 67):
+//       the flush side's cpreq is only a one-cycle pulse, which sdram.sv
+//       accepts purely via edge detection against its own old_cpreq --
+//       and old_cpreq itself only advances while the controller is truly
+//       idle. A cpreq pulse landing entirely inside a busy window (real
+//       auto-refresh, or a concurrent sdram_adapter read) vanishes with
+//       no visible rejection, hanging this module forever. mock_busy
+//       reproduces that window; see sdram_loader.sv's own B_ISSUE fix.
 
 #include <cstdint>
 #include <cstdio>
@@ -95,7 +104,7 @@ struct PageCapture {
 // every page/word actually written, then validates page count, addresses,
 // and data against the expected model.
 bool RunOneLoad(Testbench &tb, uint32_t src_addr, uint32_t dst_addr,
-                 uint32_t length, uint8_t ddr_delay) {
+                 uint32_t length, uint8_t ddr_delay, int busy_hold_cycles = 0) {
     Vsdram_loader_dut &dut = tb.dut();
 
     if (dut.busy) {
@@ -108,6 +117,12 @@ bool RunOneLoad(Testbench &tb, uint32_t src_addr, uint32_t dst_addr,
     dut.length         = length;
     dut.ddr_mock_delay = ddr_delay;
     dut.start          = 1;
+    // Hold the mock's copy-port busy window from the very start of the
+    // transfer: the flush side's first cpreq pulse (issued as soon as
+    // the first page's fill loop hands off) must therefore land while
+    // mock_busy is asserted, exactly reproducing the real bug's
+    // vanishing-edge scenario.
+    if (busy_hold_cycles > 0) dut.mock_busy = 1;
     tb.WaitPosedgeA();
     dut.start = 0;
 
@@ -118,8 +133,13 @@ bool RunOneLoad(Testbench &tb, uint32_t src_addr, uint32_t dst_addr,
 
     std::vector<PageCapture> pages;
     bool saw_done = false;
+    int busy_remaining = busy_hold_cycles;
     for (int i = 0; i < 2000000 && !saw_done; ++i) {
         tb.WaitPosedgeB();
+        if (busy_remaining > 0) {
+            --busy_remaining;
+            if (busy_remaining == 0) dut.mock_busy = 0;
+        }
         if (dut.cp_accept_probe) {
             pages.emplace_back();
             pages.back().addr = dut.cp_addr_probe;
@@ -211,6 +231,7 @@ int main(int argc, char **argv) {
     dut.dst_addr = 0;
     dut.length = 0;
     dut.ddr_mock_delay = 0;
+    dut.mock_busy = 0;
     for (int i = 0; i < 8; ++i) tb.WaitPosedgeA();
     for (int i = 0; i < 8; ++i) tb.WaitPosedgeB();
     dut.reset = 0;
@@ -237,6 +258,16 @@ int main(int argc, char **argv) {
                           l.src, l.dst, l.length, l.delay);
             return Fail("sdram_loader page load failed");
         }
+    }
+
+    // Regression test for the real hardware-only hang this session found
+    // (see this file's header and sdram_loader.sv's B_ISSUE comment): a
+    // busy window held from the moment the transfer starts, long enough
+    // to guarantee the first cpreq pulse would have landed inside it
+    // under the old one-cycle-pulse design.
+    if (!RunOneLoad(tb, 0x3140'0000u, 0x0000'0000u, 1024, /*ddr_delay=*/0,
+                     /*busy_hold_cycles=*/50000)) {
+        return Fail("sdram_loader hung across a busy copy-port window");
     }
 
     std::printf(

@@ -98,7 +98,8 @@ uint64_t ExpectedData(uint32_t byte_addr) {
     return data;
 }
 
-bool RunOneRequest(Testbench &tb, uint32_t byte_addr, uint8_t mock_delay) {
+bool RunOneRequest(Testbench &tb, uint32_t byte_addr, uint8_t mock_delay,
+                    int busy_hold_cycles = 0) {
     Vsdram_adapter_dut &dut = tb.dut();
 
     if (!dut.rd64_ready) {
@@ -109,9 +110,32 @@ bool RunOneRequest(Testbench &tb, uint32_t byte_addr, uint8_t mock_delay) {
     dut.rd64_addr  = byte_addr;
     dut.rd64_len   = 1;
     dut.mock_delay = mock_delay;
+    // Simulates a real sdram.sv refresh/copy-port busy window that
+    // happens to overlap the moment our request is first raised: mock_busy
+    // makes the mock ignore sel&rd (without ever dropping sd_ready) for
+    // busy_hold_cycles clk_sdram edges, proving sdram_adapter's sequencer
+    // holds its request as a level and retries rather than assuming a
+    // blind one-cycle pulse is always accepted (the real, hardware-only
+    // bug this regression test guards against -- see sdram_adapter.sv's
+    // SEQ_ISSUE comment).
+    if (busy_hold_cycles > 0) dut.mock_busy = 1;
     dut.rd64_en    = 1;
     tb.WaitPosedgeA();
     dut.rd64_en = 0;
+    for (int i = 0; i < busy_hold_cycles; ++i) {
+        tb.WaitPosedgeB();
+        // The whole point of the regression test: while mock_busy is
+        // asserted, the mock must NEVER accept, no matter how long
+        // sdram_adapter holds sd_sel/sd_rd asserted -- this confirms the
+        // busy window is actually gating anything, rather than the
+        // request already having sailed through before we even started
+        // watching.
+        if (dut.sd_accept_probe) {
+            std::fprintf(stderr, "  mock accepted a request during the busy window\n");
+            return false;
+        }
+    }
+    dut.mock_busy = 0;
 
     if (dut.rd64_ready) {
         std::fprintf(stderr, "  rd64_ready did not drop after an accepted request\n");
@@ -167,6 +191,95 @@ bool RunOneRequest(Testbench &tb, uint32_t byte_addr, uint8_t mock_delay) {
     return true;
 }
 
+// SDR-004/step 5b: a length-N burst is accepted ONCE and must produce N
+// separate rd64_valid pulses, one per contiguous 64-bit word (each 8 bytes
+// past the previous), with rd64_ready staying low for the whole burst --
+// exactly the shape blit_copy64.sv (DDR-007) relies on.
+bool RunBurstRequest(Testbench &tb, uint32_t byte_addr, uint8_t len,
+                      uint8_t mock_delay) {
+    Vsdram_adapter_dut &dut = tb.dut();
+
+    if (!dut.rd64_ready) {
+        std::fprintf(stderr, "  precondition failed: rd64_ready low before burst request\n");
+        return false;
+    }
+
+    dut.rd64_addr  = byte_addr;
+    dut.rd64_len   = len;
+    dut.mock_delay = mock_delay;
+    dut.rd64_en    = 1;
+    tb.WaitPosedgeA();
+    dut.rd64_en = 0;
+
+    if (dut.rd64_ready) {
+        std::fprintf(stderr, "  rd64_ready did not drop after an accepted burst request\n");
+        return false;
+    }
+
+    for (int word = 0; word < len; ++word) {
+        uint32_t word_addr = byte_addr + static_cast<uint32_t>(word) * 8;
+        uint32_t word_base = (word_addr >> 1) & 0x3FFFFFFu;
+        int next_expected = 0;
+        bool saw_valid = false;
+        for (int i = 0; i < 4000 && !saw_valid; ++i) {
+            tb.WaitPosedgeB();
+            if (dut.sd_accept_probe) {
+                if (next_expected >= 4) {
+                    std::fprintf(stderr, "  word %d: observed a 5th sub-word access\n", word);
+                    return false;
+                }
+                uint32_t expected_addr = word_base + next_expected;
+                if (dut.sd_addr_probe != expected_addr) {
+                    std::fprintf(stderr,
+                                  "  word %d sub-word %d addr=0x%08x, expected 0x%08x\n",
+                                  word, next_expected, dut.sd_addr_probe, expected_addr);
+                    return false;
+                }
+                ++next_expected;
+            }
+            // rd64_ready must stay low for every word except possibly the
+            // very last, and even then only once the final response has
+            // actually landed (checked separately below).
+            if (word != len - 1 && dut.rd64_ready) {
+                std::fprintf(stderr, "  rd64_ready rose mid-burst before word %d\n", word);
+                return false;
+            }
+            if (dut.rd64_valid) saw_valid = true;
+        }
+        if (!saw_valid) {
+            std::fprintf(stderr, "  word %d: rd64_valid never observed\n", word);
+            return false;
+        }
+        if (next_expected != 4) {
+            std::fprintf(stderr, "  word %d: only observed %d of 4 sub-word accesses\n",
+                          word, next_expected);
+            return false;
+        }
+        uint64_t expected = ExpectedData(word_addr);
+        uint64_t got = dut.rd64_data;
+        if (got != expected) {
+            std::fprintf(stderr, "  word %d rd64_data=0x%016llx, expected 0x%016llx\n", word,
+                          static_cast<unsigned long long>(got),
+                          static_cast<unsigned long long>(expected));
+            return false;
+        }
+
+        // rd64_valid is a single-cycle pulse but can still read as high for
+        // a couple of iterations of this polling loop; drain it before
+        // starting the next word's search, or that next word's loop could
+        // catch this word's still-falling tail and declare victory with
+        // zero sub-word accesses actually observed.
+        for (int i = 0; i < 4000 && dut.rd64_valid; ++i) tb.WaitPosedgeB();
+    }
+
+    tb.WaitPosedgesA(2);
+    if (!dut.rd64_ready) {
+        std::fprintf(stderr, "  rd64_ready did not return after the full burst\n");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 int main(int argc, char **argv) {
@@ -183,6 +296,7 @@ int main(int argc, char **argv) {
     dut.rd64_addr = 0;
     dut.rd64_len = 1;
     dut.mock_delay = 0;
+    dut.mock_busy = 0;
     for (int i = 0; i < 8; ++i) tb.WaitPosedgeA();
     for (int i = 0; i < 8; ++i) tb.WaitPosedgeB();
     dut.reset = 0;
@@ -210,8 +324,38 @@ int main(int argc, char **argv) {
         }
     }
 
+    const struct { uint32_t addr; uint8_t len; uint8_t delay; } kBurstRequests[] = {
+        {0x3040'0000u, 4, 0},
+        {0x3040'0100u, 2, 3},
+        {0x0000'0000u, 8, 1},
+    };
+
+    for (const auto &req : kBurstRequests) {
+        if (!RunBurstRequest(tb, req.addr, req.len, req.delay)) {
+            std::fprintf(stderr, "  (addr=0x%08x, len=%u, mock_delay=%u)\n", req.addr,
+                          req.len, req.delay);
+            return Fail("sdram_adapter burst request/response round trip failed");
+        }
+    }
+
+    // Regression test for the real hardware-only hang this session found:
+    // sdram_adapter's domain-B sequencer used to pulse sd_sel/sd_rd for
+    // exactly one cycle and assume acceptance, which is unsafe whenever
+    // the real sdram.sv controller happens to be busy elsewhere (periodic
+    // auto-refresh, or the loader's copy-port burst) at that exact
+    // moment -- during those windows sd_ready never drops, so the old
+    // one-shot-pulse design would wait forever for an acceptance signal
+    // that was never coming. Holding the request as a level and retrying
+    // until sd_ready actually drops (this fix) must survive an arbitrarily
+    // long busy window.
+    if (!RunOneRequest(tb, 0x3040'0000u, /*mock_delay=*/2, /*busy_hold_cycles=*/9)) {
+        return Fail("sdram_adapter request did not survive an sd_ready-silent busy window");
+    }
+
     std::printf(
         "PASS: sdram_adapter assembles 64-bit reads from 4 correctly "
-        "ordered/addressed 16-bit sdram.sv-protocol accesses\n");
+        "ordered/addressed 16-bit sdram.sv-protocol accesses, including "
+        "multi-word bursts and a silent (sd_ready-preserving) controller "
+        "busy window\n");
     return 0;
 }

@@ -245,7 +245,7 @@ present #(
 // internally executes many descriptor copies.  Omitting it leaves the host
 // fence unchanged, so sprite-demo's one-descriptor diagnostic waits forever
 // and a following PRESENT can never retire.
-wire cmd_done_pulse = blit_done || copy_done || batch_done || present_done;
+wire cmd_done_pulse = blit_done || copy_done || batch_done || present_done || loader_done;
 
 wire [31:0] fence_wr_addr, fence_wr_data;
 wire        fence_wr_en, fence_wr_ready;
@@ -452,13 +452,18 @@ wire [63:0] adapter_wr64_data = wr_sel_batch ? batch_wr64_data : engine_wr64_dat
 // word it had actually asked for.
 wire        rd_sel_link = link_rd_active;
 wire        rd_sel_batch = !rd_sel_link && batch_rd_active;
-wire        rd_sel_batch64 = rd_sel_batch && batch_rd64_en;
-// SDR-003 (step 5a): sdram_loader's fill side is a 4th rd64-only client
-// (it never uses the 32-bit rd/rd_addr path at all), given lowest
-// priority since it only ever runs in isolation from batch/link per
-// cmdq.sv's one-engine-at-a-time dispatch -- link_ring can still run
-// concurrently (host uploads are independent of engine ops), so it must
-// still take priority over the loader exactly like it does over batch.
+// SDR-004 (step 5b): sprite_batch's pixel-data rd64 reads moved off this
+// mux entirely onto sdram_adapter's own rd64 port (wired directly below,
+// no arbitration needed since it is sdram_adapter's only client) -- only
+// sprite_batch's 32-bit descriptor-table reads (rd_addr/rd_en above)
+// still come through here, per SDR-001's narrowing (descriptor table
+// stays on DDR3, only the sprite source bitmap itself moves to SDRAM).
+// SDR-003 (step 5a): sdram_loader's fill side is a rd64-only client (it
+// never uses the 32-bit rd/rd_addr path at all), given lowest priority
+// since it only ever runs in isolation from batch/link per cmdq.sv's
+// one-engine-at-a-time dispatch -- link_ring can still run concurrently
+// (host uploads are independent of engine ops), so it must still take
+// priority over the loader exactly like it does over batch.
 // Uses loader_rd64_active (spanning REQ+WAIT), not loader_rd64_en (REQ
 // only), for the same reason rd_active exists at all above: rd64_en
 // drops the moment the loader moves into its WAIT state to await
@@ -466,10 +471,10 @@ wire        rd_sel_batch64 = rd_sel_batch && batch_rd64_en;
 // would be silently misrouted or dropped for that response.
 wire        rd_sel_loader64 = !rd_sel_link && !rd_sel_batch && loader_rd64_active;
 wire [31:0] adapter_rd_addr = rd_sel_link ? link_rd_addr : rd_sel_batch ? batch_rd_addr : copy_rd_addr;
-wire [31:0] adapter_rd64_addr = rd_sel_batch64 ? batch_rd64_addr : rd_sel_loader64 ? loader_rd64_addr : 32'b0;
-wire [7:0]  adapter_rd64_len = rd_sel_batch64 ? batch_rd64_len : rd_sel_loader64 ? loader_rd64_len : 8'd1;
+wire [31:0] adapter_rd64_addr = rd_sel_loader64 ? loader_rd64_addr : 32'b0;
+wire [7:0]  adapter_rd64_len = rd_sel_loader64 ? loader_rd64_len : 8'd1;
 wire        adapter_rd_en   = rd_sel_link ? link_rd_en   : (rd_sel_batch ? batch_rd_en : copy_rd_en);
-wire        adapter_rd64_en = rd_sel_batch64 || rd_sel_loader64;
+wire        adapter_rd64_en = rd_sel_loader64;
 wire        adapter_rd_ready, adapter_rd_valid;
 wire [31:0] adapter_rd_data;
 wire        adapter_rd64_ready, adapter_rd64_valid;
@@ -477,15 +482,12 @@ wire [63:0] adapter_rd64_data;
 wire        adapter_idle;
 assign link_rd_ready = rd_sel_link ? adapter_rd_ready : 1'b0;
 assign batch_rd_ready = rd_sel_batch ? adapter_rd_ready : 1'b0;
-assign batch_rd64_ready = rd_sel_batch64 ? adapter_rd64_ready : 1'b0;
 assign loader_rd64_ready = rd_sel_loader64 ? adapter_rd64_ready : 1'b0;
 assign copy_rd_ready = (rd_sel_link || rd_sel_batch) ? 1'b0 : adapter_rd_ready;
 assign link_rd_data  = adapter_rd_data;
 assign link_rd_valid = adapter_rd_valid;
 assign batch_rd_data = adapter_rd_data;
 assign batch_rd_valid = adapter_rd_valid;
-assign batch_rd64_data = adapter_rd64_data;
-assign batch_rd64_valid = rd_sel_batch ? adapter_rd64_valid : 1'b0;
 assign loader_rd64_data = adapter_rd64_data;
 assign loader_rd64_valid = rd_sel_loader64 ? adapter_rd64_valid : 1'b0;
 assign copy_rd_data  = adapter_rd_data;
@@ -648,11 +650,17 @@ sdram sdram
 	.cpbusy(loader_cpbusy)
 );
 
-// SDR-002 (core-log entry 64, step 4): the rd64 client-facing side of
-// sdram_adapter is still tied inactive here (rd64_en=0) -- sdram_loader
-// below writes SDRAM via sdram.sv's separate copy port, not through this
-// adapter's read path, so this step (5a) does not touch it. Rewiring a
-// real client (sprite_batch) onto sdram_adapter's rd64 port is step 5b.
+// SDR-004 (core-log entry 67, step 5b): the rd64 client-facing side of
+// sdram_adapter is now wired directly to sprite_batch's rd64 port --
+// sprite_batch is sdram_adapter's only client, so no arbitration mux is
+// needed here (contrast the ddram_adapter rd64 mux above, which still
+// juggles the loader against nothing else since batch left it). Only the
+// pixel-data reads (blit_copy64's rd64 inside sprite_batch) moved here;
+// sprite_batch's descriptor-table reads (rd_addr/rd_en, 32-bit) are
+// unaffected and remain on ddram_adapter/DDR3, per SDR-001's narrowing.
+// sdram_adapter's own rd64_len bursting support (added this step,
+// SDR-004) is required for this to work at all: blit_copy64 issues
+// DDR-007-style multi-word burst requests, not one word at a time.
 wire        sdram_adapter_sel, sdram_adapter_rd, sdram_adapter_ready;
 wire [26:1] sdram_adapter_addr;
 wire [15:0] sdram_adapter_dout;
@@ -662,12 +670,12 @@ sdram_adapter #(.ADDR_WIDTH(32)) sdram_adapter
 	.clk_sys (clk_sys),
 	.reset   (reset),
 
-	.rd64_addr (32'b0),
-	.rd64_en   (1'b0),
-	.rd64_len  (8'd1),
-	.rd64_ready(),
-	.rd64_data (),
-	.rd64_valid(),
+	.rd64_addr (batch_rd64_addr),
+	.rd64_en   (batch_rd64_en),
+	.rd64_len  (batch_rd64_len),
+	.rd64_ready(batch_rd64_ready),
+	.rd64_data (batch_rd64_data),
+	.rd64_valid(batch_rd64_valid),
 
 	.clk_sdram(clk_sdram),
 	.reset_b  (reset_sdram),
