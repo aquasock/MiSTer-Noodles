@@ -2103,3 +2103,36 @@ Proceed to entry 61's step 4: write sdram_adapter.sv (mirroring ddram_adapter.sv
 
 ---
 
+## 65 COMMIT Unreleased e22bb11 2026-09-23T10:01:48-07:00
+
+#### Coming From:
+
+Unreleased 286f96f
+
+#### Purpose:
+
+Execute step 4 of entry 61's SDRAM plan: write sdram_adapter.sv, wiring sdram_cdc's domain-B side into sdram.sv's real normal-port pins for actual reads, and wire it into Noodles.sv fully inertly (no real client yet), matching this project's own step 1/2 precedent of proving new hardware doesn't regress anything before any consumer uses it.
+
+#### Outcome:
+
+Added rtl/sdram_adapter.sv: a single-outstanding, 64-bit-only rd64 read adapter, deliberately narrower than ddram_adapter.sv (no 32-bit scalar rd port, no write path, rd64_len accepted but ignored/treated as 1 -- no burst support), matching the DDR-003-before-DDR-007 "prove single-outstanding first" precedent already established here. Traced sdram.sv's real normal-port read protocol from its own state machine (sel&rd accepted for one cycle, ready drops one cycle later, re-asserts N cycles later -- CAS-latency-dependent -- with dout valid and holds until the next request) and built a 5-state domain-B sequencer (SEQ_IDLE -> SEQ_ISSUE -> SEQ_WAIT_READY_LOW -> SEQ_WAIT_READY_HIGH -> SEQ_DONE) that performs 4 sequential 16-bit reads and assembles them little-endian into a 64-bit word. The WAIT_READY_LOW/HIGH two-phase design specifically detects the ready low-then-high edge robustly regardless of CAS latency, rather than assuming a fixed countdown. Confirmed sdram.sv also exposes a separate write-only bulk "copy" port (cpsel/cpaddr/cpdin/cprd/cpreq/cpbusy, 512x16-bit words per burst) -- left untouched, likely the right mechanism for a later, not-yet-scoped one-time sprite-bitmap load into SDRAM. Caught and fixed two authoring bugs before ever running the simulator: a duplicate driver on sd_addr (stray leftover assign beside the real combinational address logic) and an address-width mismatch (word_base simplified to a direct b_addr_out[26:1] slice, since sdram.sv's own addr[26:1] is already a byte address with bit 0 dropped -- no shift/multiply needed). Wrote sim/sdram_adapter_dut.sv (a protocol-faithful mock of sdram.sv's real read port: level-held ready, drops on acceptance, re-asserts after a configurable delay with dout valid) and sim/tb_sdram_adapter.cpp (reusing entry 64's dual-independent-clock idiom). First simulation run failed on a data mismatch, root-caused to a testbench bug, not an RTL bug: sdram.sv's real address port is only 26 bits wide (addr[26:1], a 128MB/two-64MB-chip window per the vendored file's own header), so sdram_adapter.sv correctly truncates any client byte address to this window, but the C++ expected-data model used an untruncated DDR3-range test address (0x30400000) and didn't replicate the truncation. Fixed by masking word_base = (byte_addr >> 1) & 0x3FFFFFF in the C++ model; re-ran and the test passed. This truncation behavior is important for step 5+: any real client wired to sdram_adapter must use addresses within this 128MB window, not DDR3-style 0x3000_0000-range addresses. Added a SDRAM_ADAPTER_SIM Makefile target and rtl/sdram_adapter.sv to files.qip; ran the full `make sim` and confirmed all 11 testbenches (10 existing + the new one) pass. Wired sdram_adapter into Noodles.sv fully inertly: added reset_sdram, a standard async-assert/2FF-synchronized-deassert bridge from the general reset signal into clk_sdram, resolving entry 64's open reset-domain-crossing question (kept as a distinct reset domain from sdram.sv's own ~pll_locked-derived init port, since they serve different purposes); replaced sdram's tied-inactive normal-port stubs with real connections to the new sdram_adapter instance; tied sdram_adapter's own rd64_en to 0 so nothing yet issues a real request. Ran a full Quartus rebuild: 0 errors, 74 warnings (baseline 73, +1 expected from the new unused rd64_len etc.), setup slack +0.657ns / hold slack +0.147ns (both positive, timing closes, comparable to step 2's +0.441/+0.251ns margins). This also resolves entry 64's other open question (whether sdram_cdc's synchronizer chains would need explicit set_false_path/set_max_delay constraints in Noodles.sdc): the existing 4-line Noodles.sdc has no such constraints for any of this project's other CDCs either, and TimeQuest's automatic metastability/synchronizer-chain analysis (591 chains found, worst-case MTBF 1e9 years) already covers the new sdram_cdc instance without needing any -- so no .sdc changes were required. Deployed the built .rbf to hardware and ran the stress-demo smoke test (sprites-batch, batches=4): 28.2 fps, no regression -- confirms the new adapter and its plumbing are fully inert as designed, exactly as steps 1-2 predicted for this kind of "wire it in first, prove it's a no-op, then connect a real client" step.
+
+#### Next Steps:
+
+Proceed to entry 61's step 5: rewire sprite_batch.sv's sprite-source-bitmap reads (only -- descriptor table reads stay on DDR3, per SDR-001's narrowing) onto sdram_adapter's rd64 interface in place of ddram_adapter, remembering to translate/relocate the sprite bitmap's load address into sdram_adapter's 128MB address window (not the DDR3 0x3000_0000-range address currently used) and to arrange for the bitmap to actually be loaded into SDRAM (likely via sdram.sv's untouched bulk-copy port, or a simpler one-time normal-port write sequence if the copy port proves unnecessary for a one-shot load) before any read against it can succeed.
+
+#### Files Modified:
+
+- rtl/sdram_adapter.sv
+- sim/sdram_adapter_dut.sv
+- sim/tb_sdram_adapter.cpp
+- Makefile
+- files.qip
+- Noodles.sv
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
