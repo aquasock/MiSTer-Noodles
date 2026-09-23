@@ -1914,3 +1914,36 @@ Add sim coverage for the SPRITE_BATCH descriptor path under a full 64-descriptor
 - [ ] Passed
 
 ---
+
+## 59 COMMIT Unreleased ??? 2026-09-23T08:20:00-07:00
+
+#### Coming From:
+
+Unreleased 0269cd5
+
+#### Purpose:
+
+Root-cause entry 58's unexplained `sprites-batch`/`key-checker` failures via RTL simulation instead of further hardware bisection, since every hardware/historical variable had already been excluded.
+
+#### Outcome:
+
+Read cmdq.sv, sprite_batch.sv, Noodles.sv's read-port muxing, and both copy engines (blit_copy.sv, blit_copy64.sv), and found that neither existing testbench actually exercised sprite_batch.sv's real multi-descriptor sequencing loop end to end: tb_cmdq_batch.cpp only stubs sprite_batch, and tb_blit_copy64.cpp drove blit_copy64 alone at a narrow 8px width that always fit in one DDRAM burst. Added sim/engine_sprite_batch_dut.sv and sim/tb_sprite_batch.cpp, wiring the real sprite_batch module through the real ddram_adapter and reproducing stress_demo.c's exact 64-descriptor, shared-48x48-sprite, colorkey-border pattern -- the first simulation coverage of this path. Running it surfaced a genuine RTL bug in blit_copy64.sv: `reserved_count` had two competing nonblocking assignments in the same always block (`+want_len` on burst-accept, `-1` on pair-retire in a separate case branch), and when both happen on the same cycle -- which only occurs once a row needs 2+ bursts, since FIFO_DEPTH=16 pairs is less than a 48px-wide row's 24 pairs -- only the textually-last assignment took effect, silently dropping the other term and undercounting reserved FIFO slots, letting wr_ptr wrap onto not-yet-drained slots. Fixed by combining both into one assignment. A second corruption pattern that initially looked like a related bug (row 5 showing row 2's data in a new wide-row blit_copy64 test) turned out to be a self-inflicted test-harness address collision -- the new test's destination buffer overlapped its own source buffer at the exact byte where `10 * per-sprite-offset == row pitch` -- and a second, analogous overlap was found and fixed in tb_sprite_batch.cpp's per-descriptor destination spacing. With both test bugs fixed and no further RTL changes, all 9 make sim testbenches pass cleanly, including the new wide-row blit_copy64 case and the full 64-descriptor sprite_batch case. A clean quartus_sh --flow compile Noodles completed in 4m25s with 0 errors, 59 warnings. Deployed to the QMTech MiSTer and ran sprites-batch for 8s (30.7fps, 246 frames) and again for 25s (30.8fps average, 771 frames) with no hang or corruption, and key-checker for 8s (30.3fps, 243 frames) also clean -- both previously-deterministic failures from entry 58 are resolved.
+
+#### Next Steps:
+
+Treat sprites-batch and key-checker as passing stress-demo modes going forward, reversing entry 58's "known-broken" classification now that the actual root cause (the blit_copy64.sv reserved_count race) is identified, fixed, and confirmed on hardware rather than merely worked around. The new sim/tb_sprite_batch.cpp and the wide-row case in sim/tb_blit_copy64.cpp should stay in the permanent make sim suite as regression coverage for this exact multi-burst-per-row FIFO accounting path, since no prior test shape (narrow rows, single descriptors) would have caught it. If a future change to FIFO_DEPTH, burst sizing, or sprite dimensions is made, re-run make sim's sprite_batch and blit_copy64 targets specifically, since they are the only coverage of this race.
+
+#### Files Modified:
+
+- rtl/blit_copy64.sv
+- sim/tb_blit_copy64.cpp
+- sim/engine_sprite_batch_dut.sv
+- sim/tb_sprite_batch.cpp
+- Makefile
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---

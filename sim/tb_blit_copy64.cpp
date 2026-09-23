@@ -265,5 +265,45 @@ int main(int argc, char **argv) {
     std::printf("PASS: keyed blit_copy64 %ux%u, %zu source reads, max burstcnt observed=%u\n",
                 kWidth, kHeight, reads_issued, mem.max_burstcnt());
 
+    // Wide-row run: width=48 (24 rd64 pairs/row) forces a single row's
+    // fetch to split across multiple bursts, since FIFO_DEPTH=16 pairs is
+    // less than a full row -- this is the exact shape sprite_batch's real
+    // 48px sprites hit and that no prior test (kWidth=8, single burst per
+    // row) ever exercised.
+    constexpr uint32_t kWideDstAddr = 0x30020000u;
+    constexpr uint32_t kWideDstPitch = 640 * 4;
+    constexpr uint32_t kWideSrcAddr = 0x30006000u;
+    constexpr uint32_t kWideSrcPitch = 48 * 4;
+    constexpr uint16_t kWideWidth = 48, kWideHeight = 6;
+
+    for (uint32_t row = 0; row < kWideHeight; ++row)
+        for (uint32_t col = 0; col < kWideWidth; ++col)
+            mem.Seed32(kWideSrcAddr + row * kWideSrcPitch + col * 4, SourcePixel(row, col));
+
+    RunCopy(tb, mem, kWideDstAddr, kWideDstPitch, kWideSrcAddr, kWideSrcPitch, kWideWidth,
+            kWideHeight, /*key_enable=*/false, /*key_value=*/0);
+
+    unsigned wide_mismatches = 0;
+    for (uint32_t row = 0; row < kWideHeight; ++row) {
+        for (uint32_t col = 0; col < kWideWidth; ++col) {
+            const uint32_t byte_addr = kWideDstAddr + row * kWideDstPitch + col * 4;
+            const uint32_t word_addr = byte_addr >> 3;
+            const bool upper = (byte_addr >> 2) & 1;
+            const uint64_t word = mem.Word(word_addr);
+            const uint32_t got = upper ? uint32_t(word >> 32) : uint32_t(word);
+            const uint32_t expected = SourcePixel(row, col);
+            if (got != expected && wide_mismatches < 300) {
+                std::fprintf(stderr, "wide-row row %u col %u: expected 0x%08x got 0x%08x\n", row,
+                              col, expected, got);
+                ++wide_mismatches;
+            }
+        }
+    }
+    if (wide_mismatches != 0) {
+        return Fail("wide-row (multi-burst-per-row) copy pixel mismatch");
+    }
+    std::printf("PASS: wide-row blit_copy64 %ux%u (multi-burst rows), max burstcnt observed=%u\n",
+                kWideWidth, kWideHeight, mem.max_burstcnt());
+
     return 0;
 }

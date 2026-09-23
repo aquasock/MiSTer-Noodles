@@ -139,7 +139,6 @@ module blit_copy64 #(
                     end
                     wr_ptr <= wr_ptr + want_len[PTR_W-1:0];
                     pairs_issued <= pairs_issued + 32'(want_len);
-                    reserved_count <= reserved_count + want_len;
                     if (new_col >= width_r) begin
                         col <= 0; row <= row + 1'b1;
                         src_row <= src_row + src_pitch_r;
@@ -157,19 +156,29 @@ module blit_copy64 #(
                         valid_fifo[rd_ptr] <= 1'b0;
                         rd_ptr <= rd_ptr + 1'b1;
                         pair_count <= pair_count - 1'b1;
-                        reserved_count <= reserved_count - 1'b1;
                         pairs_done <= pairs_done + 1'b1;
                         scalar_second <= 1'b0;
                     end
                     2'b11: begin
                         valid_fifo[rd_ptr] <= 1'b0;
                         rd_ptr <= rd_ptr + 1'b1;
-                        reserved_count <= reserved_count - 1'b1;
                         pairs_done <= pairs_done + 1'b1;
                         scalar_second <= 1'b0;
                     end
                     default: pair_count <= pair_count;
                 endcase
+                // reserved_count must reflect BOTH a newly accepted burst
+                // (+want_len) and a pair retiring (-1) even when they land
+                // on the very same cycle -- rd64_en/rd64_ready acceptance
+                // is independent of write_complete timing, so with wide
+                // rows forcing multiple bursts per FIFO_DEPTH window this
+                // coincidence is common, not a corner case. Two separate
+                // nonblocking assignments to reserved_count in different
+                // branches would let one silently clobber the other; this
+                // single combined assignment is the only writer.
+                reserved_count <= reserved_count +
+                                  ((rd64_en && rd64_ready) ? want_len : {LENB{1'b0}}) -
+                                  (write_complete ? {{(LENB-1){1'b0}}, 1'b1} : {LENB{1'b0}});
                 if (scalar_advance)
                     scalar_second <= 1'b1;
                 if (write_complete) begin
