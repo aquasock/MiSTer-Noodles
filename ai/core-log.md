@@ -2069,3 +2069,37 @@ Proceed to entry 61's step 3: design and simulate the clk_sys (20MHz) <-> clk_sd
 - [x] Passed
 
 ---
+
+## 64 COMMIT Unreleased 286f96f 2026-09-23T09:43:04-07:00
+
+#### Coming From:
+
+Unreleased 6ba0569
+
+#### Purpose:
+
+Execute step 3 of entry 61's SDRAM plan: design and simulate the clk_sys <-> clk_sdram clock-domain-crossing bridge in isolation, in Verilator, before wiring any of it into Noodles.sv or driving sdram.sv's real data-interface ports.
+
+#### Outcome:
+
+Added rtl/sdram_cdc.sv: a generic, parameterized single-outstanding CDC bridge using a toggle-and-2FF-synchronizer handshake (not an async FIFO), matching this project's own established "prove single-outstanding first" pattern (DDR-003 before DDR-007's bursting). Address and response-data busses are quasi-static (change at most once per round trip, gated by the a_ready/busy_a interlock) so only the single-bit request/response toggles need 2FF synchronizer treatment; the busses themselves are read directly once the synchronized edge is detected. Built a new dual-independent-clock testbench idiom for this repo (sim/sdram_cdc_dut.sv + sim/tb_sdram_cdc.cpp) -- every prior testbench here is single-clock-domain, so this one steps clk_a and clk_b as two genuinely independent, non-integer-ratio clocks (50 vs 11 time units) so posedges drift through every phase relationship instead of hiding races behind a convenient ratio. The DUT wraps sdram_cdc with a synthetic, testbench-configurable-latency domain-B responder (not a timing model of sdram.sv -- just enough behavior to exercise the handshake at varied round-trip delays, from 0 up to 200 cycles). First simulation run caught a real bug: a_data was re-registered into domain A one cycle after a_valid asserted, so by the time a_data held the correct value, a_valid had already dropped -- a consumer sampling a_valid would see stale/zero data. Fixed by assigning a_data directly (combinationally) from the already-quasi-static data_captured_b register, consistent with the module's own busses-don't-need-synchronizer-flops rationale; re-ran and the full round-trip + busy-masking test suite passed. Added rtl/sdram_cdc.sv to files.qip (for a future Quartus timing pass once step 4 actually instantiates it -- Quartus does not elaborate/timing-check RTL that nothing references yet, so this step's verification is simulation-only, as anticipated). Added a new SDRAM_CDC_SIM target to the Makefile; ran the full `make sim` and confirmed all 10 testbenches (9 existing + the new one) pass.
+
+#### Next Steps:
+
+Proceed to entry 61's step 4: write sdram_adapter.sv (mirroring ddram_adapter.sv's read-interface shape) to wire sdram_cdc's domain-B side into sdram.sv's real sel/addr/rd/ready/dout ports for actual sprite-source-bitmap reads, and resolve the still-open reset-domain-crossing question noted in rtl/sdram_cdc.sv's header (whether clk_sdram's reset_b should be ~pll_locked-derived, a synchronized copy of the general reset signal, or something else) before wiring it into Noodles.sv. Step 4 is also where the deferred static-timing verification of sdram_cdc's synchronizer chains (set_false_path/set_max_delay in Noodles.sdc) actually becomes possible, since Quartus can't check timing on a module nothing instantiates yet.
+
+#### Files Modified:
+
+- rtl/sdram_cdc.sv
+- sim/sdram_cdc_dut.sv
+- sim/tb_sdram_cdc.cpp
+- Makefile
+- files.qip
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
+
