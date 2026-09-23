@@ -544,12 +544,19 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 ///////////////////////   CLOCKS   ///////////////////////////////
 
-wire clk_sys;
+// DDR-SDRAM-001: clk_sdram is a dedicated ~100MHz domain for a future
+// FPGA-owned SDRAM controller (core-log entry 61's step 1). It is not yet
+// consumed by any logic -- this step only proves the PLL itself locks at
+// the new frequency in isolation before any SDRAM RTL or clock-domain-
+// crossing logic is written. Verified via Noodles.sdc's derive_pll_clocks
+// and a hardware check that PLL_LOCKED style timing closes as expected.
+wire clk_sys, clk_sdram;
 pll pll
 (
 	.refclk(CLK_50M),
 	.rst(0),
-	.outclk_0(clk_sys)
+	.outclk_0(clk_sys),
+	.outclk_1(clk_sdram)
 );
 
 wire reset = RESET | status[0] | buttons[1];

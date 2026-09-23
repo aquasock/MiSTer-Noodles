@@ -1977,7 +1977,7 @@ Treat multi-batch sprites-batch stress runs as validated: 256 independently-movi
 
 ---
 
-## 61 COMMIT Unreleased ??? 2026-09-23T09:01:25-07:00
+## 61 COMMIT Unreleased 55d566d 2026-09-23T09:01:25-07:00
 
 #### Coming From:
 
@@ -2003,5 +2003,36 @@ Scoped as a multi-session project, not a single-sitting change, given real hardw
 
 - [ ] Built
 - [ ] Passed
+
+---
+
+## 62 COMMIT Unreleased ??? 2026-09-23T09:10:06-07:00
+
+#### Coming From:
+
+Unreleased 55d566d
+
+#### Purpose:
+
+Execute step 1 of entry 61's SDRAM plan: add a second, dedicated ~100MHz PLL output clock alongside the existing 20MHz clk_sys, verified alone before any SDRAM controller or clock-domain-crossing logic is written.
+
+#### Outcome:
+
+Added an outclk_1 output to rtl/pll.v and its underlying rtl/pll/pll_0002.v (number_of_clocks 1 to 2, output_clock_frequency1 0 MHz to 100.0 MHz, fixed the resulting outclk concatenation to {outclk_1, outclk_0} since Verilog concatenation is MSB-first). 100MHz was chosen to match the range other MiSTer cores' SDR SDRAM controllers actually run at (85-140MHz is typical), since clk_sys's own 20MHz would be slower than DDR3 and defeat the entire point of moving to SDRAM. Wired the new output into Noodles.sv as clk_sdram, an as-yet-unconsumed net -- this step deliberately proves only that the PLL locks and closes timing at the new frequency, not that anything uses it yet. A full quartus_sh --flow compile Noodles finished in 4m21s with 0 errors, 61 warnings (2 more than the prior 59-warning baseline, expected from the added output), worst-case setup slack +0.682ns and hold +0.207ns, both positive. make sim's full 9-target suite still passes unchanged, as expected since no core logic changed. Deployed the resulting rbf to the QMTech MiSTer and ran stress-demo's sprites-batch mode for 8s: 245 frames, 30.5fps average, no hang or corruption -- confirms the added PLL output doesn't destabilize the design at runtime, not just in static timing analysis. Corrected a line-ending regression the edit introduced in rtl/pll.v (the file uses CRLF; the edit tool had flattened it to LF) before committing, to avoid an unnecessary whole-file diff and stay consistent with entry a6b2bd0's .gitattributes-enforced byte-identical checkout guarantee.
+
+#### Next Steps:
+
+Proceed to entry 61's step 2: vendor and adapt an sdram.sv controller (N64_MiSTer's or Gameboy_MiSTer's as a base, or NeoGeo_MiSTer's burst-capable variant if per-word SDR latency proves too slow for sprite-bitmap read throughput). Step 3 (clk_sys-to-clk_sdram clock-domain-crossing design and simulation) must be done before any DDRAM-facing RTL is touched, per entry 61's explicit ordering -- do not skip ahead to rewiring blit_copy64.sv/sprite_batch.sv's read ports before that CDC boundary is proven safe in simulation.
+
+#### Files Modified:
+
+- rtl/pll.v
+- rtl/pll/pll_0002.v
+- Noodles.sv
+
+#### Status:
+
+- [x] Built
+- [x] Passed
 
 ---
