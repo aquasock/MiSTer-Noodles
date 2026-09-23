@@ -24,13 +24,16 @@
 //
 // Usage, as root on the MiSTer:
 //   ./stress-demo [sprite.bmp] [count] [seconds] [mode] [batches]
-// mode is "sprites" (default), "sprites-batch", "fixed", "overlap", "plain", "key-never", "key-all", "key-checker", "clear",
+// mode is "sprites" (default), "sprites-batch", "blit-bench", "fixed", "overlap", "plain", "key-never", "key-all", "key-checker", "clear",
 // "present", or "static". The latter
 // modes isolate framebuffer clearing and PRESENT/scanout from compositing.
-// batches (sprites-batch mode only, default 1, max 8) issues that many
+// batches (sprites-batch/blit-bench only, default 1, max 8) issues that many
 // independent 64-descriptor CMDQ batches per frame -- purely to multiply
 // compositing load for harder stress testing once 64 sprites alone no
 // longer lowers fps enough to be useful.
+// blit-bench issues no PRESENT at all, so unlike every other mode it is not
+// capped by the 60Hz vblank-synced flip and reports the engine's real
+// throughput (batches/s, sprites/s, Mpixel/s).
 
 #define _POSIX_C_SOURCE 199309L
 #include <stdio.h>
@@ -201,6 +204,22 @@ int main(int argc, char **argv) {
     int do_clear = do_sprites || do_sprites_batch || do_fixed || do_overlap || do_plain || strcmp(mode, "clear") == 0;
     int do_present_only = strcmp(mode, "present") == 0;
     int do_static = strcmp(mode, "static") == 0;
+    // blit-bench measures raw blit throughput with no PRESENT at all.
+    // Every other sprite mode issues a PRESENT per frame, and present.sv
+    // synchronizes the flip to vblank, so those modes cannot report more
+    // than the display's 60Hz no matter how fast the engine actually is
+    // (SDR-007 measured exactly 60.375fps, i.e. pinned to the refresh).
+    // This mode pushes the same descriptor batches and waits only on the
+    // LINK-005 fence for the batches themselves to retire, so the number
+    // it reports is the engine's real completion rate.
+    int do_blit_bench = strcmp(mode, "blit-bench") == 0;
+    if (do_blit_bench) {
+        if (batches < 1 || batches > MAX_BATCHES) {
+            fprintf(stderr, "batches must be 1-%d\n", MAX_BATCHES);
+            return 1;
+        }
+        count = MAX_SPRITES * batches;
+    }
     // sprites-batch is intentionally the full approved 64-entry workload
     // per batch; its descriptor upload is 2 KiB at the reserved address
     // after the ring. `batches` multiplies how many independent 64-entry
@@ -214,10 +233,10 @@ int main(int argc, char **argv) {
     }
 
     if ((!do_sprites && !do_sprites_batch && !do_fixed && !do_overlap && !do_plain && !do_key_never && !do_key_all && !do_key_checker && !do_clear &&
-         !do_present_only && !do_static) ||
+         !do_present_only && !do_static && !do_blit_bench) ||
         ((do_sprites || do_fixed || do_overlap || do_plain || do_key_never || do_key_all || do_key_checker) &&
          (count < 1 || count > MAX_SPRITES))) {
-        fprintf(stderr, "mode must be sprites, sprites-batch, fixed, overlap, plain, key-never, key-all, key-checker, clear, present, or static; count 1-%d\n",
+        fprintf(stderr, "mode must be sprites, sprites-batch, blit-bench, fixed, overlap, plain, key-never, key-all, key-checker, clear, present, or static; count 1-%d\n",
                 MAX_SPRITES);
         return 1;
     }
@@ -246,7 +265,7 @@ int main(int argc, char **argv) {
     // fraction would ever be visible at once, making "N independently
     // bouncing sprites" misleading for high counts. Downsample once on the
     // host, before upload, to keep total coverage under half the buffer.
-    if (do_sprites_batch && batches > 1) {
+    if ((do_sprites_batch || do_blit_bench) && batches > 1) {
         const uint64_t buffer_area = (uint64_t)NOODLES_BUFFER_WIDTH * NOODLES_BUFFER_HEIGHT;
         const uint32_t target_side = isqrt32((buffer_area / 2) / (uint64_t)count);
         uint32_t new_w = target_side < sprite_w ? target_side : sprite_w;
@@ -326,6 +345,7 @@ int main(int argc, char **argv) {
 
     printf("mode=%s, %s for %.1fs...\n", mode,
            do_sprites ? "bouncing sprites" : do_sprites_batch ? (batches == 1 ? "64-sprite descriptor batches" : "multi-batch descriptor stress") :
+           do_blit_bench ? "raw blit throughput (no PRESENT, not vsync-capped)" :
            do_fixed ? "fixed sprites" :
                         do_overlap ? "fixed overlapping sprites" :
                         do_plain ? "plain copies" :
@@ -359,6 +379,76 @@ int main(int argc, char **argv) {
             noodles_link_close(&link);
             return 0;
         }
+    }
+
+    if (do_blit_bench) {
+        // Pure engine throughput: no PRESENT, so nothing here is gated on
+        // vblank. Draw into the back buffer only; it is never flipped to,
+        // so the displayed image simply stays as-is while this runs.
+        //
+        // Descriptors are static across iterations (no per-frame sprite
+        // motion) so that the measured rate reflects blitting alone rather
+        // than host-side bookkeeping. Only ONE batch is in flight at a time,
+        // waited to completion via the fence before the next is pushed --
+        // sprite_batch's descriptor table lives at one fixed DRAM address
+        // (see the note above push_batch_retry), so pushing a second batch
+        // before the first retires would overwrite descriptors still being
+        // consumed. That serialization is also what makes the number
+        // meaningful: each iteration is a full, completed batch.
+        // Must be the live back buffer, not a hardcoded constant: which of
+        // A/B is currently back depends on the parity the FPGA came up with.
+        const uint32_t back = noodles_link_back_buffer(&link);
+        noodles_sprite_descriptor_t descriptors[MAX_SPRITES];
+        for (int j = 0; j < MAX_SPRITES; ++j) {
+            descriptors[j].dst_addr = back + (uint32_t)sprites[j].y * NOODLES_BUFFER_PITCH +
+                                      (uint32_t)sprites[j].x * 4;
+            descriptors[j].dst_pitch = NOODLES_BUFFER_PITCH;
+            descriptors[j].width = sprite_w;
+            descriptors[j].height = sprite_h;
+            descriptors[j].colorkey = colorkey;
+            descriptors[j].src_addr = SPRITE_SRC_ADDR;
+            descriptors[j].src_pitch = sprite_pitch;
+            descriptors[j].flags = 1;
+        }
+
+        double b_start = now_s();
+        long done_batches = 0;
+        int bench_failed = 0;
+        while (now_s() - b_start < run_seconds) {
+            for (int b = 0; b < batches; ++b) {
+                if (push_batch_retry(&link, descriptors, MAX_SPRITES)) {
+                    fprintf(stderr, "blit-bench: ring stuck uploading batch\n");
+                    bench_failed = 1;
+                    break;
+                }
+                const uint32_t target = link.done_baseline + link.submitted;
+                if (wait_for_fence(&link, target)) {
+                    fprintf(stderr, "blit-bench: batch never retired "
+                            "(baseline=%u submitted=%u target=%u done=%u)\n",
+                            link.done_baseline, link.submitted, target,
+                            noodles_link_done_count(&link));
+                    bench_failed = 1;
+                    break;
+                }
+                ++done_batches;
+            }
+            if (bench_failed) break;
+        }
+
+        double b_elapsed = now_s() - b_start;
+        double px = (double)done_batches * MAX_SPRITES * (double)sprite_w * (double)sprite_h;
+        printf("done -- %ld batches (%ld sprites, %.0f px) in %.1fs\n",
+               done_batches, done_batches * MAX_SPRITES, px, b_elapsed);
+        printf("  %.1f batches/s, %.1f sprites/s, %.2f Mpixel/s%s\n",
+               done_batches / b_elapsed, (done_batches * (double)MAX_SPRITES) / b_elapsed,
+               px / b_elapsed / 1e6, bench_failed ? " -- STOPPED EARLY" : "");
+        // Equivalent frame rate at this test's own per-frame sprite count,
+        // for direct comparison against the vsync-capped sprites-batch
+        // number (which cannot exceed the 60Hz refresh).
+        printf("  equivalent %.1f fps at %d sprites/frame\n",
+               (done_batches / b_elapsed) / (double)batches, MAX_SPRITES * batches);
+        noodles_link_close(&link);
+        return bench_failed;
     }
 
     double t_start = now_s();
