@@ -50,7 +50,14 @@ module cmdq #(
 
     output logic                  present_start,
     input  logic                  present_busy,
-    input  logic                  present_done
+    input  logic                  present_done,
+
+    output logic                   loader_start,
+    output logic [ADDR_WIDTH-1:0]  loader_src_addr,
+    output logic [ADDR_WIDTH-1:0]  loader_dst_addr,
+    output logic [ADDR_WIDTH-1:0]  loader_length,
+    input  logic                   loader_busy,
+    input  logic                   loader_done
 );
 
     // Command slot layout (32 bytes / 256 bits), all fields plain uint32:
@@ -62,12 +69,18 @@ module cmdq #(
     //   [191:160] color                          (SOLID_FILL only)
     //                                             (BLIT_COPY_KEY: colorkey value)
     //   [223:192] src_addr                       (BLIT_COPY/BLIT_COPY_KEY only)
+    //                                             (LOAD_SDRAM: DDR3 source addr)
     //   [255:224] src_pitch (only [15:0] used)    (BLIT_COPY/BLIT_COPY_KEY only)
+    // LOAD_SDRAM (SDR-003) repurposes dst_addr as the SDRAM destination
+    // byte address (must be page-aligned, see sdram_loader.sv's header)
+    // and color as the 32-bit byte length to copy; dst_pitch/width/height
+    // are unused.
     localparam logic [7:0] OP_SOLID_FILL    = 8'h01;
     localparam logic [7:0] OP_BLIT_COPY     = 8'h02;
     localparam logic [7:0] OP_BLIT_COPY_KEY = 8'h03;
     localparam logic [7:0] OP_PRESENT       = 8'h04;
     localparam logic [7:0] OP_SPRITE_BATCH  = 8'h05;
+    localparam logic [7:0] OP_LOAD_SDRAM    = 8'h06;
 
     wire [7:0]  op          = cmd_data[7:0];
     wire [31:0] c_dst_addr  = cmd_data[63:32];
@@ -81,15 +94,17 @@ module cmdq #(
     typedef enum logic {IDLE, WAIT_DONE} state_t;
     state_t state;
 
-    typedef enum logic [1:0] {ENGINE_BLIT, ENGINE_COPY, ENGINE_PRESENT, ENGINE_BATCH} engine_t;
+    typedef enum logic [2:0] {ENGINE_BLIT, ENGINE_COPY, ENGINE_PRESENT, ENGINE_BATCH, ENGINE_LOAD} engine_t;
     engine_t active_engine;
     logic engine_done_seen;
     wire engine_busy = (active_engine == ENGINE_COPY)    ? copy_busy :
                         (active_engine == ENGINE_PRESENT) ? present_busy :
-                        (active_engine == ENGINE_BATCH) ? batch_busy : blit_busy;
+                        (active_engine == ENGINE_BATCH) ? batch_busy :
+                        (active_engine == ENGINE_LOAD) ? loader_busy : blit_busy;
     wire engine_done = (active_engine == ENGINE_COPY)    ? copy_done :
                         (active_engine == ENGINE_PRESENT) ? present_done :
-                        (active_engine == ENGINE_BATCH) ? batch_done : blit_done;
+                        (active_engine == ENGINE_BATCH) ? batch_done :
+                        (active_engine == ENGINE_LOAD) ? loader_done : blit_done;
 
     always_ff @(posedge clk or posedge reset) begin
         if (reset) begin
@@ -114,11 +129,16 @@ module cmdq #(
             batch_start    <= 1'b0;
             batch_count    <= '0;
             present_start  <= 1'b0;
+            loader_start    <= 1'b0;
+            loader_src_addr <= '0;
+            loader_dst_addr <= '0;
+            loader_length   <= '0;
         end else begin
             blit_start    <= 1'b0;
             copy_start    <= 1'b0;
             present_start <= 1'b0;
             batch_start    <= 1'b0;
+            loader_start   <= 1'b0;
 
             unique case (state)
                 IDLE: begin
@@ -156,6 +176,13 @@ module cmdq #(
                             batch_start <= 1'b1;
                             active_engine <= ENGINE_BATCH;
                             state <= WAIT_DONE;
+                        end else if (op == OP_LOAD_SDRAM) begin
+                            loader_src_addr <= c_src_addr;
+                            loader_dst_addr <= c_dst_addr;
+                            loader_length   <= c_color;
+                            loader_start    <= 1'b1;
+                            active_engine   <= ENGINE_LOAD;
+                            state           <= WAIT_DONE;
                         end
                     end
                 end

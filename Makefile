@@ -55,12 +55,13 @@ BATCH_CMDQ_SIM    := $(SIM_DIR)/cmdq_batch/Vcmdq_batch_dut
 SPRITE_BATCH_SIM  := $(SIM_DIR)/sprite_batch/Vengine_sprite_batch_dut
 SDRAM_CDC_SIM     := $(SIM_DIR)/sdram_cdc/Vsdram_cdc_dut
 SDRAM_ADAPTER_SIM := $(SIM_DIR)/sdram_adapter/Vsdram_adapter_dut
+SDRAM_LOADER_SIM := $(SIM_DIR)/sdram_loader/Vsdram_loader_dut
 
 .PHONY: all host deploy sim clean
 
 all: $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS) $(ARMPRESENTPROBE)
 
-sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(BLIT_COPY_SIM) $(BLIT_COPY64_SIM) $(LINK_RING_SIM) $(LINK_FENCE_SIM) $(PRESENT_SIM) $(BATCH_CMDQ_SIM) $(SPRITE_BATCH_SIM) $(SDRAM_CDC_SIM) $(SDRAM_ADAPTER_SIM)
+sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(BLIT_COPY_SIM) $(BLIT_COPY64_SIM) $(LINK_RING_SIM) $(LINK_FENCE_SIM) $(PRESENT_SIM) $(BATCH_CMDQ_SIM) $(SPRITE_BATCH_SIM) $(SDRAM_CDC_SIM) $(SDRAM_ADAPTER_SIM) $(SDRAM_LOADER_SIM)
 	$(SOLID_FILL_SIM)
 	$(DDRAM_ADAPTER_SIM)
 	$(BLIT_COPY_SIM)
@@ -72,6 +73,7 @@ sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(BLIT_COPY_SIM) $(BLIT_COPY64_SIM) 
 	$(SPRITE_BATCH_SIM)
 	$(SDRAM_CDC_SIM)
 	$(SDRAM_ADAPTER_SIM)
+	$(SDRAM_LOADER_SIM)
 
 $(BATCH_CMDQ_SIM): rtl/cmdq.sv sim/cmdq_batch_dut.sv sim/tb_cmdq_batch.cpp
 	@mkdir -p $(dir $@)
@@ -138,6 +140,12 @@ $(SDRAM_ADAPTER_SIM): rtl/sdram_cdc.sv rtl/sdram_adapter.sv sim/sdram_adapter_du
 	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module sdram_adapter_dut \
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
 		rtl/sdram_cdc.sv rtl/sdram_adapter.sv sim/sdram_adapter_dut.sv sim/tb_sdram_adapter.cpp -o $(notdir $@)
+
+$(SDRAM_LOADER_SIM): rtl/sdram_cdc.sv rtl/sdram_page_buffer.sv rtl/sdram_loader.sv sim/sdram_loader_dut.sv sim/tb_sdram_loader.cpp
+	@mkdir -p $(dir $@)
+	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module sdram_loader_dut \
+		--Wall --Wno-fatal -Wno-DECLFILENAME \
+		rtl/sdram_cdc.sv rtl/sdram_page_buffer.sv rtl/sdram_loader.sv sim/sdram_loader_dut.sv sim/tb_sdram_loader.cpp -o $(notdir $@)
 
 $(ARMLINK): tools/link_push.c lib/noodles_link.c lib/noodles_link.h | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ tools/link_push.c lib/noodles_link.c

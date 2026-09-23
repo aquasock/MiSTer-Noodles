@@ -322,7 +322,13 @@ cmdq cmdq
 	.batch_done     (batch_done),
 	.present_start  (present_start),
 	.present_busy  (present_busy),
-	.present_done  (present_done)
+	.present_done  (present_done),
+	.loader_start   (loader_start),
+	.loader_src_addr(loader_src_addr),
+	.loader_dst_addr(loader_dst_addr),
+	.loader_length  (loader_length),
+	.loader_busy    (loader_busy),
+	.loader_done    (loader_done)
 );
 
 blit blit
@@ -447,11 +453,23 @@ wire [63:0] adapter_wr64_data = wr_sel_batch ? batch_wr64_data : engine_wr64_dat
 wire        rd_sel_link = link_rd_active;
 wire        rd_sel_batch = !rd_sel_link && batch_rd_active;
 wire        rd_sel_batch64 = rd_sel_batch && batch_rd64_en;
+// SDR-003 (step 5a): sdram_loader's fill side is a 4th rd64-only client
+// (it never uses the 32-bit rd/rd_addr path at all), given lowest
+// priority since it only ever runs in isolation from batch/link per
+// cmdq.sv's one-engine-at-a-time dispatch -- link_ring can still run
+// concurrently (host uploads are independent of engine ops), so it must
+// still take priority over the loader exactly like it does over batch.
+// Uses loader_rd64_active (spanning REQ+WAIT), not loader_rd64_en (REQ
+// only), for the same reason rd_active exists at all above: rd64_en
+// drops the moment the loader moves into its WAIT state to await
+// rd64_valid, and if the mux fell through then, adapter_rd64_valid/data
+// would be silently misrouted or dropped for that response.
+wire        rd_sel_loader64 = !rd_sel_link && !rd_sel_batch && loader_rd64_active;
 wire [31:0] adapter_rd_addr = rd_sel_link ? link_rd_addr : rd_sel_batch ? batch_rd_addr : copy_rd_addr;
-wire [31:0] adapter_rd64_addr = rd_sel_batch64 ? batch_rd64_addr : 32'b0;
-wire [7:0]  adapter_rd64_len = rd_sel_batch64 ? batch_rd64_len : 8'd1;
+wire [31:0] adapter_rd64_addr = rd_sel_batch64 ? batch_rd64_addr : rd_sel_loader64 ? loader_rd64_addr : 32'b0;
+wire [7:0]  adapter_rd64_len = rd_sel_batch64 ? batch_rd64_len : rd_sel_loader64 ? loader_rd64_len : 8'd1;
 wire        adapter_rd_en   = rd_sel_link ? link_rd_en   : (rd_sel_batch ? batch_rd_en : copy_rd_en);
-wire        adapter_rd64_en = rd_sel_batch64;
+wire        adapter_rd64_en = rd_sel_batch64 || rd_sel_loader64;
 wire        adapter_rd_ready, adapter_rd_valid;
 wire [31:0] adapter_rd_data;
 wire        adapter_rd64_ready, adapter_rd64_valid;
@@ -460,6 +478,7 @@ wire        adapter_idle;
 assign link_rd_ready = rd_sel_link ? adapter_rd_ready : 1'b0;
 assign batch_rd_ready = rd_sel_batch ? adapter_rd_ready : 1'b0;
 assign batch_rd64_ready = rd_sel_batch64 ? adapter_rd64_ready : 1'b0;
+assign loader_rd64_ready = rd_sel_loader64 ? adapter_rd64_ready : 1'b0;
 assign copy_rd_ready = (rd_sel_link || rd_sel_batch) ? 1'b0 : adapter_rd_ready;
 assign link_rd_data  = adapter_rd_data;
 assign link_rd_valid = adapter_rd_valid;
@@ -467,6 +486,8 @@ assign batch_rd_data = adapter_rd_data;
 assign batch_rd_valid = adapter_rd_valid;
 assign batch_rd64_data = adapter_rd64_data;
 assign batch_rd64_valid = rd_sel_batch ? adapter_rd64_valid : 1'b0;
+assign loader_rd64_data = adapter_rd64_data;
+assign loader_rd64_valid = rd_sel_loader64 ? adapter_rd64_valid : 1'b0;
 assign copy_rd_data  = adapter_rd_data;
 assign copy_rd_valid = adapter_rd_valid;
 
@@ -585,12 +606,12 @@ end
 // note) and physically separate from DDRAM_*'s DDR3/F2H bridge, so it
 // cannot be reached by the host and never shares an address space with
 // SURF-003's DDR3 window. Its normal-port sel/addr/rd/dout/ready pins are
-// now driven by sdram_adapter.sv (core-log entry 64, step 4) rather than
-// tied inactive -- but sdram_adapter's own rd64_en is tied to 0 here, so
-// this step is still inert end-to-end: nothing yet issues a real sprite-
-// source read (that rewiring is step 5 of entry 61's plan). wr/bs/din and
-// the copy-port are still tied inactive; sdram_adapter only implements
-// the read path (see its own header for why).
+// driven by sdram_adapter.sv (core-log entry 64, step 4); its copy port
+// (cpsel/cpaddr/cpdin/cprd/cpreq/cpbusy) is now driven by sdram_loader.sv
+// (SDR-003, step 5a) -- the one-shot DDR3->SDRAM bulk copy needed because
+// this board has no HPS/host write path at all (SDR-001 above). wr/bs/din
+// remain tied inactive; sdram_adapter only implements the read path (see
+// its own header for why).
 sdram sdram
 (
 	.init    (~pll_locked),
@@ -619,19 +640,19 @@ sdram sdram
 	.ready (sdram_adapter_ready),
 	.refresh(sdram_refresh),
 
-	.cpsel (1'b0),
-	.cpaddr('0),
-	.cpdin ('0),
-	.cprd  (),
-	.cpreq (1'b0),
-	.cpbusy()
+	.cpsel (loader_cpsel),
+	.cpaddr(loader_cpaddr),
+	.cpdin (loader_cpdin),
+	.cprd  (loader_cprd),
+	.cpreq (loader_cpreq),
+	.cpbusy(loader_cpbusy)
 );
 
 // SDR-002 (core-log entry 64, step 4): the rd64 client-facing side of
-// sdram_adapter is tied inactive here (rd64_en=0) -- this step only wires
-// the adapter+CDC end-to-end through the real sdram module's normal port
-// and confirms it still builds/boots correctly; no client is rewired onto
-// it yet (that's entry 61's plan step 5).
+// sdram_adapter is still tied inactive here (rd64_en=0) -- sdram_loader
+// below writes SDRAM via sdram.sv's separate copy port, not through this
+// adapter's read path, so this step (5a) does not touch it. Rewiring a
+// real client (sprite_batch) onto sdram_adapter's rd64 port is step 5b.
 wire        sdram_adapter_sel, sdram_adapter_rd, sdram_adapter_ready;
 wire [26:1] sdram_adapter_addr;
 wire [15:0] sdram_adapter_dout;
@@ -656,6 +677,54 @@ sdram_adapter #(.ADDR_WIDTH(32)) sdram_adapter
 	.sd_dout (sdram_adapter_dout),
 	.sd_rd   (sdram_adapter_rd),
 	.sd_ready(sdram_adapter_ready)
+);
+
+// SDR-003 (core-log entry 66, step 5a): the one-shot DDR3 -> SDRAM bulk
+// loader. Triggered by cmdq.sv's new OP_LOAD_SDRAM opcode; its fill side
+// shares ddram_adapter's rd64 port (see rd_sel_loader64 above) and its
+// flush side drives sdram.sv's real copy port directly (wired above,
+// replacing the previously-tied-inactive stubs).
+wire        loader_start, loader_busy, loader_done;
+wire [31:0] loader_src_addr, loader_dst_addr, loader_length;
+wire [31:0] loader_rd64_addr;
+wire        loader_rd64_en, loader_rd64_active;
+wire [7:0]  loader_rd64_len;
+wire        loader_rd64_ready;
+wire [63:0] loader_rd64_data;
+wire        loader_rd64_valid;
+wire        loader_cpsel, loader_cprd, loader_cpreq, loader_cpbusy;
+wire [26:1] loader_cpaddr;
+wire [15:0] loader_cpdin;
+
+sdram_loader #(.ADDR_WIDTH(32)) sdram_loader
+(
+	.clk     (clk_sys),
+	.reset   (reset),
+
+	.start   (loader_start),
+	.src_addr(loader_src_addr),
+	.dst_addr(loader_dst_addr),
+	.length  (loader_length),
+	.busy    (loader_busy),
+	.done    (loader_done),
+
+	.rd64_addr  (loader_rd64_addr),
+	.rd64_en    (loader_rd64_en),
+	.rd64_active(loader_rd64_active),
+	.rd64_len   (loader_rd64_len),
+	.rd64_ready (loader_rd64_ready),
+	.rd64_data  (loader_rd64_data),
+	.rd64_valid (loader_rd64_valid),
+
+	.clk_sdram(clk_sdram),
+	.reset_b  (reset_sdram),
+
+	.cpsel (loader_cpsel),
+	.cpaddr(loader_cpaddr),
+	.cpdin (loader_cpdin),
+	.cprd  (loader_cprd),
+	.cpreq (loader_cpreq),
+	.cpbusy(loader_cpbusy)
 );
 
 // The controller's periodic auto-refresh is host-timed, not self-timed

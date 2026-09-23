@@ -74,7 +74,9 @@ module engine_copy_dut (
         .present_start  (),
         /* verilator lint_on PINCONNECTEMPTY */
         .present_busy   (1'b0),
-        .present_done   (1'b0)
+        .present_done   (1'b0),
+        .loader_start(), .loader_src_addr(), .loader_dst_addr(), .loader_length(),
+        .loader_busy(1'b0), .loader_done(1'b0)
     );
 
     // FILL's write port is never driven in this DUT (blit_start never fires

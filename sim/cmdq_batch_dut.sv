@@ -16,6 +16,8 @@ module cmdq_batch_dut (
         .copy_key_value(), .copy_busy(1'b0), .copy_done(1'b0),
         .batch_start(batch_start), .batch_count(batch_count),
         .batch_busy(batch_busy), .batch_done(batch_done),
-        .present_start(), .present_busy(1'b0), .present_done(1'b0)
+        .present_start(), .present_busy(1'b0), .present_done(1'b0),
+        .loader_start(), .loader_src_addr(), .loader_dst_addr(), .loader_length(),
+        .loader_busy(1'b0), .loader_done(1'b0)
     );
 endmodule

@@ -14,3 +14,5 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/dbg_present_probe.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram_cdc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram_adapter.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram_page_buffer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram_loader.sv
