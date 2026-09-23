@@ -1639,7 +1639,7 @@ Add a focused temporary retirement-gate diagnostic to identify whether delayed r
 
 ---
 
-## 50 COMMIT Unreleased ??? 2026-09-22T20:57:26-07:00
+## 50 COMMIT Unreleased 1313218 2026-09-22T20:57:26-07:00
 
 #### Coming From:
 
@@ -1651,11 +1651,11 @@ Identify which `ascal` retirement predicate blocks the measured multi-frame PRES
 
 #### Outcome:
 
-Plan: extend the temporary retirement probe with a four-bit, per-retirement gate-reason mask accumulated while retirement is pending: base latch absent, outstanding scanout reads nonzero, read-data valid asserted, and Avalon state non-idle. Publish the mask in the unused top nibble of the existing metadata word at `0x30030004`, report it from `present-probe-dump`, and preserve the current 32-bit wait count, missed-boundary count, read-peak count, and lowest-priority write placement. Validate with ARM and host builds, RTL simulation, a full Quartus compile, deployment, and the standard 64-sprite workload to distinguish scanout read drainage from base-latch or Avalon-state stalls.
+Extended the temporary retirement probe with a four-bit, per-retirement gate-reason mask accumulated while retirement is pending: base latch absent, outstanding scanout reads nonzero, read-data valid asserted, and Avalon state non-idle. Published the mask in the unused top nibble of the existing metadata word at `0x30030004`, reported it from `present-probe-dump`, and preserved the current 32-bit wait count, missed-boundary count, read-peak count, and lowest-priority write placement. ARM and host builds, all seven RTL simulations, and the full Quartus compile passed; Quartus reported 0 errors, 60 warnings, 0.661 ns worst-case setup slack, and 0.247 ns hold slack. After loading the RBF through `/dev/MiSTer_cmd`, the standard 64-sprite workload completed 581 frames in 30.0 seconds at 19.3 FPS with no ring-full or fence-timeout errors. The probe captured 300 samples: every sample had a peak of two outstanding reads and gate mask `0xf`; wait time alternated among 1,666,662, 3,333,326, and 4,999,989 cycles with zero, one, or two missed frame boundaries. Because the mask is accumulated across the whole pending interval, `0xf` means all four predicates were observed during delayed retirements, not that all four blocked every cycle; this diagnostic narrows the issue to the multi-condition retirement window but does not isolate the single corrective predicate.
 
 #### Next Steps:
 
-Use the captured gate-reason distribution to select the narrowest corrective path, either scanout/DDRAM arbitration, retirement-handshake sequencing, or a fixed-resolution native timing generator, then remove the temporary diagnostic after the fix is qualified.
+Do not select a corrective RTL change from this aggregate mask alone. Add a narrower phase-specific probe or waveform capture that records each predicate at the retirement boundary and distinguishes the first blocking condition from predicates observed later in the wait window. Keep the current probe available while that diagnostic is designed; remove all temporary instrumentation only after the root cause and a corrective build are qualified.
 
 #### Files Modified:
 
