@@ -2136,3 +2136,43 @@ Proceed to entry 61's step 5: rewire sprite_batch.sv's sprite-source-bitmap read
 - [x] Passed
 
 ---
+
+## 66 COMMIT Unreleased 10e2f5e 2026-09-23T10:55:48-07:00
+
+#### Coming From:
+
+Unreleased e22bb11
+
+#### Purpose:
+
+Execute step 5a of entry 61's SDRAM plan: build the DDR3->SDRAM bulk-copy engine (sdram_loader.sv) that will eventually feed sdram_adapter's read side with real sprite-source-bitmap data, wire it into cmdq.sv (new OP_LOAD_SDRAM opcode) and Noodles.sv (real copy-port pins, DDR3 rd64 mux leg), and prove it hardware-inert before any client actually issues the opcode -- matching this project's repeated "wire it in first, prove no-op, connect a real client next" precedent from steps 1, 2, and 4.
+
+#### Outcome:
+
+Added rtl/sdram_page_buffer.sv and rtl/sdram_loader.sv: a two-page-buffered bulk copier that reads a client-specified DDR3 byte range over a 64-bit rd64 interface (fill side, clk_sys) and flushes each 512-word page out through sdram.sv's previously-untouched bulk copy port (cpsel/cpaddr/cpdin/cprd/cpreq/cpbusy, clk_sdram) via sdram_cdc's existing single-outstanding CDC bridge. Found and fixed a real RTL bug carried over from the prior session: the page-buffer's domain-B read-address prefetch was off-by-one because it reactively re-armed on the external cprd signal's rising edge, which lands one cycle too late relative to the page buffer's own registered read latency. Fixed by re-arming on the loader's own internal state_b==B_IDLE && b_start transition (known one cycle earlier than cprd's external assertion) and unconditionally incrementing while cprd is high (capped at 511), removing the old reactive cprd_prev/since_rise edge-detection scheme entirely. While verifying the fix, hit a second, superficially similar-looking failure (destination address mismatch) that was root-caused to a testbench mock bug, not RTL: sim/sdram_loader_dut.sv's cp_accept_probe was asserted combinationally in the same cycle as the accept decision, while cp_addr_probe was a registered (1-cycle-delayed) capture of that same decision -- so the C++ testbench, sampling both on one clock edge, always paired a fresh accept pulse with the previous page's stale address. Fixed by registering cp_accept_probe as cp_accept_probe_r on the same delayed cycle as cp_addr_probe. Lesson recorded for future debugging: when a combinational and a registered probe are exposed from the same mock, check their cycle alignment before trusting a mismatch as an RTL bug. Added a permanent rd64_active output to sdram_loader.sv (spanning request+wait, mirroring sprite_batch.sv's rd_active convention) specifically to avoid this project's known en-only mux-selector bug class (documented in Noodles.sv) when wiring the new DDR3 read-mux leg. Wired cmdq.sv: new OP_LOAD_SDRAM opcode (0x06) and ENGINE_LOAD case (widening active_engine from logic[1:0] to logic[2:0] to fit), reusing the existing 32-byte slot's dst_addr/src_addr/color fields as SDRAM destination/DDR3 source/byte length respectively (dst_pitch/width/height unused for this opcode). Updated all 4 sim DUT wrappers that instantiate cmdq to keep the changed port list elaborating. Wired Noodles.sv: instantiated sdram_loader (fill side onto the new rd_sel_loader64 DDR3 rd64 mux leg, lowest priority behind link/batch; flush side onto sdram.sv's real copy-port pins, replacing the old tied-inactive stubs); wired loader_* ports into cmdq. Added both new RTL files to files.qip. Ran the full `make sim`: all 12 testbenches pass (11 existing + the new sdram_loader one, 4 cases), no regressions. Full Quartus rebuild: 0 errors, 63 warnings, setup slack +0.747ns / hold slack +0.226ns (both positive, comparable to prior steps' margins). Deployed to hardware and ran the stress-demo smoke test (sprites-batch, batches=4) 3x: 25.5/25.5/25.4 fps -- initially looked like a ~10% regression against the step-4 entry's recorded 28.2/28.4/28.3 fps, with no plausible causal mechanism since the loader is architecturally inert exactly like step 4's adapter was. Investigated via an A/B hardware re-test: rebuilt the pre-step-5a commit (8ed1ffb) from source, archived its .rbf permanently this time (output_files/rbf_archive/step4_sdram_adapter_baseline.rbf, alongside step5a_sdram_loader_wired.rbf, both gitignored/local-only), and re-flashed it to hardware. The unmodified step-4 bitstream now measured 25.9/25.8/25.7 fps under current conditions -- reproducing step 5a's numbers almost exactly. This confirms the fps delta is environmental (thermal/host-load conditions differed from when 28.3fps was originally recorded), not caused by any step 5a RTL change; step 5a is hardware-clean. Established a new standing practice going forward: archive every deployed/tested .rbf into output_files/rbf_archive/ with a descriptive name immediately after a successful build, before the next rebuild can overwrite output_files/Noodles.rbf -- so a comparison baseline is never lost again and a rebuild-from-source is never required just to get an old binary back.
+
+#### Next Steps:
+
+Proceed to entry 61's step 5b: rewire sprite_batch.sv's sprite-source-bitmap reads (descriptor table reads stay on DDR3, per SDR-001) onto sdram_adapter's rd64 interface in place of ddram_adapter, translating/relocating the sprite bitmap's load address into sdram_adapter's 128MB SDRAM address window; update stress-demo/host tooling to issue OP_LOAD_SDRAM (via the new cmdq opcode wired this step) to actually copy the uploaded sprite bitmap from DDR3 into SDRAM before any sdram_adapter read against it can succeed. This is the step where a real fps effect (positive or negative) from moving sprite-source reads off the shared DDR3/HPS bus should finally become observable on hardware.
+
+#### Files Modified:
+
+- rtl/sdram_loader.sv
+- rtl/sdram_page_buffer.sv
+- sim/sdram_loader_dut.sv
+- sim/tb_sdram_loader.cpp
+- Makefile
+- files.qip
+- rtl/cmdq.sv
+- sim/cmdq_batch_dut.sv
+- sim/engine_copy_dut.sv
+- sim/engine_ddram_dut.sv
+- sim/engine_dut.sv
+- Noodles.sv
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
