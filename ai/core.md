@@ -42,6 +42,8 @@ Read this core.md file first. Treat core.md is the primary project-level source 
 
 - The build enviroment consists of Quartus Prime v17.0.2 Lite, and a QMTech MiSTer.
 
+- The online repository should contain the information necessary to recreate a hash verified version of the rbf.
+
 ---
 
 ## Agent Behavior
