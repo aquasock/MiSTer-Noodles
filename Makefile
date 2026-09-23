@@ -53,12 +53,13 @@ LINK_FENCE_SIM    := $(SIM_DIR)/link_fence/Vlink_fence_dut
 PRESENT_SIM       := $(SIM_DIR)/present/Vpresent_dut
 BATCH_CMDQ_SIM    := $(SIM_DIR)/cmdq_batch/Vcmdq_batch_dut
 SPRITE_BATCH_SIM  := $(SIM_DIR)/sprite_batch/Vengine_sprite_batch_dut
+SDRAM_CDC_SIM     := $(SIM_DIR)/sdram_cdc/Vsdram_cdc_dut
 
 .PHONY: all host deploy sim clean
 
 all: $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS) $(ARMPRESENTPROBE)
 
-sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(BLIT_COPY_SIM) $(BLIT_COPY64_SIM) $(LINK_RING_SIM) $(LINK_FENCE_SIM) $(PRESENT_SIM) $(BATCH_CMDQ_SIM) $(SPRITE_BATCH_SIM)
+sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(BLIT_COPY_SIM) $(BLIT_COPY64_SIM) $(LINK_RING_SIM) $(LINK_FENCE_SIM) $(PRESENT_SIM) $(BATCH_CMDQ_SIM) $(SPRITE_BATCH_SIM) $(SDRAM_CDC_SIM)
 	$(SOLID_FILL_SIM)
 	$(DDRAM_ADAPTER_SIM)
 	$(BLIT_COPY_SIM)
@@ -68,6 +69,7 @@ sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(BLIT_COPY_SIM) $(BLIT_COPY64_SIM) 
 	$(PRESENT_SIM)
 	$(BATCH_CMDQ_SIM)
 	$(SPRITE_BATCH_SIM)
+	$(SDRAM_CDC_SIM)
 
 $(BATCH_CMDQ_SIM): rtl/cmdq.sv sim/cmdq_batch_dut.sv sim/tb_cmdq_batch.cpp
 	@mkdir -p $(dir $@)
@@ -122,6 +124,12 @@ $(PRESENT_SIM): rtl/present.sv sim/present_dut.sv sim/tb_present.cpp
 	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module present_dut \
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
 		rtl/present.sv sim/present_dut.sv sim/tb_present.cpp -o $(notdir $@)
+
+$(SDRAM_CDC_SIM): rtl/sdram_cdc.sv sim/sdram_cdc_dut.sv sim/tb_sdram_cdc.cpp
+	@mkdir -p $(dir $@)
+	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module sdram_cdc_dut \
+		--Wall --Wno-fatal -Wno-DECLFILENAME \
+		rtl/sdram_cdc.sv sim/sdram_cdc_dut.sv sim/tb_sdram_cdc.cpp -o $(notdir $@)
 
 $(ARMLINK): tools/link_push.c lib/noodles_link.c lib/noodles_link.h | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ tools/link_push.c lib/noodles_link.c
