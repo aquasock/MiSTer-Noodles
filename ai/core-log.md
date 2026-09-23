@@ -2380,11 +2380,11 @@ Fix the scalar (colorkeyed) write path in blit_copy64.sv, now the worst 100MHz s
 
 #### Outcome:
 
-Pending: wr_en/wr_addr/wr_data are still driven directly combinationally from rd_ptr through the key-compare chain into ddram_adapter's registered wr_data_q, the same bug shape entry 72 fixed twice already. Plan is a matching local skid register (swr_valid/swr_addr/swr_data), staged on scalar_write and driving wr_en/wr_addr/wr_data as its registered outputs, with scalar_second/FIFO retirement moved to stage time rather than wr_ready-accept time, mirroring the paired-write fix.
+Added swr_valid/swr_addr/swr_data, a local skid register mirroring pwr_valid/pwr_addr/pwr_data from entry 72: wr_en/wr_addr/wr_data are now that register's registered outputs rather than combinational off rd_ptr through the key-compare chain, and scalar_second/FIFO retirement (scalar_pair_done/scalar_advance) now trigger at stage time (stage_scalar) rather than at wr_ready-accept time. make sim passed 15/15 with cycle counts unchanged (295745/175526), confirming the change is throughput-neutral. The 3-parallel-seed rebuild (seeds 1/2/3) landed setup slack at -0.223ns, -0.266ns and -0.099ns respectively -- nearly closed, down from entry 72's -1.195ns best, and the remaining worst path (rd_ptr into pairs_done, 7 logic levels, 58% routing) is now entirely local to blit_copy64 rather than crossing a module boundary. Deployed the best seed (-0.099ns) to the QMTech MiSTer and ran the established 128px benchmark: 15.1fps, 227 frames over 15s, stable with no corruption, matching the prior violated-timing measurement as expected since slack has not yet crossed zero.
 
 #### Next Steps:
 
-Simulate, rebuild with the 3-parallel-seed workflow, and compare setup slack against entry 72's -1.195ns best.
+The remaining -0.099ns gap is small enough that seed variance alone (observed range -0.099 to -0.266ns across three seeds) could plausibly close it; try additional seeds, and if none close it, pull the detailed path for rd_ptr->pairs_done to see whether it is the same register-to-register shape as the prior three fixes or a genuinely different bottleneck requiring a different approach.
 
 #### Files Modified:
 
@@ -2392,7 +2392,7 @@ Simulate, rebuild with the 3-parallel-seed workflow, and compare setup slack aga
 
 #### Status:
 
-- [ ] Built
-- [ ] Passed
+- [x] Built
+- [x] Passed
 
 ---

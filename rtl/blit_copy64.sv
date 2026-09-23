@@ -74,6 +74,12 @@ module blit_copy64 #(
     logic pwr_valid;
     logic [ADDR_WIDTH-1:0] pwr_addr;
     logic [63:0] pwr_data;
+    // Registered scalar-write output -- see the comment at stage_scalar
+    // below. Same role as pwr_valid/pwr_addr/pwr_data on the paired-write
+    // side, but for the colorkeyed/misaligned half-word path.
+    logic swr_valid;
+    logic [ADDR_WIDTH-1:0] swr_addr;
+    logic [31:0] swr_data;
 
     wire lower_key = key_enable_r && data_fifo[rd_ptr][31:0] == key_r;
     wire upper_key = key_enable_r && data_fifo[rd_ptr][63:32] == key_r;
@@ -92,17 +98,33 @@ module blit_copy64 #(
                          (dst0_fifo[rd_ptr][2] == 1'b0);
     wire scalar_first_skip = pair_ready && !paired_write &&
                              !scalar_second && lower_key;
-    wire scalar_first_write = pair_ready && !paired_write &&
-                              !scalar_second && !lower_key && wr_ready;
+    // scalar_first_cand/scalar_second_cand deliberately do NOT gate on
+    // wr_ready (unlike the old scalar_first_write/scalar_second_write) --
+    // see the comment at stage_scalar below.
+    wire scalar_first_cand = pair_ready && !paired_write &&
+                              !scalar_second && !lower_key;
     wire scalar_second_skip = pair_ready && !paired_write &&
                               scalar_second && upper_key;
-    wire scalar_second_write = pair_ready && !paired_write &&
-                               scalar_second && !upper_key && wr_ready;
-    wire scalar_write = scalar_first_write || scalar_second_write;
-    wire scalar_pair_done = scalar_second_skip || scalar_second_write ||
-                            (scalar_first_write && upper_key);
+    wire scalar_second_cand = pair_ready && !paired_write &&
+                               scalar_second && !upper_key;
+    wire scalar_write_cand = scalar_first_cand || scalar_second_cand;
+    // stage_scalar/swr_valid/swr_addr/swr_data mirror stage_paired/pwr_*
+    // exactly: the old scalar_first_write/scalar_second_write gated on
+    // wr_ready directly, so wr_en/wr_addr/wr_data were combinational off
+    // rd_ptr through the key-compare chain, all the way into ddram_
+    // adapter's registered wr_addr_q -- the same one-hop register-to-
+    // register path already fixed twice this segment on the read-request
+    // and paired-write ports, just on the scalar (colorkeyed/misaligned)
+    // write port instead. stage_scalar only has to reach the LOCAL
+    // swr_valid/swr_addr/swr_data register; wr_en/wr_addr/wr_data are that
+    // register's registered outputs.
+    wire stage_scalar = scalar_write_cand && (!swr_valid || wr_ready);
+    wire stage_scalar_first = stage_scalar && !scalar_second;
+    wire stage_scalar_second = stage_scalar && scalar_second;
+    wire scalar_pair_done = scalar_second_skip || stage_scalar_second ||
+                            (stage_scalar_first && upper_key);
     wire scalar_advance = scalar_first_skip ||
-                          (scalar_first_write && !upper_key);
+                          (stage_scalar_first && !upper_key);
     // paired_write itself never depended on wr64_ready (unlike the old
     // write_complete gating below), so it is safe to use directly as the
     // "should we stage a paired write" decision.
@@ -184,10 +206,9 @@ module blit_copy64 #(
     assign wr64_addr = pwr_addr;
     assign wr64_data = pwr_data;
     assign wr64_en = pwr_valid;
-    assign wr_addr = scalar_second ? dst1_cur : dst0_fifo[rd_ptr];
-    assign wr_data = scalar_second ? data_fifo[rd_ptr][63:32] :
-                                     data_fifo[rd_ptr][31:0];
-    assign wr_en = scalar_write;
+    assign wr_addr = swr_addr;
+    assign wr_data = swr_data;
+    assign wr_en = swr_valid;
 
     always_ff @(posedge clk or posedge reset) begin
         if (reset) begin
@@ -196,6 +217,7 @@ module blit_copy64 #(
             req_valid <= 0; req_len <= 0; req_addr <= 0;
             want_len_p <= 0; want_len_p_valid <= 0;
             pwr_valid <= 0; pwr_addr <= 0; pwr_data <= 0;
+            swr_valid <= 0; swr_addr <= 0; swr_data <= 0;
             wr_ptr <= 0; rd_ptr <= 0; resp_ptr <= 0; valid_fifo <= 0;
             scalar_second <= 0;
             col <= 0; row <= 0; width_r <= 0; height_r <= 0;
@@ -220,6 +242,7 @@ module blit_copy64 #(
                 req_valid <= 0;
                 want_len_p <= 0; want_len_p_valid <= 0;
                 pwr_valid <= 0;
+                swr_valid <= 0;
                 valid_fifo <= 0; wr_ptr <= 0; rd_ptr <= 0; resp_ptr <= 0;
                 scalar_second <= 0;
                 scalar_tail <= 0;
@@ -278,6 +301,18 @@ module blit_copy64 #(
                 end else if (pwr_valid && wr64_ready) begin
                     // Drained with no new pair to replace it.
                     pwr_valid <= 1'b0;
+                end
+                // Stage a scalar write into the local output register
+                // (swr_valid/swr_addr/swr_data), mirroring pwr_valid above
+                // -- see the comment at stage_scalar.
+                if (stage_scalar) begin
+                    swr_valid <= 1'b1;
+                    swr_addr <= scalar_second ? dst1_cur : dst0_fifo[rd_ptr];
+                    swr_data <= scalar_second ? data_fifo[rd_ptr][63:32] :
+                                                data_fifo[rd_ptr][31:0];
+                end else if (swr_valid && wr_ready) begin
+                    // Drained with no new half-word to replace it.
+                    swr_valid <= 1'b0;
                 end
                 if (rd64_valid) begin
                     data_fifo[resp_ptr] <= rd64_data;
