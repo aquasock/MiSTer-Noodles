@@ -2176,3 +2176,44 @@ Proceed to entry 61's step 5b: rewire sprite_batch.sv's sprite-source-bitmap rea
 - [x] Passed
 
 ---
+
+## 67 COMMIT Unreleased 0cf79e8 2026-09-23T12:22:13-07:00
+
+#### Coming From:
+
+Unreleased c2afe03
+
+#### Purpose:
+
+Execute step 5b of entry 61's SDRAM plan: rewire sprite_batch.sv's sprite-source-bitmap reads onto sdram_adapter's rd64 interface in place of ddram_adapter, add burst support to sdram_adapter.sv to match blit_copy64's multi-word request pattern, wire host tooling to issue OP_LOAD_SDRAM before the stress test runs, and get the whole chain working end-to-end on real hardware.
+
+#### Outcome:
+
+Added multi-sub-word burst support to sdram_adapter.sv's domain-B sequencer (rd64_len now honored instead of always treated as 1, mirroring blit_copy64's existing burst-request pattern from DDR-007). Wired stress-demo/lib/noodles_link to push the new OP_LOAD_SDRAM opcode (wired in entry 66) before the sprites-batch stress test, translating the uploaded sprite bitmap's DDR3 address into sdram_adapter's 128MB SDRAM address window. First hardware test hung completely (0 fps, "sprite batch 0 never completed"), with simulation showing no problem at all -- the mock SDRAM models in sim/sdram_adapter_dut.sv and sim/sdram_loader_dut.sv always accept requests on simplified timing, so they structurally cannot reproduce hardware-only pulse-vs-level bugs. With no SignalTap license available, built a reusable hardware debug-probe methodology instead: expose a module's internal FSM state as output ports (domain-A signals passed through live; domain-B signals latched as sticky "ever happened" flags and crossed into clk_sys via a plain 2FF synchronizer, since sticky levels don't glitch and don't need a full CDC handshake), then a small always-running probe module (dbg_*_probe.sv) publishes this state to a fixed, otherwise-unused DRAM word at a rate-limited cadence with a rolling seq counter, polled by a standalone host C tool mmapping /dev/mem. Wired two such probes in turn, at the bottom of the existing DRAM write-arbitration priority mux so they could never delay a real client's write. The first probe (on sdram_loader.sv) proved the loader completes correctly on hardware in ~0.5s -- validating a write-side cpreq bug fix (holding cpreq as a level until cpbusy rises, rather than a single-cycle pulse that sdram.sv can silently miss under real timing) made earlier in this same investigation. This directly contradicted a temporary stress_demo.c diagnostic that had reported "loader hung," which was root-caused to a separate, real bug: Noodles.sv's cmd_done_pulse (= blit_done || copy_done || batch_done || present_done) never included loader_done, so the host's fence-based done-count could never observe OP_LOAD_SDRAM retiring regardless of whether the loader actually worked -- a host-visibility gap, not a hardware hang. Fixed by adding loader_done to cmd_done_pulse. With that fix in place, the previously-built second probe (on sprite_batch/sdram_adapter's read path, mid-build when the fix was found) was carried through anyway to hardware for full confidence: rebuilt, deployed, and reran the stress test -- it now completed cleanly with no hang, 15.1 fps average, and the probe additionally confirmed every read stage (issue/accepted/done) firing continuously with no stalls. Removed all debug-probe code (rtl/dbg_loader_probe.sv, rtl/dbg_sprite_read_probe.sv, their Noodles.sv wiring and write-arb mux tiers, the debug ports added to sdram_loader.sv/sdram_adapter.sv, tools/peek_loader_dbg.c, tools/peek_sprite_read_dbg.c, the stress_demo.c DIAG block) once root-caused and fixed, per their own "temporary, not intended to stay in the tree" header comments. Ran a full make sim (all 13 testbenches pass, including a new sprite_batch+sdram_adapter integration DUT/testbench added this step) and a final clean Quartus rebuild: 0 errors, 63 warnings, setup slack +0.593ns / hold slack +0.245ns. Deployed to hardware and ran stress-demo sprites-batch 3x: 15.1/15.1/15.1 fps, fully stable -- down from the DDR3-backed baseline (~25.5-25.9fps in entries 65-66), an expected SDRAM-bandwidth tradeoff of moving sprite-source reads onto the narrower/higher-latency SDRAM path, not a regression. Also flagged in passing: a Quartus build partway through this investigation showed a -0.067ns setup slack violation, traced via report_timing to a path entirely inside ascal's HDMI luma-scaler pipeline (pll_hdmi clock domain) -- unrelated to any SDRAM/debug-probe RTL, not reproduced in the final clean build, noted for possible future investigation but not pursued further.
+
+#### Next Steps:
+
+Step 5b closes out entry 61's SDRAM migration plan for sprite-source-bitmap reads. Consider whether the ~15.1fps SDRAM-backed rate is acceptable as a final tradeoff or whether a future step should explore reducing SDRAM read latency/contention (e.g. wider bursts, prefetching, or revisiting whether descriptor-table reads could also benefit from a similar migration). Separately, the unrelated ascal HDMI-scaler timing observation above should be revisited if it recurs in a future build.
+
+#### Files Modified:
+
+- rtl/sdram_adapter.sv
+- rtl/sdram_loader.sv
+- sim/sdram_adapter_dut.sv
+- sim/sdram_loader_dut.sv
+- sim/tb_sdram_adapter.cpp
+- sim/tb_sdram_loader.cpp
+- sim/engine_sprite_batch_sdram_dut.sv
+- sim/tb_sprite_batch_sdram.cpp
+- Makefile
+- Noodles.sv
+- lib/noodles_link.c
+- lib/noodles_link.h
+- tools/stress_demo.c
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
