@@ -1976,3 +1976,32 @@ Treat multi-batch sprites-batch stress runs as validated: 256 independently-movi
 - [x] Passed
 
 ---
+
+## 61 COMMIT Unreleased ??? 2026-09-23T09:01:25-07:00
+
+#### Coming From:
+
+Unreleased 441a4d8
+
+#### Purpose:
+
+Investigate whether the QMTech board's SDRAM daughterboard-equivalent memory (confirmed present, 128MB, since the N64 core requires and runs on it) could remove the DDR3/HPS-bridge contention this session's sprites-batch/fence-race debugging kept running into, and scope a concrete plan to use it.
+
+#### Outcome:
+
+Researched how higher-throughput MiSTer cores (N64, Minimig) and a struggling one (NDS4MiSTer) handle memory: N64-tier performance is bought by requiring the optional SDRAM board, which is wired directly to FPGA pins with deterministic 1-3 cycle latency and is not shared with Linux/HPS, unlike our current DDR3 path (rtl/ddram_adapter.sv), which crosses the F2H AXI bridge and has 100-200ns+ non-deterministic latency because it's shared with Linux -- structurally the same bottleneck NDS4MiSTer's developers cite for their own DDR3-vs-VRAM-timing mismatch. Confirmed via SSH that our board reports as "Terasic DE10-nano" (dmesg/device-tree), and the user confirmed the N64 core (which hard-requires SDRAM) runs on it, with 128MB capacity. Surveyed our own tree: sys/sys_dual_sdram.tcl and sys/f2sdram_safe_terminator.sv are vendored framework files but unused; Noodles.qsf already carries SDRAM_* pin constraints; Noodles.sv currently ties every SDRAM_* pin to 'Z (unimplemented, not a hardware limitation). Because present.sv never composites -- it only flips which DDR3-resident buffer ascal (the vendored scan-out scaler, hard-wired to the DDR3/HPS path) reads from -- destination pixel writes cannot realistically move off DDR3 without rewriting ascal's own scan-out integration. The real, scoped win is moving sprite source-bitmap reads and sprite_batch.sv's descriptor table reads onto SDRAM, leaving destination writes on DDR3 as today. Pulled reference sdram.sv controllers from MiSTer-devel/N64_MiSTer and MiSTer-devel/Gameboy_MiSTer (the latter already includes the altddio_out needed to drive SDRAM_CLK, matching how sys/sys_top.v passes SDRAM_CLK straight through to the emu module rather than generating it itself, unlike HDMI/VGA's clocks which sys_top.v does generate). Checked our actual clk_sys frequency by tracing rtl/pll.v to the underlying altera_pll IP (rtl/pll/pll_0002.v): it is a single-output PLL producing only 20MHz from the 50MHz board clock. That is too slow to give SDRAM any bandwidth advantage over DDR3 -- other MiSTer cores run their SDRAM interface at 85-140MHz -- so this now requires adding a second, faster (~100MHz) PLL output dedicated to the SDRAM domain, plus real clock-domain-crossing logic between it and clk_sys, which is new correctness surface of the same character as this session's FIFO/fence races.
+
+#### Next Steps:
+
+Scoped as a multi-session project, not a single-sitting change, given real hardware bring-up risk (SDRAM signal timing is not verifiable in simulation alone) and a new CDC surface. Order of work for whoever picks this up: (1) add a second ~100MHz PLL output clock in rtl/pll.v/pll_0002 dedicated to SDRAM, verified in isolation first; (2) vendor and adapt an sdram.sv controller (start from N64_MiSTer's or Gameboy_MiSTer's as a base; consider NeoGeo_MiSTer's burst-capable variant if per-word SDR latency proves too slow for sprite-bitmap read throughput); (3) design and simulate the clk_sys-to-sdram_clk CDC boundary before touching any DDRAM-facing RTL; (4) write sdram_adapter.sv mirroring ddram_adapter.sv's rd/rd64 client-facing shape so blit_copy64.sv/sprite_batch.sv's read ports can be rewired with minimal disruption; (5) rewire only sprite source-bitmap reads and sprite_batch.sv's descriptor table reads onto the new adapter, leaving all destination-pixel writes on DDR3 unchanged; (6) add a new sim testbench for the SDRAM controller/adapter to make sim before any hardware bring-up; (7) full Quartus rebuild plus iterative hardware bring-up, expecting more than one pass given SDRAM's stricter, un-simulatable board-level timing margins. Do not skip step (3) or step (6) -- this session's entire day was root-causing races of exactly this shape in the existing single-clock-domain design.
+
+#### Files Modified:
+
+- ai/core-log.md
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
