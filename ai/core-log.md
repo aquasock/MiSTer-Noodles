@@ -1673,3 +1673,32 @@ Do not select a corrective RTL change from this aggregate mask alone. Add a narr
 - [ ] Passed
 
 ---
+
+## 51 COMMIT Unreleased ??? 2026-09-22T21:16:00-07:00
+
+#### Coming From:
+
+Unreleased 1313218
+
+#### Purpose:
+
+Repeat the loaded-core 64-sprite retirement diagnostic three times to distinguish a persistent timing pattern from run-to-run noise before changing RTL.
+
+#### Outcome:
+
+Ran three independent 30-second `stress-demo assets/sprite.bmp 64` trials against the already-loaded diagnostic RBF, collecting 100 retirement samples during each trial. The runs completed 508, 480, and 456 frames at 16.9, 16.0, and 15.2 FPS, averaging 16.0 FPS across 90 seconds. Across the 300 samples, average retirement wait was 3,544,436 cycles, average missed-boundary count was 1.127, peak outstanding reads were always 2, and every sample reported gate mask `0xf`. The aggregate result is consistent across runs: the delayed retirement behavior is persistent, not a one-off workload anomaly, but the accumulated mask still cannot identify which predicate blocks first.
+
+#### Next Steps:
+
+Keep the current RBF as the measurement baseline and design a phase-specific probe that captures the first blocking predicate at each retirement boundary. Do not change arbitration or scanout RTL based only on the aggregate `0xf` mask.
+
+#### Files Modified:
+
+None.
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
