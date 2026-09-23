@@ -1767,3 +1767,33 @@ The FPS/throughput improvement from DDR-007 is real and should stay; do not reve
 - [x] Passed
 
 ---
+
+## 54 COMMIT Unreleased 4df8b6a 2026-09-23T05:56:25-07:00
+
+#### Coming From:
+
+Unreleased 1313218
+
+#### Purpose:
+
+Validate the saved DDR-007 FIFO-depth expansion (eight to thirty-two entries) before continuing the OUT-005 retirement-stall investigation.
+
+#### Outcome:
+
+`make sim` passed all eight testbenches with no regressions, but a clean `make clean && quartus_sh --flow compile Noodles` did not complete: the Fitter's routing stage ran for the full user-imposed 20-minute cutoff without visible log progress past its first routing status line, consistent with a known, previously-observed issue where this build's Quartus flow occasionally fails to parallelize during routing and runs far past its normal ~10-minute baseline. `ps` confirmed `quartus_fit` was consuming over 250% CPU throughout, so the process was computing, not deadlocked, but no completion signal appeared before the cutoff and the process was killed per the user's standing 20-minute limit for this known issue. No RBF was produced, so hardware deployment and the planned 64-sprite/`present-probe-dump` comparison against entry 53 could not be attempted this cycle.
+
+#### Next Steps:
+
+Retry the same clean Quartus compile, since the routing-parallelization issue has historically been intermittent rather than a permanent regression from this cycle's source change; if it stalls again past the 20-minute cutoff on a second attempt, treat that as evidence the FIFO-depth increase itself (not just chance) is responsible, and consider reducing the new depth or investigating router settings before trying a third time. Once a full compile completes, proceed with hardware deployment and the throughput/retirement-stall comparison against entry 53 as originally planned.
+
+#### Files Modified:
+
+- rtl/blit_copy64.sv
+- rtl/ddram_adapter.sv
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
