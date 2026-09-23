@@ -1827,3 +1827,32 @@ Deploy the DEPTH=16 build to the QMTech MiSTer and repeat the standard 64-sprite
 - [ ] Passed
 
 ---
+
+## 56 COMMIT Unreleased ec0f52d 2026-09-23T06:50:17-07:00
+
+#### Coming From:
+
+Unreleased ec0f52d
+
+#### Purpose:
+
+Deploy the DEPTH=16 build to the QMTech MiSTer and validate throughput and the OUT-005 retirement-stall pattern against entry 53's baseline.
+
+#### Outcome:
+
+Cross-built the ARM host tools, then deployed all binaries, assets, and the DEPTH=16 RBF to the MiSTer via a Python/paramiko SFTP workaround (sshpass was unavailable and interactive sudo could not be used to install it), and loaded the core. Two 64-sprite stress-demo runs measured 16.8 and 16.9 fps, noticeably below entry 53's recorded 18.7/18.7/19.0 fps (avg 18.8fps), which was unexpected since a deeper FIFO should add headroom rather than reduce throughput. present-probe-dump showed read_outstanding_pk pinned at 2 across all samples, with retire_gate_mask=0xf and retire_wait_cyc alternating between roughly 1.67 million and 3.33 million cycles as missed_boundaries toggles, matching the still-open OUT-005 pattern from prior entries. To rule out DEPTH=16 itself as the cause of the lower fps, DEPTH was temporarily reverted to 8 in both `rtl/ddram_adapter.sv` and `rtl/blit_copy64.sv` in this same session, rebuilt clean (3m12s, 0 errors, 58 warnings), and redeployed: two runs measured 16.2 and 16.3 fps, statistically indistinguishable from the DEPTH=16 result and confirming FIFO depth is not driving the fps difference from entry 53. The committed DEPTH=16 state was then restored, rebuilt clean (4m20s, 0 errors, 58 warnings), and redeployed as the final hardware state. Because read_outstanding_pk never exceeded 2 under either depth, the OUT-005 retirement stall remains the actual throughput ceiling, and the gap versus entry 53's 18.8fps average is attributed to session-to-session environmental drift rather than to this cycle's DEPTH change.
+
+#### Next Steps:
+
+Begin a fresh investigation of OUT-005 directly, since DDRAM read bandwidth and FIFO depth are now doubly ruled out as its cause: decode what the four bits of present-probe-dump's retire_gate_mask represent in the ascal/present.sv/link_fence gating logic, correlate the alternating roughly 1.67 million and 3.33 million cycle retire_wait_cyc pattern with a periodic signal such as vsync/vblank or a scaler-ready cadence, and determine whether the stall reflects a legitimate wait or a spurious gate that should be cleared sooner.
+
+#### Files Modified:
+
+None.
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
