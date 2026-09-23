@@ -157,6 +157,9 @@ assign FB_FORCE_BLANK = ~present_done_ever;
 ///////////////////////   ENGINE   /////////////////////////////////
 
 wire [31:0] engine_wr_addr, engine_wr_data;
+wire        engine_wr64_en, engine_wr64_ready;
+wire [31:0] engine_wr64_addr;
+wire [63:0] engine_wr64_data;
 wire        engine_wr_en, engine_wr_ready;
 wire        blit_start, blit_busy, blit_done;
 wire [31:0] blit_dst_addr, blit_color;
@@ -169,6 +172,14 @@ wire        copy_key_enable;
 wire [31:0] copy_key_value;
 wire [31:0] copy_wr_addr, copy_wr_data, copy_rd_addr, copy_rd_data;
 wire        copy_wr_en, copy_wr_ready, copy_rd_en, copy_rd_ready, copy_rd_valid;
+wire        batch_start, batch_busy, batch_done;
+wire [15:0] batch_count;
+wire [31:0] batch_wr_addr, batch_wr_data, batch_rd_addr, batch_rd_data;
+wire        batch_wr_en, batch_wr_ready, batch_rd_en, batch_rd_ready, batch_rd_valid, batch_rd_active;
+wire [31:0] batch_rd64_addr, batch_wr64_addr;
+wire [63:0] batch_rd64_data, batch_wr64_data;
+wire        batch_rd64_en, batch_rd64_ready, batch_rd64_valid;
+wire        batch_wr64_en, batch_wr64_ready;
 
 // LINK-001/LINK-002/LINK-003: the real host-driven command path.
 // tools/link_push.c writes commands and write_ptr directly into shared
@@ -228,7 +239,11 @@ present present
 // has no idea which engine ran or what command it was -- it is a pure
 // counter, deliberately dumber than link_ring, so it never needs touching
 // if link_ring's own FSM changes again.
-wire cmd_done_pulse = blit_done || copy_done || present_done;
+// Batch completion is a single command completion even though the batch
+// internally executes many descriptor copies.  Omitting it leaves the host
+// fence unchanged, so sprite-demo's one-descriptor diagnostic waits forever
+// and a following PRESENT can never retire.
+wire cmd_done_pulse = blit_done || copy_done || batch_done || present_done;
 
 wire [31:0] fence_wr_addr, fence_wr_data;
 wire        fence_wr_en, fence_wr_ready;
@@ -260,6 +275,7 @@ cmdq cmdq
 	.blit_color    (blit_color),
 	.blit_busy     (blit_busy),
 	.blit_done     (blit_done),
+	.memory_idle   (adapter_idle),
 	.copy_start    (copy_start),
 	.copy_dst_addr (copy_dst_addr),
 	.copy_dst_pitch(copy_dst_pitch),
@@ -271,7 +287,11 @@ cmdq cmdq
 	.copy_key_value(copy_key_value),
 	.copy_busy     (copy_busy),
 	.copy_done     (copy_done),
-	.present_start (present_start),
+	.batch_start    (batch_start),
+	.batch_count    (batch_count),
+	.batch_busy     (batch_busy),
+	.batch_done     (batch_done),
+	.present_start  (present_start),
 	.present_busy  (present_busy),
 	.present_done  (present_done)
 );
@@ -291,7 +311,11 @@ blit blit
 	.wr_addr  (engine_wr_addr),
 	.wr_data  (engine_wr_data),
 	.wr_en    (engine_wr_en),
-	.wr_ready (engine_wr_ready)
+	.wr_ready (engine_wr_ready),
+	.wr64_addr(engine_wr64_addr),
+	.wr64_data(engine_wr64_data),
+	.wr64_en  (engine_wr64_en),
+	.wr64_ready(engine_wr64_ready)
 );
 
 blit_copy blit_copy
@@ -320,6 +344,20 @@ blit_copy blit_copy
 	.wr_ready (copy_wr_ready)
 );
 
+sprite_batch sprite_batch
+(
+	.clk(clk_sys), .reset(reset), .start(batch_start), .count(batch_count),
+	.busy(batch_busy), .done(batch_done),
+	.rd_addr(batch_rd_addr), .rd_en(batch_rd_en), .rd_active(batch_rd_active),
+	.rd_ready(batch_rd_ready), .rd_data(batch_rd_data), .rd_valid(batch_rd_valid),
+	.rd64_addr(batch_rd64_addr), .rd64_en(batch_rd64_en),
+	.rd64_ready(batch_rd64_ready), .rd64_data(batch_rd64_data), .rd64_valid(batch_rd64_valid),
+	.wr_addr(batch_wr_addr), .wr_data(batch_wr_data), .wr_en(batch_wr_en),
+	.wr_ready(batch_wr_ready),
+	.wr64_addr(batch_wr64_addr), .wr64_data(batch_wr64_data),
+	.wr64_en(batch_wr64_en), .wr64_ready(batch_wr64_ready)
+);
+
 // 4-way priority mux into the DDRAM adapter's write port: blit_copy's copy
 // writes, link_ring's writes (INIT + read_ptr writeback), blit's fill
 // writes, link_fence's writes (INIT + completion-count publish). None can
@@ -331,18 +369,29 @@ blit_copy blit_copy
 // needs the count to arrive eventually, not within any particular cycle),
 // and by the time it wants to write, the engine that just triggered it
 // (blit/blit_copy) has already stopped writing.
-wire        wr_sel_copy   = copy_wr_en;
-wire        wr_sel_link   = !wr_sel_copy && link_wr_en;
-wire        wr_sel_engine = !wr_sel_copy && !wr_sel_link && engine_wr_en;
-wire        wr_sel_fence  = !wr_sel_copy && !wr_sel_link && !wr_sel_engine && fence_wr_en;
-wire [31:0] adapter_wr_addr = wr_sel_copy ? copy_wr_addr : wr_sel_link ? link_wr_addr : wr_sel_engine ? engine_wr_addr : fence_wr_addr;
-wire [31:0] adapter_wr_data = wr_sel_copy ? copy_wr_data : wr_sel_link ? link_wr_data : wr_sel_engine ? engine_wr_data : fence_wr_data;
-wire        adapter_wr_en   = wr_sel_copy ? copy_wr_en   : wr_sel_link ? link_wr_en   : wr_sel_engine ? engine_wr_en   : fence_wr_en;
+wire        wr_sel_batch  = batch_busy;
+wire        wr_sel_copy   = !wr_sel_batch && copy_busy;
+wire        wr_sel_link   = !wr_sel_batch && !wr_sel_copy && link_wr_en;
+wire        wr_sel_engine = !wr_sel_batch && !wr_sel_copy && !wr_sel_link &&
+                            blit_busy;
+wire        wr_sel_fence  = !wr_sel_batch && !wr_sel_copy && !wr_sel_link && !wr_sel_engine && fence_wr_en;
+wire [31:0] adapter_wr_addr = wr_sel_batch ? batch_wr_addr : wr_sel_copy ? copy_wr_addr : wr_sel_link ? link_wr_addr : wr_sel_engine ? engine_wr_addr : fence_wr_addr;
+wire [31:0] adapter_wr_data = wr_sel_batch ? batch_wr_data : wr_sel_copy ? copy_wr_data : wr_sel_link ? link_wr_data : wr_sel_engine ? engine_wr_data : fence_wr_data;
+wire        adapter_wr_en   = wr_sel_batch ? batch_wr_en : wr_sel_copy ? copy_wr_en   : wr_sel_link ? link_wr_en   : wr_sel_engine ? engine_wr_en   : fence_wr_en;
+assign batch_wr_ready  = wr_sel_batch ? adapter_wr_ready : 1'b0;
 wire        adapter_wr_ready;
 assign copy_wr_ready   = wr_sel_copy   ? adapter_wr_ready : 1'b0;
 assign link_wr_ready   = wr_sel_link   ? adapter_wr_ready : 1'b0;
 assign engine_wr_ready = wr_sel_engine ? adapter_wr_ready : 1'b0;
 assign fence_wr_ready  = wr_sel_fence  ? adapter_wr_ready : 1'b0;
+wire adapter_wr64_en = (wr_sel_engine && engine_wr64_en) ||
+                       (wr_sel_batch && batch_wr64_en);
+wire        adapter_wr64_ready;
+assign engine_wr64_ready = adapter_wr64_en ? adapter_wr64_ready : 1'b0;
+wire adapter_batch_wr64_en = wr_sel_batch && batch_wr64_en;
+assign batch_wr64_ready = adapter_batch_wr64_en ? adapter_wr64_ready : 1'b0;
+wire [31:0] adapter_wr64_addr = wr_sel_batch ? batch_wr64_addr : engine_wr64_addr;
+wire [63:0] adapter_wr64_data = wr_sel_batch ? batch_wr64_data : engine_wr64_data;
 
 // 2-way priority mux into the DDRAM adapter's read port: blit_copy and
 // link_ring. LINK-003's cmd_ready gating keeps these from ever actually
@@ -360,29 +409,52 @@ assign fence_wr_ready  = wr_sel_fence  ? adapter_wr_ready : 1'b0;
 // address, silently handing link_ring the WRONG half of the 64-bit DDRAM
 // word it had actually asked for.
 wire        rd_sel_link = link_rd_active;
-wire [31:0] adapter_rd_addr = rd_sel_link ? link_rd_addr : copy_rd_addr;
-wire        adapter_rd_en   = rd_sel_link ? link_rd_en   : copy_rd_en;
+wire        rd_sel_batch = !rd_sel_link && batch_rd_active;
+wire        rd_sel_batch64 = rd_sel_batch && batch_rd64_en;
+wire [31:0] adapter_rd_addr = rd_sel_link ? link_rd_addr : rd_sel_batch ? batch_rd_addr : copy_rd_addr;
+wire [31:0] adapter_rd64_addr = rd_sel_batch64 ? batch_rd64_addr : 32'b0;
+wire        adapter_rd_en   = rd_sel_link ? link_rd_en   : (rd_sel_batch ? batch_rd_en : copy_rd_en);
+wire        adapter_rd64_en = rd_sel_batch64;
 wire        adapter_rd_ready, adapter_rd_valid;
 wire [31:0] adapter_rd_data;
+wire        adapter_rd64_ready, adapter_rd64_valid;
+wire [63:0] adapter_rd64_data;
+wire        adapter_idle;
 assign link_rd_ready = rd_sel_link ? adapter_rd_ready : 1'b0;
-assign copy_rd_ready = rd_sel_link ? 1'b0 : adapter_rd_ready;
+assign batch_rd_ready = rd_sel_batch ? adapter_rd_ready : 1'b0;
+assign batch_rd64_ready = rd_sel_batch64 ? adapter_rd64_ready : 1'b0;
+assign copy_rd_ready = (rd_sel_link || rd_sel_batch) ? 1'b0 : adapter_rd_ready;
 assign link_rd_data  = adapter_rd_data;
 assign link_rd_valid = adapter_rd_valid;
+assign batch_rd_data = adapter_rd_data;
+assign batch_rd_valid = adapter_rd_valid;
+assign batch_rd64_data = adapter_rd64_data;
+assign batch_rd64_valid = rd_sel_batch ? adapter_rd64_valid : 1'b0;
 assign copy_rd_data  = adapter_rd_data;
 assign copy_rd_valid = adapter_rd_valid;
 
 ddram_adapter ddram_adapter
 (
 	.clk             (clk_sys),
+	.reset           (reset),
 	.wr_addr         (adapter_wr_addr),
 	.wr_data         (adapter_wr_data),
 	.wr_en           (adapter_wr_en),
 	.wr_ready        (adapter_wr_ready),
+	.wr64_addr       (adapter_wr64_addr),
+	.wr64_data       (adapter_wr64_data),
+	.wr64_en         (adapter_wr64_en),
+	.wr64_ready      (adapter_wr64_ready),
 	.rd_addr         (adapter_rd_addr),
 	.rd_en           (adapter_rd_en),
 	.rd_ready        (adapter_rd_ready),
 	.rd_data         (adapter_rd_data),
 	.rd_valid        (adapter_rd_valid),
+	.rd64_addr       (adapter_rd64_addr),
+	.rd64_en         (adapter_rd64_en),
+	.rd64_ready      (adapter_rd64_ready),
+	.rd64_data       (adapter_rd64_data),
+	.rd64_valid      (adapter_rd64_valid),
 	.ddram_clk       (DDRAM_CLK),
 	.ddram_busy      (DDRAM_BUSY),
 	.ddram_burstcnt  (DDRAM_BURSTCNT),
@@ -392,7 +464,8 @@ ddram_adapter ddram_adapter
 	.ddram_din       (DDRAM_DIN),
 	.ddram_be        (DDRAM_BE),
 	.ddram_we        (DDRAM_WE),
-	.ddram_rd        (DDRAM_RD)
+	.ddram_rd        (DDRAM_RD),
+	.idle            (adapter_idle)
 );
 
 //////////////////////////////////////////////////////////////////

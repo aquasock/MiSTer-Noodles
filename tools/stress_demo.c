@@ -24,7 +24,7 @@
 //
 // Usage, as root on the MiSTer:
 //   ./stress-demo [sprite.bmp] [count] [seconds] [mode]
-// mode is "sprites" (default), "fixed", "overlap", "plain", "key-never", "key-all", "key-checker", "clear",
+// mode is "sprites" (default), "sprites-batch", "fixed", "overlap", "plain", "key-never", "key-all", "key-checker", "clear",
 // "present", or "static". The latter
 // modes isolate framebuffer clearing and PRESENT/scanout from compositing.
 
@@ -95,6 +95,17 @@ static int push_key_retry(noodles_link_t *link, uint32_t dst, uint16_t dst_pitch
     return 1;
 }
 
+static int push_batch_retry(noodles_link_t *link,
+                            const noodles_sprite_descriptor_t *descriptors,
+                            uint16_t count) {
+    struct timespec delay = {.tv_sec = 0, .tv_nsec = PUSH_RETRY_DELAY_NS};
+    for (int i = 0; i < PUSH_RETRY_ITERS; ++i) {
+        if (noodles_push_sprite_batch(link, descriptors, count) == 0) return 0;
+        nanosleep(&delay, NULL);
+    }
+    return 1;
+}
+
 // noodles_present_and_wait() returns -1 on ring-full (LINK-004's documented,
 // non-retrying contract) -- with this file's own commands pipelined ahead
 // of it, the ring can genuinely still be full of undrained draws at the
@@ -121,21 +132,25 @@ int main(int argc, char **argv) {
     double run_seconds = (argc > 3) ? atof(argv[3]) : 15.0;
     const char *mode = (argc > 4) ? argv[4] : "sprites";
     int do_sprites = strcmp(mode, "sprites") == 0;
+    int do_sprites_batch = strcmp(mode, "sprites-batch") == 0;
     int do_fixed = strcmp(mode, "fixed") == 0;
     int do_overlap = strcmp(mode, "overlap") == 0;
     int do_plain = strcmp(mode, "plain") == 0;
     int do_key_never = strcmp(mode, "key-never") == 0;
     int do_key_all = strcmp(mode, "key-all") == 0;
     int do_key_checker = strcmp(mode, "key-checker") == 0;
-    int do_clear = do_sprites || do_fixed || do_overlap || do_plain || strcmp(mode, "clear") == 0;
+    int do_clear = do_sprites || do_sprites_batch || do_fixed || do_overlap || do_plain || strcmp(mode, "clear") == 0;
     int do_present_only = strcmp(mode, "present") == 0;
     int do_static = strcmp(mode, "static") == 0;
+    // sprites-batch is intentionally the full approved 64-entry workload;
+    // its descriptor upload is 2 KiB at the reserved address after the ring.
+    if (do_sprites_batch) count = MAX_SPRITES;
 
-    if ((!do_sprites && !do_fixed && !do_overlap && !do_plain && !do_key_never && !do_key_all && !do_key_checker && !do_clear &&
+    if ((!do_sprites && !do_sprites_batch && !do_fixed && !do_overlap && !do_plain && !do_key_never && !do_key_all && !do_key_checker && !do_clear &&
          !do_present_only && !do_static) ||
-        ((do_sprites || do_fixed || do_overlap || do_plain || do_key_never || do_key_all || do_key_checker) &&
+        ((do_sprites || do_sprites_batch || do_fixed || do_overlap || do_plain || do_key_never || do_key_all || do_key_checker) &&
          (count < 1 || count > MAX_SPRITES))) {
-        fprintf(stderr, "mode must be sprites, fixed, overlap, plain, key-never, key-all, key-checker, clear, present, or static; count 1-%d\n",
+        fprintf(stderr, "mode must be sprites, sprites-batch, fixed, overlap, plain, key-never, key-all, key-checker, clear, present, or static; count 1-%d\n",
                 MAX_SPRITES);
         return 1;
     }
@@ -212,7 +227,8 @@ int main(int argc, char **argv) {
     uint32_t background = noodles_rgb(BG_COLOR_R, BG_COLOR_G, BG_COLOR_B);
 
     printf("mode=%s, %s for %.1fs...\n", mode,
-           do_sprites ? "bouncing sprites" : do_fixed ? "fixed sprites" :
+           do_sprites ? "bouncing sprites" : do_sprites_batch ? "64-sprite descriptor batches" :
+           do_fixed ? "fixed sprites" :
                         do_overlap ? "fixed overlapping sprites" :
                         do_plain ? "plain copies" :
                         do_key_never ? "key copies (never match)" :
@@ -260,8 +276,28 @@ int main(int argc, char **argv) {
             break;
         }
 
-        for (int i = 0; (do_sprites || do_fixed || do_overlap || do_plain || do_key_never || do_key_all ||
-                         do_key_checker) && i < count; ++i) {
+        if (do_sprites_batch) {
+            noodles_sprite_descriptor_t descriptors[MAX_SPRITES];
+            for (int i = 0; i < MAX_SPRITES; ++i) {
+                descriptors[i].dst_addr = back + (uint32_t)sprites[i].y * NOODLES_BUFFER_PITCH +
+                                          (uint32_t)sprites[i].x * 4;
+                descriptors[i].dst_pitch = NOODLES_BUFFER_PITCH;
+                descriptors[i].width = sprite_w;
+                descriptors[i].height = sprite_h;
+                descriptors[i].colorkey = colorkey;
+                descriptors[i].src_addr = SPRITE_SRC_ADDR;
+                descriptors[i].src_pitch = sprite_pitch;
+                descriptors[i].flags = 1;
+            }
+            if (push_batch_retry(&link, descriptors, MAX_SPRITES)) {
+                fprintf(stderr, "frame %ld: ring stuck uploading sprite batch\n", frame);
+                failed = 1;
+                break;
+            }
+        }
+
+        for (int i = 0; (!do_sprites_batch && (do_sprites || do_fixed || do_overlap || do_plain || do_key_never || do_key_all ||
+                         do_key_checker)) && i < count; ++i) {
             uint32_t dst = back + (uint32_t)sprites[i].y * NOODLES_BUFFER_PITCH +
                             (uint32_t)sprites[i].x * 4;
             uint32_t frame_key = do_key_never ? 0xFFFFFFFFu : colorkey;
@@ -284,7 +320,7 @@ int main(int argc, char **argv) {
             break;
         }
 
-        for (int i = 0; (do_sprites || do_fixed || do_overlap || do_plain || do_key_never || do_key_all ||
+        for (int i = 0; (do_sprites || do_sprites_batch || do_fixed || do_overlap || do_plain || do_key_never || do_key_all ||
                          do_key_checker) && i < count; ++i) {
             if (do_fixed || do_overlap) continue;
             sprites[i].x += sprites[i].dx;

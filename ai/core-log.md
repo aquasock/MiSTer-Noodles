@@ -1,3 +1,82 @@
+## 42 COMMIT Unreleased ddram-queued-arbiter-rejected 2026-09-22T15:00:00-07:00
+
+#### Coming From:
+
+Unreleased fixed-colorkey-diagnostic
+
+#### Purpose:
+
+Test whether a registered read/write phase scheduler could improve DDRAM arbitration without replacing the existing client handshakes.
+
+#### Outcome:
+
+Rejected. The scheduler was re-applied after simulation reset wiring was repaired, but `make sim` failed the DDRAM adapter pixel-value test: the phase transition dropped the first accepted fill write. Reverting the scheduler restored all seven simulation benches, including the adapter's intermittent-backpressure coverage. This confirms that changing ready/grant timing in place is not a safe arbitration redesign.
+
+The next queued-arbiter attempt must capture read and write request fields into explicit registered queues, issue registered grants, and return ordered read responses independently of the client request signals. No Quartus build or hardware deployment was performed for the rejected scheduler.
+
+#### Next Steps:
+
+Design and verify a standalone mixed read/write transaction-queue module before integrating it into `ddram_adapter.sv` or changing `Noodles.sv` arbitration.
+
+#### Files Modified:
+
+- rtl/ddram_adapter.sv
+- ai/core-log.md
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
+
+## 43 COMMIT Unreleased ddram-queued-arbiter-hardware 2026-09-22T17:10:00-07:00
+
+#### Coming From:
+
+Unreleased ddram-queued-arbiter-rejected
+
+#### Purpose:
+
+Validate the explicit registered DDRAM transaction queues on the target hardware and measure whether removing client/physical-bus arbitration coupling improves the sprite-batch throughput ceiling.
+
+#### Outcome:
+
+The queued arbiter compiled with 0 Quartus errors, no combinational-loop or critical-warning reports, 0.591 ns worst-case setup slack, and 0.249 ns hold slack. The RBF was loaded on the QMTech MiSTer and the standard 64-sprite, 10-second `sprites-batch` workload completed four times without ring-full or fence-timeout errors:
+
+| Trial | Frames | FPS |
+|---|---:|---:|
+| 1 | 155 | 15.5 |
+| 2 | 153 | 15.3 |
+| 3 | 149 | 14.8 |
+| 4 | 144 | 14.4 |
+
+Average throughput was **15.0 FPS**, versus the validated three-pixel baseline of 13.15 FPS (+14%). The gradual spread across trials is still visible, so this is a throughput improvement rather than proof that all frame-time variance has been eliminated.
+
+#### Next Steps:
+
+Keep the queued arbiter as the active baseline. Repeat visual inspection under the same heavy workload and then profile whether the remaining variance comes from DDRAM service time or the serial descriptor/compositor pipeline before attempting further arbitration changes.
+
+#### Files Modified:
+
+- rtl/ddram_adapter.sv
+- rtl/cmdq.sv
+- Noodles.sv
+- sim/engine_ddram_dut.sv
+- sim/engine_copy_dut.sv
+- sim/engine_dut.sv
+- sim/cmdq_batch_dut.sv
+- sim/tb_ddram_adapter.cpp
+- ai/core-log.md
+
+#### Status:
+
+- [x] Built
+- [x] Deployed
+- [x] Passed
+
+---
+
 ## 41 COMMIT Unreleased fixed-colorkey-diagnostic 2026-09-22T14:27:29-07:00
 
 #### Coming From:
@@ -1433,4 +1512,49 @@ Visually check the two-sprite overlap run, then repeat the odd/even launch test 
 
 - [x] Built
 - [x] Deployed
+- [ ] Passed
+## 42 COMMIT Unreleased paired-solid-fill 2026-09-22T15:27:00-07:00
+
+#### Coming From:
+
+Unreleased pipelined-blit baseline
+
+#### Purpose:
+
+Reduce the per-frame cost of clearing the back framebuffer without changing
+the two-buffer ownership or PRESENT retirement protocol.
+
+#### Outcome:
+
+SOLID_FILL now emits an aligned 64-bit DDRAM write containing two identical
+pixels whenever the rectangle span permits it. Misaligned starts, odd-width
+tails, and all other generic writes retain the existing 32-bit half-word path.
+The DDRAM adapter accepts the additional full-word write port while retaining
+single-word burst count and the existing read priority. This halves accepted
+write transactions for the normal 640-pixel-wide framebuffer clear.
+
+`make sim` passes all existing benches, including both half-word and full-word
+fill cases. Full Quartus validation is in progress; hardware benchmarking is
+not yet performed.
+
+#### Next Steps:
+
+Complete Quartus validation, deploy the RBF, and compare repeated
+`sprites-batch` trials against the 8.3 FPS post-pipeline average.
+
+#### Files Modified:
+
+- rtl/blit.sv
+- rtl/ddram_adapter.sv
+- Noodles.sv
+- sim/engine_dut.sv
+- sim/engine_ddram_dut.sv
+- sim/engine_copy_dut.sv
+- sim/link_ring_dut.sv
+- sim/tb_solid_fill.cpp
+- ai/core-log.md
+
+#### Status:
+
+- [x] Built
 - [ ] Passed

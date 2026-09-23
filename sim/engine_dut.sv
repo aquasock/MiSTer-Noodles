@@ -13,7 +13,11 @@ module engine_dut (
     output logic [31:0]  wr_addr,
     output logic [31:0]  wr_data,
     output logic         wr_en,
-    input  logic         wr_ready
+    input  logic         wr_ready,
+    output logic [31:0]  wr64_addr,
+    output logic [63:0]  wr64_data,
+    output logic         wr64_en,
+    input logic          wr64_ready
 );
 
     logic        blit_start, blit_busy, blit_done;
@@ -34,6 +38,7 @@ module engine_dut (
         .blit_color     (blit_color),
         .blit_busy      (blit_busy),
         .blit_done      (blit_done),
+        .memory_idle    (1'b1),
         /* verilator lint_off PINCONNECTEMPTY */
         .copy_start     (),
         .copy_dst_addr  (),
@@ -66,7 +71,11 @@ module engine_dut (
         .wr_addr  (wr_addr),
         .wr_data  (wr_data),
         .wr_en    (wr_en),
-        .wr_ready (wr_ready)
+        .wr_ready (wr_ready),
+        .wr64_addr(wr64_addr),
+        .wr64_data(wr64_data),
+        .wr64_en(wr64_en),
+        .wr64_ready(wr64_ready)
     );
 
 endmodule

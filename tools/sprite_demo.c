@@ -17,11 +17,12 @@
 // loop would.
 //
 // Usage, as root on the MiSTer:
-//   ./sprite_demo [seconds]
+//   ./sprite_demo [seconds] [batch]
 
 #define _POSIX_C_SOURCE 199309L
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 #include "../lib/noodles_link.h"
@@ -95,6 +96,7 @@ static int build_sprite(noodles_link_t *link) {
 
 int main(int argc, char **argv) {
     double run_seconds = (argc > 1) ? atof(argv[1]) : 15.0;
+    int use_batch = (argc > 2 && strcmp(argv[2], "batch") == 0);
 
     noodles_link_t link;
     if (noodles_link_open(&link) != 0) {
@@ -135,10 +137,20 @@ int main(int argc, char **argv) {
         if (wait_fence(&link, done_before, "background clear")) break;
 
         done_before = noodles_link_done_count(&link);
-        if (noodles_push_blit_copy_key(&link, back + (uint32_t)y * NOODLES_BUFFER_PITCH +
-                                                    (uint32_t)x * 4,
-                                        NOODLES_BUFFER_PITCH, SPRITE_SRC_ADDR,
-                                        NOODLES_BUFFER_PITCH, SPRITE_W, SPRITE_H, colorkey) != 0) {
+        int queued;
+        if (use_batch) {
+            noodles_sprite_descriptor_t descriptor = {
+                back + (uint32_t)y * NOODLES_BUFFER_PITCH + (uint32_t)x * 4,
+                NOODLES_BUFFER_PITCH, SPRITE_W, SPRITE_H, colorkey, SPRITE_SRC_ADDR,
+                NOODLES_BUFFER_PITCH, 1u};
+            queued = noodles_push_sprite_batch(&link, &descriptor, 1);
+        } else {
+            queued = noodles_push_blit_copy_key(&link,
+                back + (uint32_t)y * NOODLES_BUFFER_PITCH + (uint32_t)x * 4,
+                NOODLES_BUFFER_PITCH, SPRITE_SRC_ADDR, NOODLES_BUFFER_PITCH,
+                SPRITE_W, SPRITE_H, colorkey);
+        }
+        if (queued != 0) {
             fprintf(stderr, "frame %ld: ring full compositing sprite\n", frame);
             break;
         }

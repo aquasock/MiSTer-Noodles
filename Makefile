@@ -48,18 +48,26 @@ BLIT_COPY_SIM     := $(SIM_DIR)/blit_copy/Vengine_copy_dut
 LINK_RING_SIM     := $(SIM_DIR)/link_ring/Vlink_ring_dut
 LINK_FENCE_SIM    := $(SIM_DIR)/link_fence/Vlink_fence_dut
 PRESENT_SIM       := $(SIM_DIR)/present/Vpresent_dut
+BATCH_CMDQ_SIM    := $(SIM_DIR)/cmdq_batch/Vcmdq_batch_dut
 
 .PHONY: all host deploy sim clean
 
 all: $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS)
 
-sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(BLIT_COPY_SIM) $(LINK_RING_SIM) $(LINK_FENCE_SIM) $(PRESENT_SIM)
+sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(BLIT_COPY_SIM) $(LINK_RING_SIM) $(LINK_FENCE_SIM) $(PRESENT_SIM) $(BATCH_CMDQ_SIM)
 	$(SOLID_FILL_SIM)
 	$(DDRAM_ADAPTER_SIM)
 	$(BLIT_COPY_SIM)
 	$(LINK_RING_SIM)
 	$(LINK_FENCE_SIM)
 	$(PRESENT_SIM)
+	$(BATCH_CMDQ_SIM)
+
+$(BATCH_CMDQ_SIM): rtl/cmdq.sv sim/cmdq_batch_dut.sv sim/tb_cmdq_batch.cpp
+	@mkdir -p $(dir $@)
+	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module cmdq_batch_dut \
+		--Wall --Wno-fatal -Wno-DECLFILENAME \
+		rtl/cmdq.sv sim/cmdq_batch_dut.sv sim/tb_cmdq_batch.cpp -o $(notdir $@)
 
 $(SOLID_FILL_SIM): rtl/cmdq.sv rtl/blit.sv sim/engine_dut.sv sim/tb_solid_fill.cpp
 	@mkdir -p $(dir $@)
@@ -73,11 +81,11 @@ $(DDRAM_ADAPTER_SIM): rtl/cmdq.sv rtl/blit.sv rtl/ddram_adapter.sv sim/engine_dd
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
 		rtl/cmdq.sv rtl/blit.sv rtl/ddram_adapter.sv sim/engine_ddram_dut.sv sim/tb_ddram_adapter.cpp -o $(notdir $@)
 
-$(BLIT_COPY_SIM): rtl/cmdq.sv rtl/blit.sv rtl/blit_copy.sv rtl/ddram_adapter.sv sim/engine_copy_dut.sv sim/tb_blit_copy.cpp
+$(BLIT_COPY_SIM): rtl/cmdq.sv rtl/blit.sv rtl/blit_copy.sv rtl/blit_copy64.sv rtl/sprite_batch.sv rtl/ddram_adapter.sv sim/engine_copy_dut.sv sim/tb_blit_copy.cpp
 	@mkdir -p $(dir $@)
 	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module engine_copy_dut \
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
-		rtl/cmdq.sv rtl/blit.sv rtl/blit_copy.sv rtl/ddram_adapter.sv sim/engine_copy_dut.sv sim/tb_blit_copy.cpp -o $(notdir $@)
+		rtl/cmdq.sv rtl/blit.sv rtl/blit_copy.sv rtl/blit_copy64.sv rtl/sprite_batch.sv rtl/ddram_adapter.sv sim/engine_copy_dut.sv sim/tb_blit_copy.cpp -o $(notdir $@)
 
 $(LINK_RING_SIM): rtl/link_ring.sv rtl/ddram_adapter.sv sim/link_ring_dut.sv sim/tb_link_ring.cpp
 	@mkdir -p $(dir $@)

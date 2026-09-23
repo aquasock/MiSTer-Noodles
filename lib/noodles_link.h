@@ -37,6 +37,12 @@ extern "C" {
 #define NOODLES_BUFFER_PITCH 2560u
 #define NOODLES_BUFFER_WIDTH 640u
 #define NOODLES_BUFFER_HEIGHT 480u
+#define NOODLES_SPRITE_DESCRIPTOR_ADDR 0x30022000u  // 2 KiB after the 0x30021000 ring slots
+#define NOODLES_SPRITE_DESCRIPTOR_MAX 64u
+
+typedef struct {
+    uint32_t dst_addr, dst_pitch, width, height, colorkey, src_addr, src_pitch, flags;
+} noodles_sprite_descriptor_t;
 
 typedef struct {
     int fd;
@@ -99,6 +105,13 @@ int noodles_push_blit_copy(noodles_link_t *link, uint32_t dst_addr, uint16_t dst
 int noodles_push_blit_copy_key(noodles_link_t *link, uint32_t dst_addr, uint16_t dst_pitch,
                                 uint32_t src_addr, uint16_t src_pitch, uint16_t width,
                                 uint16_t height, uint32_t colorkey);
+
+// SPRITE_BATCH (opcode 5): uploads up to 64 fixed-format descriptors (2 KiB)
+// to the reserved DDRAM list and queues one command. Descriptor flags bit 0 enables
+// colorkeying; all other bits are reserved and must be zero.
+int noodles_push_sprite_batch(noodles_link_t *link,
+                               const noodles_sprite_descriptor_t *descriptors,
+                               uint16_t count);
 
 // Count of commands successfully pushed through THIS handle since
 // noodles_link_open() -- NOT an absolute, cross-session count (the library

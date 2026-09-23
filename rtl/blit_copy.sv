@@ -1,170 +1,124 @@
-// BLIT_COPY / BLIT_COPY_KEY: copies a width x height rectangle from a
-// source surface to a destination surface, 4 bytes/pixel, no scale/blend/
-// format conversion. Separate module from rtl/blit.sv (SOLID_FILL) rather
-// than a merged FSM -- keeps the already-proven fill engine untouched. Per
-// pixel: issue a read at the source address, wait for the one word, write
-// it to the destination (unless key_enable and it matches key_value, in
-// which case the destination pixel is left untouched -- colorkey
-// transparency, BLIT-006), advance. Never more than one outstanding read.
-//
-// key_enable/key_value distinguish CMDQ-001's two BLIT_COPY-family
-// opcodes: CMDQ latches key_enable=0 for plain BLIT_COPY (opcode 2) and
-// key_enable=1/key_value=the command's color field for BLIT_COPY_KEY
-// (opcode 3) -- this module doesn't know or care which opcode dispatched
-// it, only whether keying is on.
-//
-// ai/core-reference.md BLIT-003 defines plain BLIT_COPY's field semantics;
-// BLIT-006 defines BLIT_COPY_KEY's; DDR-003 defines the generic read port
-// protocol.
+// BLIT_COPY / BLIT_COPY_KEY pixel compositor.  Reads are issued ahead of
+// writes through the generic read port, while small FIFOs preserve source
+// order and destination addresses.  The DDRAM adapter accepts up to four
+// ordered outstanding reads; writes remain serialized by the shared adapter.
 
 module blit_copy #(
     parameter int ADDR_WIDTH      = 32,
     parameter int DATA_WIDTH      = 32,
-    parameter int BYTES_PER_PIXEL = 4
+    parameter int BYTES_PER_PIXEL = 4,
+    parameter int FIFO_DEPTH      = 8
 ) (
-    input  logic                  clk,
-    input  logic                  reset,
-
-    // command in -- pulse start for one cycle with the fields below held
-    // stable until busy deasserts
-    input  logic                  start,
-    input  logic [ADDR_WIDTH-1:0] dst_addr,
-    input  logic [15:0]           dst_pitch,
-    input  logic [ADDR_WIDTH-1:0] src_addr,
-    input  logic [15:0]           src_pitch,
-    input  logic [15:0]           width,
-    input  logic [15:0]           height,
-    input  logic                  key_enable,
-    input  logic [DATA_WIDTH-1:0] key_value,
-
-    output logic                  busy,
-    output logic                  done,   // one-cycle pulse
-
-    // generic read port
-    output logic [ADDR_WIDTH-1:0] rd_addr,
-    output logic                  rd_en,
-    input  logic                  rd_ready,
-    input  logic [DATA_WIDTH-1:0] rd_data,
-    input  logic                  rd_valid,
-
-    // generic write port
-    output logic [ADDR_WIDTH-1:0] wr_addr,
-    output logic [DATA_WIDTH-1:0] wr_data,
-    output logic                  wr_en,
-    input  logic                  wr_ready
+    input logic clk, input logic reset,
+    input logic start,
+    input logic [ADDR_WIDTH-1:0] dst_addr,
+    input logic [15:0] dst_pitch,
+    input logic [ADDR_WIDTH-1:0] src_addr,
+    input logic [15:0] src_pitch,
+    input logic [15:0] width, input logic [15:0] height,
+    input logic key_enable, input logic [DATA_WIDTH-1:0] key_value,
+    output logic busy, output logic done,
+    output logic [ADDR_WIDTH-1:0] rd_addr, output logic rd_en,
+    input logic rd_ready, input logic [DATA_WIDTH-1:0] rd_data, input logic rd_valid,
+    output logic [ADDR_WIDTH-1:0] wr_addr, output logic [DATA_WIDTH-1:0] wr_data,
+    output logic wr_en, input logic wr_ready
 );
-
-    typedef enum logic [2:0] {IDLE, READ_REQ, READ_WAIT, WRITE_REQ, FINISH} state_t;
-    state_t state;
-
-    logic [15:0]           col, row;
+    localparam int PTR_W = $clog2(FIFO_DEPTH);
+    logic [ADDR_WIDTH-1:0] addr_fifo [0:FIFO_DEPTH-1];
+    logic [ADDR_WIDTH-1:0] write_addr_fifo [0:FIFO_DEPTH-1];
+    logic [DATA_WIDTH-1:0] data_fifo [0:FIFO_DEPTH-1];
+    logic [PTR_W-1:0] addr_wr_ptr, addr_rd_ptr, data_wr_ptr, data_rd_ptr;
+    logic [PTR_W:0] addr_count, data_count;
+    logic [15:0] issue_col, issue_row;
+    logic [31:0] issued, total_pixels;
+    logic [15:0] width_r;
+    logic [15:0] dst_pitch_r, src_pitch_r;
     logic [ADDR_WIDTH-1:0] src_row_addr, dst_row_addr;
-    logic [DATA_WIDTH-1:0] pixel;
-    logic                  key_enable_r;  // latched at start, held stable across the whole op
+    logic key_enable_r;
     logic [DATA_WIDTH-1:0] key_value_r;
+    logic active;
 
-    wire [ADDR_WIDTH-1:0] src_pixel_addr = src_row_addr + ADDR_WIDTH'(col) * BYTES_PER_PIXEL;
-    wire [ADDR_WIDTH-1:0] dst_pixel_addr = dst_row_addr + ADDR_WIDTH'(col) * BYTES_PER_PIXEL;
+    // The adapter can hold four requests while this engine can retain up to
+    // FIFO_DEPTH source addresses and completed pixels.
+    wire issue_space = (addr_count < FIFO_DEPTH) &&
+                       (addr_count + data_count < FIFO_DEPTH * 2);
+    wire all_issued = (issued == total_pixels);
+    wire key_match = key_enable_r && (data_fifo[data_rd_ptr] == key_value_r);
+    wire do_write = active && data_count != 0 && !key_match;
 
-    assign rd_addr = src_pixel_addr;
-    assign rd_en   = (state == READ_REQ);
-
-    assign wr_addr = dst_pixel_addr;
-    assign wr_data = pixel;
-    assign wr_en   = (state == WRITE_REQ);
-
-    wire last_col   = (col == width  - 16'd1);
-    wire last_row   = (row == height - 16'd1);
-    wire key_match  = key_enable_r && (rd_data == key_value_r);
+    assign rd_addr = src_row_addr + ADDR_WIDTH'(issue_col) * BYTES_PER_PIXEL;
+    // Leave room for returned data so the shared adapter can switch to the
+    // write side and drain the response FIFO instead of overrunning it.
+    // Keep the response queue shallow so destination writes are interleaved
+    // with source reads instead of arriving as long four-pixel bursts.
+    assign rd_en = active && !all_issued && issue_space && (data_count < 3);
+    assign wr_addr = write_addr_fifo[data_rd_ptr];
+    assign wr_data = data_fifo[data_rd_ptr];
+    assign wr_en = do_write;
 
     always_ff @(posedge clk or posedge reset) begin
         if (reset) begin
-            state        <= IDLE;
-            busy         <= 1'b0;
-            done         <= 1'b0;
-            col          <= '0;
-            row          <= '0;
-            src_row_addr <= '0;
-            dst_row_addr <= '0;
-            pixel        <= '0;
-            key_enable_r <= 1'b0;
-            key_value_r  <= '0;
+            busy <= 0; done <= 0; active <= 0;
+            addr_wr_ptr <= 0; addr_rd_ptr <= 0; data_wr_ptr <= 0; data_rd_ptr <= 0;
+            addr_count <= 0; data_count <= 0; issued <= 0; total_pixels <= 0;
+            issue_col <= 0; issue_row <= 0; src_row_addr <= 0; dst_row_addr <= 0;
+            width_r <= 0; dst_pitch_r <= 0; src_pitch_r <= 0;
+            key_enable_r <= 0; key_value_r <= 0;
         end else begin
-            done <= 1'b0;
+            done <= 0;
 
-            unique case (state)
-                IDLE: begin
-                    if (start && width != 16'd0 && height != 16'd0) begin
-                        busy         <= 1'b1;
-                        col          <= 16'd0;
-                        row          <= 16'd0;
-                        src_row_addr <= src_addr;
-                        dst_row_addr <= dst_addr;
-                        key_enable_r <= key_enable;
-                        key_value_r  <= key_value;
-                        state        <= READ_REQ;
+            if (!active && start && width != 0 && height != 0) begin
+                active <= 1; busy <= 1;
+                width_r <= width;
+                dst_pitch_r <= dst_pitch; src_pitch_r <= src_pitch;
+                key_enable_r <= key_enable; key_value_r <= key_value;
+                issue_col <= 0; issue_row <= 0;
+                src_row_addr <= src_addr; dst_row_addr <= dst_addr;
+                issued <= 0; total_pixels <= width * height;
+                addr_wr_ptr <= 0; addr_rd_ptr <= 0;
+                data_wr_ptr <= 0; data_rd_ptr <= 0;
+                addr_count <= 0; data_count <= 0;
+            end else if (active) begin
+                if (rd_en && rd_ready) begin
+                    addr_fifo[addr_wr_ptr] <= dst_row_addr + ADDR_WIDTH'(issue_col) * BYTES_PER_PIXEL;
+                    addr_wr_ptr <= addr_wr_ptr + 1'b1;
+                    issued <= issued + 1'b1;
+                    if (issue_col == width_r - 1) begin
+                        issue_col <= 0;
+                        issue_row <= issue_row + 1'b1;
+                        src_row_addr <= src_row_addr + ADDR_WIDTH'(src_pitch_r);
+                        dst_row_addr <= dst_row_addr + ADDR_WIDTH'(dst_pitch_r);
+                    end else begin
+                        issue_col <= issue_col + 1'b1;
                     end
                 end
 
-                READ_REQ: begin
-                    if (rd_en && rd_ready) state <= READ_WAIT;
+                if (rd_valid) begin
+                    write_addr_fifo[data_wr_ptr] <= addr_fifo[addr_rd_ptr];
+                    data_fifo[data_wr_ptr] <= rd_data;
+                    data_wr_ptr <= data_wr_ptr + 1'b1;
+                end
+                if (rd_valid) addr_rd_ptr <= addr_rd_ptr + 1'b1;
+                case ({rd_en && rd_ready, rd_valid})
+                    2'b10: addr_count <= addr_count + 1'b1;
+                    2'b01: addr_count <= addr_count - 1'b1;
+                    default: addr_count <= addr_count;
+                endcase
+
+                if ((do_write && wr_ready) || (data_count != 0 && key_match)) begin
+                    data_rd_ptr <= data_rd_ptr + 1'b1;
                 end
 
-                READ_WAIT: begin
-                    if (rd_valid) begin
-                        pixel <= rd_data;
-                        if (key_match) begin
-                            // Skip the write -- same index-advance logic as
-                            // WRITE_REQ's completion below, just reached
-                            // without ever asserting wr_en for this pixel.
-                            if (last_col) begin
-                                col <= 16'd0;
-                                if (last_row) begin
-                                    state <= FINISH;
-                                end else begin
-                                    row          <= row + 16'd1;
-                                    src_row_addr <= src_row_addr + ADDR_WIDTH'(src_pitch);
-                                    dst_row_addr <= dst_row_addr + ADDR_WIDTH'(dst_pitch);
-                                    state        <= READ_REQ;
-                                end
-                            end else begin
-                                col   <= col + 16'd1;
-                                state <= READ_REQ;
-                            end
-                        end else begin
-                            state <= WRITE_REQ;
-                        end
-                    end
-                end
+                case ({rd_valid, ((do_write && wr_ready) || (data_count != 0 && key_match))})
+                    2'b10: data_count <= data_count + 1'b1;
+                    2'b01: data_count <= data_count - 1'b1;
+                    default: data_count <= data_count;
+                endcase
 
-                WRITE_REQ: begin
-                    if (wr_en && wr_ready) begin
-                        if (last_col) begin
-                            col <= 16'd0;
-                            if (last_row) begin
-                                state <= FINISH;
-                            end else begin
-                                row          <= row + 16'd1;
-                                src_row_addr <= src_row_addr + ADDR_WIDTH'(src_pitch);
-                                dst_row_addr <= dst_row_addr + ADDR_WIDTH'(dst_pitch);
-                                state        <= READ_REQ;
-                            end
-                        end else begin
-                            col   <= col + 16'd1;
-                            state <= READ_REQ;
-                        end
-                    end
+                if (all_issued && addr_count == 0 && data_count == 0 && !rd_valid) begin
+                    active <= 0; busy <= 0; done <= 1;
                 end
-
-                FINISH: begin
-                    busy  <= 1'b0;
-                    done  <= 1'b1;
-                    state <= IDLE;
-                end
-
-                default: state <= IDLE;
-            endcase
+            end
         end
     end
-
 endmodule

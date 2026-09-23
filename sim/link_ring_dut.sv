@@ -47,10 +47,15 @@ module link_ring_dut (
 
     ddram_adapter adapter_i (
         .clk             (clk),
+        .reset           (reset),
         .wr_addr         (wr_addr),
         .wr_data         (wr_data),
         .wr_en           (wr_en),
         .wr_ready        (wr_ready),
+        .wr64_addr       (32'd0),
+        .wr64_data       (64'd0),
+        .wr64_en         (1'b0),
+        .wr64_ready      (),
         .rd_addr         (rd_addr),
         .rd_en           (rd_en),
         .rd_ready        (rd_ready),

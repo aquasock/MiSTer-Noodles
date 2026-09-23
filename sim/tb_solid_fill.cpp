@@ -52,6 +52,13 @@ public:
         writes_.push_back(addr);
     }
 
+    void MaybeWrite64(bool wr_en, bool wr_ready, uint32_t addr, uint64_t value) {
+        if (!(wr_en && wr_ready)) return;
+        for (int i = 0; i < 8; ++i) data_[addr + i] = (value >> (8 * i)) & 0xFF;
+        writes_.push_back(addr);
+        writes_.push_back(addr + 4);
+    }
+
     uint32_t Read32(uint32_t addr) const {
         return data_[addr] | (data_[addr + 1] << 8) | (data_[addr + 2] << 16) |
                (data_[addr + 3] << 24);
@@ -72,6 +79,7 @@ public:
 
     void Tick(Memory &mem, bool wr_ready) {
         dut_->wr_ready = wr_ready ? 1 : 0;
+        dut_->wr64_ready = wr_ready ? 1 : 0;
 
         dut_->clk = 0;
         dut_->eval();
@@ -79,6 +87,8 @@ public:
         dut_->clk = 1;
         dut_->eval();
         mem.MaybeWrite(dut_->wr_en, dut_->wr_ready, dut_->wr_addr, dut_->wr_data);
+        mem.MaybeWrite64(dut_->wr64_en, dut_->wr64_ready, dut_->wr64_addr,
+                         dut_->wr64_data);
     }
 
     Vengine_dut &dut() { return *dut_; }

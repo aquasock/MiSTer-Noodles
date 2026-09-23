@@ -30,6 +30,10 @@ module blit #(
     output logic [DATA_WIDTH-1:0] wr_data,
     output logic                  wr_en,
     input  logic                  wr_ready
+    ,output logic [ADDR_WIDTH-1:0] wr64_addr,
+    output logic [63:0] wr64_data,
+    output logic wr64_en,
+    input logic wr64_ready
 );
 
     typedef enum logic [1:0] {IDLE, RUN, FINISH} state_t;
@@ -40,13 +44,19 @@ module blit #(
 
     wire pixel_valid = (state == RUN);
     wire pixel_fire  = pixel_valid && wr_ready;
+    wire pair_valid = pixel_valid && (col[0] == 1'b0) &&
+                      (col + 16'd1 < width) && (row_addr[2] == 1'b0);
+    wire pair_fire = pair_valid && wr64_ready;
 
     wire last_col = (col == width  - 16'd1);
     wire last_row = (row == height - 16'd1);
 
     assign wr_addr = row_addr + ADDR_WIDTH'(col) * BYTES_PER_PIXEL;
     assign wr_data = color;
-    assign wr_en   = pixel_valid;
+    assign wr_en   = pixel_valid && !pair_valid;
+    assign wr64_addr = row_addr + ADDR_WIDTH'(col) * BYTES_PER_PIXEL;
+    assign wr64_data = {color, color};
+    assign wr64_en = pair_valid;
 
     always_ff @(posedge clk or posedge reset) begin
         if (reset) begin
@@ -71,7 +81,19 @@ module blit #(
                 end
 
                 RUN: begin
-                    if (pixel_fire) begin
+                    if (pair_fire) begin
+                        if (col + 16'd2 >= width) begin
+                            col <= 16'd0;
+                            if (last_row) begin
+                                state <= FINISH;
+                            end else begin
+                                row      <= row + 16'd1;
+                                row_addr <= row_addr + ADDR_WIDTH'(dst_pitch);
+                            end
+                        end else begin
+                            col <= col + 16'd2;
+                        end
+                    end else if (pixel_fire) begin
                         if (last_col) begin
                             col <= 16'd0;
                             if (last_row) begin

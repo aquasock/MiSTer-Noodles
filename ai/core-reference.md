@@ -93,6 +93,7 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 | Where does the ring buffer live in memory? | LINK component records | LINK-002 |
 | How does CMDQ actually find and fetch a queued command? | LINK component records | LINK-003 |
 | Why does a shared read port need a "who's mid-request" signal, not just rd_en? | DDR/LINK component records | DDR-005 |
+| How are mixed DDRAM reads and writes captured and retired? | DDR component records | DDR-006 |
 | How do I pack an R,G,B color into SOLID_FILL's color field? | BLIT component records | BLIT-004 |
 | Why doesn't the engine have a third (noise-fill) op? | BLIT component records | BLIT-005 |
 | How do I composite a sprite over a background without a bounding box? | BLIT component records | BLIT-006 |
@@ -376,6 +377,15 @@ OUT-005: "OUT-004's single-fresh-vblank-edge PRESENT margin is not reliably suff
   decision: "Noodles.sv's 2-way read-port mux (link_ring vs blit_copy, feeding the one shared ddram_adapter per DDR-003) originally keyed its selector on rd_en alone (`rd_sel_link = link_rd_en`). rd_en is a requester's one-shot REQ-phase pulse -- link_ring's own rd_en is (state==POLL_REQ)||(state==FETCH_REQ), dropping the instant a request is accepted and the requester moves to its WAIT phase. But the response (rd_valid/rd_data) arrives during that WAIT phase, sometimes many cycles later. With rd_en as the selector, the mux fell through to the OTHER client's (idle, address 0) signals for the entire WAIT window, so by the time rd_valid actually pulsed, ddram_adapter's byte-half-select (`rd_addr[2] ? dout[63:32] : dout[31:0]`) used the wrong client's (idle) address bit instead of the real requester's pinned one. Found on real hardware: a link-pushed SOLID_FILL's dst_addr field (word_idx=1, upper half of the same aligned DDRAM word as word_idx=0/opcode) consistently read back as opcode's own raw value (1) -- the lower half of that same word -- because copy_rd_addr's idle value (0, bit[2]=0) selected the wrong half at the moment link_ring's response landed. CMDQ/BLIT never saw this as an error: blit_start still fired (a valid-looking, just wrong, dst_addr) and blit_done still fired (once width/height happened to also read correctly), so the failure was silent -- no busy/stuck state, no dropped command, just a write that landed at physical address 1 instead of 0x30000000 and was never found by a memory scan of the address it was expected at. Fixed by giving link_ring a new rd_active output (POLL_REQ||POLL_WAIT||FETCH_REQ||FETCH_WAIT -- the same REQ+WAIT span rd_addr itself was already pinned across) and using that, not rd_en, as the mux selector."
   consequence: "Any future shared-port mux between two request/response clients on this DDRAM adapter must select on a signal spanning the full REQ+WAIT lifetime of a pending transaction, never on the requester's own rd_en/wr_en (which by design only pulses during the REQ phase). This bug was invisible to `make sim`'s link_ring testbench (sim/link_ring_dut.sv) because that DUT wires link_ring directly to its own ddram_adapter instance with no second client and no mux at all -- it never exercised the failure mode that only exists once a real mux with an idle-but-present second client is in the loop. Simulation coverage for shared-bus arbitration bugs requires a testbench that actually includes the mux and a plausible idle second client, not just the module in isolation; no such testbench exists yet for this specific mux, so this class of bug could recur for BLIT-003's own read requests if ddram_adapter ever gains a third client without the same rd_active-style pattern."
 
+- record_id: DDR-006
+  kind: ARCHITECTURE
+  component_id: DDR
+  title: "DDRAM requests are captured in independent registered queues before physical-bus arbitration"
+  status: DECIDED
+  decided_date: 2026-09-22
+  decision: "rtl/ddram_adapter.sv captures scalar and 64-bit write requests in a registered write queue and read requests in a registered read queue. A registered response-metadata queue preserves read order, 32-bit half selection, and 64-bit response type. The physical DDRAM port issues one captured transaction at a time, prioritizing a queued read when response capacity is available and otherwise issuing a queued write. Client ready signals describe queue capacity, not DDRAM_BUSY or the current physical grant, so a client request remains a valid handshake independent of physical-bus backpressure."
+  consequence: "New DDRAM clients must use the queue handshake and must not infer physical acceptance from DDRAM_BUSY. CMDQ command retirement waits for both the engine completion pulse and the adapter's idle signal, which includes queued and outstanding transactions. Replacing this with a combinational phase scheduler or grant-dependent ready logic is not permitted without a new interface decision and mixed-traffic simulation coverage."
+
 - record_id: LINK-002
   kind: INTERFACE
   component_id: LINK
@@ -535,3 +545,9 @@ OUT-005: "OUT-004's single-fresh-vblank-edge PRESENT margin is not reliably suff
 ```yaml
 last_reviewed: 2026-09-21
 ```
+# DDR-005: Paired full-word SOLID_FILL writes
+
+- status: DECIDED
+- component: DDR / BLIT
+- decision: "SOLID_FILL may use an aligned 64-bit DDRAM write containing two identical 32-bit pixels when the destination span permits it. The generic 32-bit half-word write remains the fallback for misaligned starts and odd tails. The physical adapter still uses burst count 1; this optimization changes write width, not transaction ordering or framebuffer ownership."
+- consequence: "A full-width 640-pixel framebuffer clear can use one accepted DDRAM write for every two pixels. All existing command fields, fence completion semantics, PRESENT retirement behavior, and two-buffer constraints remain unchanged. The adapter must preserve read priority and steer full-word writes with byte-enable 0xff."

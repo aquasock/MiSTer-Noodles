@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <deque>
 #include <unordered_map>
 
 #include "Vengine_copy_dut.h"
@@ -103,14 +104,15 @@ public:
     // DDRAM_DOUT/DDRAM_DOUT_READY for the next eval (DDRAM_BUSY stays low
     // throughout -- backpressure is already covered by tb_ddram_adapter.cpp).
     void Step(bool we, bool rd, uint32_t addr, uint64_t din, uint8_t be) {
-        if (pending_read_countdown_ > 0) {
-            if (--pending_read_countdown_ == 0) {
+        dout_ready_ = false;
+        if (!pending_reads_.empty()) {
+            for (auto &pending : pending_reads_) --pending.cycles;
+            if (pending_reads_.front().cycles <= 0) {
                 dout_ready_ = true;
-                auto it = words_.find(pending_read_addr_);
+                auto it = words_.find(pending_reads_.front().addr);
                 dout_ = (it == words_.end()) ? kFillPattern : it->second;
+                pending_reads_.pop_front();
             }
-        } else {
-            dout_ready_ = false;
         }
 
         if (we) {
@@ -128,9 +130,8 @@ public:
             }
             words_[addr] = word;
             ++writes_;
-        } else if (rd && pending_read_countdown_ == 0 && !dout_ready_) {
-            pending_read_addr_ = addr;
-            pending_read_countdown_ = kReadLatency;
+        } else if (rd) {
+            pending_reads_.push_back({addr, kReadLatency});
             ++reads_;
         }
     }
@@ -144,8 +145,8 @@ private:
     static constexpr int kReadLatency = 3;
     static constexpr uint64_t kFillPattern = 0xEEEEEEEEEEEEEEEEull;
     std::unordered_map<uint32_t, uint64_t> words_;
-    uint32_t pending_read_addr_ = 0;
-    int pending_read_countdown_ = 0;
+    struct PendingRead { uint32_t addr; int cycles; };
+    std::deque<PendingRead> pending_reads_;
     bool dout_ready_ = false;
     uint64_t dout_ = 0;
     size_t writes_ = 0;

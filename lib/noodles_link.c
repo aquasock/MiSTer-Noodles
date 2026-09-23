@@ -21,6 +21,7 @@
 #define NOODLES_OP_BLIT_COPY 2u
 #define NOODLES_OP_BLIT_COPY_KEY 3u
 #define NOODLES_OP_PRESENT 4u
+#define NOODLES_OP_SPRITE_BATCH 5u
 
 int noodles_link_open(noodles_link_t *link) {
     memset(link, 0, sizeof(*link));
@@ -95,6 +96,18 @@ int noodles_push_blit_copy_key(noodles_link_t *link, uint32_t dst_addr, uint16_t
                                 uint16_t height, uint32_t colorkey) {
     const uint32_t command[8] = {
         NOODLES_OP_BLIT_COPY_KEY, dst_addr, dst_pitch, width, height, colorkey, src_addr, src_pitch,
+    };
+    return noodles_push_command(link, command);
+}
+
+int noodles_push_sprite_batch(noodles_link_t *link,
+                              const noodles_sprite_descriptor_t *descriptors,
+                              uint16_t count) {
+    if (!descriptors || count == 0 || count > NOODLES_SPRITE_DESCRIPTOR_MAX) return -1;
+    if (noodles_link_upload(link, NOODLES_SPRITE_DESCRIPTOR_ADDR, descriptors,
+                             (size_t)count * sizeof(*descriptors)) != 0) return -1;
+    const uint32_t command[8] = {
+        NOODLES_OP_SPRITE_BATCH, NOODLES_SPRITE_DESCRIPTOR_ADDR, 0, count, 0, 0, 0, 0,
     };
     return noodles_push_command(link, command);
 }
