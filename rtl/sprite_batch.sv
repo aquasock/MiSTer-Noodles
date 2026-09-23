@@ -20,6 +20,7 @@ module sprite_batch #(
     output logic rd_active,
     input logic rd_ready, input logic [DATA_WIDTH-1:0] rd_data, input logic rd_valid,
     output logic [ADDR_WIDTH-1:0] rd64_addr, output logic rd64_en,
+    output logic [7:0] rd64_len,
     input logic rd64_ready, input logic [63:0] rd64_data, input logic rd64_valid,
     output logic [ADDR_WIDTH-1:0] wr_addr, output logic [DATA_WIDTH-1:0] wr_data,
     output logic wr_en, input logic wr_ready,
@@ -37,6 +38,7 @@ module sprite_batch #(
     logic [31:0] copy_rd_addr, copy_wr_addr, copy_wr_data;
     logic [63:0] copy_rd64_data, copy_wr64_data;
     logic copy_rd64_en, copy_rd64_ready, copy_rd64_valid;
+    logic [7:0] copy_rd64_len;
     logic copy_wr_en, copy_wr_ready, copy_wr64_en, copy_wr64_ready;
 
     blit_copy64 copy_i (
@@ -49,6 +51,7 @@ module sprite_batch #(
         .wr_addr(copy_wr_addr), .wr_data(copy_wr_data),
         .wr_en(copy_wr_en), .wr_ready(copy_wr_ready),
         .rd64_addr(copy_rd_addr), .rd64_en(copy_rd64_en),
+        .rd64_len(copy_rd64_len),
         .rd64_ready(copy_rd64_ready), .rd64_data(copy_rd64_data),
         .rd64_valid(copy_rd64_valid),
         .wr64_addr(wr64_addr), .wr64_data(wr64_data),
@@ -61,6 +64,7 @@ module sprite_batch #(
     assign rd_en = (state == DESC_REQ);
     assign rd64_addr = (state == COPY) ? copy_rd_addr : '0;
     assign rd64_en = (state == COPY) ? copy_rd64_en : 1'b0;
+    assign rd64_len = (state == COPY) ? copy_rd64_len : 8'd1;
     assign rd_active = (state == DESC_REQ || state == DESC_WAIT ||
                         state == COPY);
     assign copy_rd64_ready = (state == COPY) ? rd64_ready : 1'b0;

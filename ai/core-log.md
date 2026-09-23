@@ -1731,3 +1731,39 @@ None.
 - [x] Passed
 
 ---
+
+## 53 COMMIT Unreleased 1313218 2026-09-22T22:00:00-07:00
+
+#### Coming From:
+
+Unreleased 1313218
+
+#### Purpose:
+
+Build a real burst-capable DDRAM read pipeline for blit_copy64/sprite_batch (BLIT_COPY's actual hot path), per the user's explicit choice to fix the DDR-003 single-outstanding-read limitation directly rather than run another contention-diagnostic probe first, in pursuit of getting the 64-sprite demo past its ~15fps ceiling.
+
+#### Outcome:
+
+Added DDR-007: an explicit-length descriptor architecture for the DDRAM adapter's 64-bit read port (a new rd64_len input, admitted and issued as a single Avalon command with ddram_burstcnt driven from that declared length) and rewrote blit_copy64's read-issue FSM to declare a burst length up front (bounded by its own free FIFO capacity via a new reserved_count register, and by pairs remaining in the current source row so a burst never crosses a non-contiguous row boundary) instead of issuing one pair-request per cycle. An earlier opportunistic contiguity-detection approach was tried first and abandoned as architecturally broken -- the adapter's combinational issue logic drains a queued request faster than a one-per-cycle producer can ever build up a multi-entry run to discover, so it never actually formed real bursts. Two further real bugs surfaced and were fixed during validation: (1) blit_copy64's aggressive continuous FIFO refilling kept the read queue non-empty far more often than before, and the adapter's original unconditional read-priority write arbitration starved queued writes indefinitely under that load -- fixed with a free-running round-robin toggle (rr) that alternates bus ownership whenever both a read and a write are pending; (2) blit_copy64's completion check (`pairs_issued==total_pairs && pair_count==0`) assumed accepted requests complete almost immediately, which stopped holding once a burst's pairs_issued increments at ACCEPT time, potentially many cycles before data actually arrives -- fixed by gating completion on pairs_done (incremented once per pair actually written) instead. New sim coverage (sim/engine_copy64_dut.sv, sim/tb_blit_copy64.cpp -- the first simulation coverage blit_copy64 has ever had, previously validated only on real hardware) uses a burst-aware behavioral Avalon memory model honoring DDRAM_BURSTCNT; both a plain multi-row copy and a BLIT_COPY_KEY-style checkerboard run pass pixel-exact, with max observed burstcnt=4 confirming real multi-word bursts form. All 8 `make sim` targets pass (the 7 pre-existing ones unchanged, confirming no regression to the scalar/legacy paths). Full Quartus compile succeeded: 0 errors, worst-case setup slack +0.508ns. Deployed to hardware and ran the 64-sprite stress-demo three times: 18.7/18.7/19.0 fps (avg 18.8fps), visually confirmed smoother with no flicker or stutter -- a real, repeatable improvement over the previous consistent ~15fps baseline. However, present-probe-dump's retirement-stall pattern (retire_wait_cyc cycling through the same ~83ms/167ms/250ms values, same missed_boundaries pattern seen before this change) was completely unchanged, meaning the periodic ascal retirement stall investigated earlier this session is NOT caused by blit_copy64's read-burst inefficiency -- that hypothesis is now ruled out by direct hardware measurement, even though the throughput fix itself was real and worth keeping.
+
+#### Next Steps:
+
+The FPS/throughput improvement from DDR-007 is real and should stay; do not revert it looking for the retirement-stall cause. The retirement-stall pattern (present-probe-dump's retire_wait_cyc/missed_boundaries) remains completely unexplained and needs its own fresh diagnostic thread -- start from the premise that it is NOT DDRAM read-bandwidth-related (this record's own before/after hardware measurement rules that out), and look instead at ascal's own internal timing/configuration (per OUT-005's still-open note about ascal's RAMBASE/RAMSIZE/buffering parameters) or something in present.sv's/link_fence's own gating logic. If a future workload pushes sprite counts high enough to re-saturate the DDRAM read path, DDR-007's burst mechanism is now the correct place to extend (e.g. relaxing the row-boundary restriction if a future surface layout makes cross-row addresses contiguous), not a new from-scratch design.
+
+#### Files Modified:
+
+- rtl/ddram_adapter.sv
+- rtl/blit_copy64.sv
+- rtl/sprite_batch.sv
+- Noodles.sv
+- Makefile
+- sim/engine_copy64_dut.sv (new)
+- sim/tb_blit_copy64.cpp (new)
+- ai/core-reference.md (DDR-007)
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---

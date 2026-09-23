@@ -47,6 +47,7 @@ SIM_DIR   := build/sim
 SOLID_FILL_SIM    := $(SIM_DIR)/solid_fill/Vengine_dut
 DDRAM_ADAPTER_SIM := $(SIM_DIR)/ddram_adapter/Vengine_ddram_dut
 BLIT_COPY_SIM     := $(SIM_DIR)/blit_copy/Vengine_copy_dut
+BLIT_COPY64_SIM   := $(SIM_DIR)/blit_copy64/Vengine_copy64_dut
 LINK_RING_SIM     := $(SIM_DIR)/link_ring/Vlink_ring_dut
 LINK_FENCE_SIM    := $(SIM_DIR)/link_fence/Vlink_fence_dut
 PRESENT_SIM       := $(SIM_DIR)/present/Vpresent_dut
@@ -56,10 +57,11 @@ BATCH_CMDQ_SIM    := $(SIM_DIR)/cmdq_batch/Vcmdq_batch_dut
 
 all: $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS) $(ARMPRESENTPROBE)
 
-sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(BLIT_COPY_SIM) $(LINK_RING_SIM) $(LINK_FENCE_SIM) $(PRESENT_SIM) $(BATCH_CMDQ_SIM)
+sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(BLIT_COPY_SIM) $(BLIT_COPY64_SIM) $(LINK_RING_SIM) $(LINK_FENCE_SIM) $(PRESENT_SIM) $(BATCH_CMDQ_SIM)
 	$(SOLID_FILL_SIM)
 	$(DDRAM_ADAPTER_SIM)
 	$(BLIT_COPY_SIM)
+	$(BLIT_COPY64_SIM)
 	$(LINK_RING_SIM)
 	$(LINK_FENCE_SIM)
 	$(PRESENT_SIM)
@@ -88,6 +90,12 @@ $(BLIT_COPY_SIM): rtl/cmdq.sv rtl/blit.sv rtl/blit_copy.sv rtl/blit_copy64.sv rt
 	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module engine_copy_dut \
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
 		rtl/cmdq.sv rtl/blit.sv rtl/blit_copy.sv rtl/blit_copy64.sv rtl/sprite_batch.sv rtl/ddram_adapter.sv sim/engine_copy_dut.sv sim/tb_blit_copy.cpp -o $(notdir $@)
+
+$(BLIT_COPY64_SIM): rtl/blit_copy64.sv rtl/ddram_adapter.sv sim/engine_copy64_dut.sv sim/tb_blit_copy64.cpp
+	@mkdir -p $(dir $@)
+	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module engine_copy64_dut \
+		--Wall --Wno-fatal -Wno-DECLFILENAME \
+		rtl/blit_copy64.sv rtl/ddram_adapter.sv sim/engine_copy64_dut.sv sim/tb_blit_copy64.cpp -o $(notdir $@)
 
 $(LINK_RING_SIM): rtl/link_ring.sv rtl/ddram_adapter.sv sim/link_ring_dut.sv sim/tb_link_ring.cpp
 	@mkdir -p $(dir $@)

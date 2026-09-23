@@ -179,6 +179,7 @@ wire        batch_wr_en, batch_wr_ready, batch_rd_en, batch_rd_ready, batch_rd_v
 wire [31:0] batch_rd64_addr, batch_wr64_addr;
 wire [63:0] batch_rd64_data, batch_wr64_data;
 wire        batch_rd64_en, batch_rd64_ready, batch_rd64_valid;
+wire [7:0]  batch_rd64_len;
 wire        batch_wr64_en, batch_wr64_ready;
 
 // LINK-001/LINK-002/LINK-003: the real host-driven command path.
@@ -378,6 +379,7 @@ sprite_batch sprite_batch
 	.rd_addr(batch_rd_addr), .rd_en(batch_rd_en), .rd_active(batch_rd_active),
 	.rd_ready(batch_rd_ready), .rd_data(batch_rd_data), .rd_valid(batch_rd_valid),
 	.rd64_addr(batch_rd64_addr), .rd64_en(batch_rd64_en),
+	.rd64_len(batch_rd64_len),
 	.rd64_ready(batch_rd64_ready), .rd64_data(batch_rd64_data), .rd64_valid(batch_rd64_valid),
 	.wr_addr(batch_wr_addr), .wr_data(batch_wr_data), .wr_en(batch_wr_en),
 	.wr_ready(batch_wr_ready),
@@ -446,6 +448,7 @@ wire        rd_sel_batch = !rd_sel_link && batch_rd_active;
 wire        rd_sel_batch64 = rd_sel_batch && batch_rd64_en;
 wire [31:0] adapter_rd_addr = rd_sel_link ? link_rd_addr : rd_sel_batch ? batch_rd_addr : copy_rd_addr;
 wire [31:0] adapter_rd64_addr = rd_sel_batch64 ? batch_rd64_addr : 32'b0;
+wire [7:0]  adapter_rd64_len = rd_sel_batch64 ? batch_rd64_len : 8'd1;
 wire        adapter_rd_en   = rd_sel_link ? link_rd_en   : (rd_sel_batch ? batch_rd_en : copy_rd_en);
 wire        adapter_rd64_en = rd_sel_batch64;
 wire        adapter_rd_ready, adapter_rd_valid;
@@ -485,6 +488,7 @@ ddram_adapter ddram_adapter
 	.rd_valid        (adapter_rd_valid),
 	.rd64_addr       (adapter_rd64_addr),
 	.rd64_en         (adapter_rd64_en),
+	.rd64_len        (adapter_rd64_len),
 	.rd64_ready      (adapter_rd64_ready),
 	.rd64_data       (adapter_rd64_data),
 	.rd64_valid      (adapter_rd64_valid),
