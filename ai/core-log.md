@@ -1601,3 +1601,40 @@ None.
 - [ ] Passed
 
 ---
+
+## 49 COMMIT Unreleased ??? 2026-09-22T20:47:03-07:00
+
+#### Coming From:
+
+Unreleased de91934
+
+#### Purpose:
+
+Widen the recovered temporary PRESENT-retirement probe so its wait-cycle measurement survives multiple frame boundaries instead of saturating at 16 bits within one.
+
+#### Outcome:
+
+Plan: reintroduce ascal.vhd's per-retirement debug counters, which entry 48 confirmed are not present on current main, with retire_wait_cyc widened to a saturating 32-bit avl_clk cycle count that keeps counting across any additional frame boundaries seen while a retirement is still pending rather than resetting, plus a new saturating 16-bit missed-boundaries counter for those additional boundaries, alongside the existing 4-bit read_outstanding peak. Wire these through emu_ports.vh, sys_top.v, and Noodles.sv to a new temporary rtl/dbg_present_probe.sv that publishes two 32-bit DRAM words (wait cycles, then peak/missed/sequence packed together) at 0x3003_0000 and 0x3003_0004, kept at the lowest priority in the DDRAM write mux with no change to any real path, matching the recovered reference probe's placement. Add a reproducible ARM diagnostic under tools/ that reads both words and reports a stable sample, wired into the Makefile and scripts/deploy.sh. Validate with make sim, a full Quartus compile, deployment to the test MiSTer, and the standard 64-sprite stress-demo workload while collecting probe samples.
+
+#### Next Steps:
+
+Once hardware samples are collected, correlate the widened wait-cycle and missed-boundary values against the 64-sprite stress-demo's frame-time spikes to decide between an ascal arbitration change and a native timing generator, then remove the temporary probe once the root cause is confirmed and any resulting fix is qualified.
+
+#### Files Modified:
+
+- rtl/dbg_present_probe.sv
+- sys/ascal.vhd
+- sys/emu_ports.vh
+- sys/sys_top.v
+- Noodles.sv
+- files.qip
+- tools/present_probe_dump.c
+- Makefile
+- scripts/deploy.sh
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
