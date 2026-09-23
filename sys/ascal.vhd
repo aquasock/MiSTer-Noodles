@@ -258,6 +258,27 @@ ENTITY ascal IS
 		-- advances to the next frame.
 		o_fb_retired       : OUT std_logic := '0';
 
+		-- Temporary diagnostic (see ai/core-log.md, present-stage stutter
+		-- investigation), no effect on scanout behavior. Both values are
+		-- updated on the same avl_clk edge as o_fb_retired's toggle, so a
+		-- consumer that already synchronizes o_fb_retired can safely
+		-- sample these at the same time.
+		-- Avalon (avl_clk) cycles from the frame boundary being seen to
+		-- retirement actually completing (avl_read_outstanding draining to
+		-- 0), saturating rather than wrapping if the wait is extremely
+		-- long.
+		o_dbg_retire_wait_cyc      : OUT unsigned(31 DOWNTO 0) := (OTHERS => '0');
+		-- Peak avl_read_outstanding observed during that same wait window.
+		o_dbg_read_outstanding_pk  : OUT unsigned(3 DOWNTO 0) := (OTHERS => '0');
+		-- Count of additional frame boundaries seen while a retirement was
+		-- still pending from an earlier boundary, saturating. Nonzero here
+		-- means the wait window above spans more than one frame.
+		o_dbg_missed_boundaries    : OUT unsigned(15 DOWNTO 0) := (OTHERS => '0');
+		-- Retirement predicates observed false at least once while the
+		-- matching wait window was pending: base latch, outstanding reads,
+		-- read data valid, and Avalon state idle, in that bit order.
+		o_dbg_retire_gate_mask     : OUT unsigned(3 DOWNTO 0) := (OTHERS => '0');
+
 		------------------------------------
 		reset_na           : IN    std_logic
 		);
@@ -434,6 +455,15 @@ ARCHITECTURE rtl OF ascal IS
 	SIGNAL avl_read_outstanding : natural RANGE 0 TO 8;
 	SIGNAL avl_retire_pending,avl_base_latched_after_boundary : std_logic;
 	SIGNAL fb_boundary_toggle,fb_boundary_sync,fb_boundary_sync2,fb_boundary_seen : std_logic;
+	-- Temporary diagnostic-only counters -- see o_dbg_* port comments.
+	SIGNAL dbg_retire_wait_ctr     : unsigned(31 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL dbg_retire_wait_reg     : unsigned(31 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL dbg_outstanding_pk      : unsigned(3 DOWNTO 0)  := (OTHERS => '0');
+	SIGNAL dbg_outstanding_reg     : unsigned(3 DOWNTO 0)  := (OTHERS => '0');
+	SIGNAL dbg_missed_boundaries_ctr : unsigned(15 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL dbg_missed_boundaries_reg : unsigned(15 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL dbg_retire_gate_mask_ctr : unsigned(3 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL dbg_retire_gate_mask_reg : unsigned(3 DOWNTO 0) := (OTHERS => '0');
 
 	FUNCTION buf_next(a,b : natural RANGE 0 TO 2; freeze : std_logic := '0') RETURN natural IS
 	BEGIN
@@ -1169,6 +1199,10 @@ BEGIN
 
 	o_fb_base_latched <= fb_base_latched_toggle;
 	o_fb_retired <= fb_retired_toggle;
+	o_dbg_retire_wait_cyc <= dbg_retire_wait_reg;
+	o_dbg_read_outstanding_pk <= dbg_outstanding_reg;
+	o_dbg_missed_boundaries <= dbg_missed_boundaries_reg;
+	o_dbg_retire_gate_mask <= dbg_retire_gate_mask_reg;
 
 	-----------------------------------------------------------------------------
 	i_reset_na<='0'   WHEN reset_na='0' ELSE '1' WHEN rising_edge(i_clk);
@@ -1702,12 +1736,35 @@ BEGIN
 			fb_boundary_sync<='0';
 			fb_boundary_sync2<='0';
 			fb_boundary_seen<='0';
+			dbg_retire_wait_ctr<=(OTHERS => '0');
+			dbg_retire_wait_reg<=(OTHERS => '0');
+			dbg_outstanding_pk<=(OTHERS => '0');
+			dbg_outstanding_reg<=(OTHERS => '0');
+			dbg_missed_boundaries_ctr<=(OTHERS => '0');
+			dbg_missed_boundaries_reg<=(OTHERS => '0');
+			dbg_retire_gate_mask_ctr<=(OTHERS => '0');
+			dbg_retire_gate_mask_reg<=(OTHERS => '0');
 
 		ELSIF rising_edge(avl_clk) THEN
 			fb_boundary_sync<=fb_boundary_toggle; -- <ASYNC>
 			fb_boundary_sync2<=fb_boundary_sync;
 			IF fb_boundary_sync2/=fb_boundary_seen THEN
 				fb_boundary_seen<=fb_boundary_sync2;
+				-- Debug: a retirement already pending when this boundary
+				-- arrives means the PREVIOUS retirement hasn't completed
+				-- yet -- keep dbg_retire_wait_ctr/dbg_outstanding_pk
+				-- running across it instead of restarting at zero, so the
+				-- published sample reflects the true multi-frame wait
+				-- rather than undercounting it, and record that this
+				-- boundary was seen while a retirement was outstanding.
+				IF avl_retire_pending='0' THEN
+					dbg_retire_wait_ctr<=(OTHERS => '0');
+					dbg_outstanding_pk<=(OTHERS => '0');
+					dbg_missed_boundaries_ctr<=(OTHERS => '0');
+					dbg_retire_gate_mask_ctr<=(OTHERS => '0');
+				ELSIF dbg_missed_boundaries_ctr/=x"FFFF" THEN
+					dbg_missed_boundaries_ctr<=dbg_missed_boundaries_ctr+1;
+				END IF;
 				avl_retire_pending<='1';
 				avl_base_latched_after_boundary<='0';
 			ELSIF avl_retire_pending='1' AND avl_base_latched_after_boundary='1' AND
@@ -1715,6 +1772,33 @@ BEGIN
 					avl_readdatavalid='0' AND avl_state=sIDLE THEN
 				fb_retired_toggle<=NOT fb_retired_toggle;
 				avl_retire_pending<='0';
+				-- Debug: publish this (possibly multi-frame) wait window's
+				-- stats alongside retirement.
+				dbg_retire_wait_reg<=dbg_retire_wait_ctr;
+				dbg_outstanding_reg<=dbg_outstanding_pk;
+				dbg_missed_boundaries_reg<=dbg_missed_boundaries_ctr;
+				dbg_retire_gate_mask_reg<=dbg_retire_gate_mask_ctr;
+			ELSIF avl_retire_pending='1' THEN
+				-- Debug: still waiting -- keep counting cycles and peak
+				-- outstanding reads.
+				IF dbg_retire_wait_ctr/=x"FFFFFFFF" THEN
+					dbg_retire_wait_ctr<=dbg_retire_wait_ctr+1;
+				END IF;
+				IF to_unsigned(avl_read_outstanding,4)>dbg_outstanding_pk THEN
+					dbg_outstanding_pk<=to_unsigned(avl_read_outstanding,4);
+				END IF;
+				IF avl_base_latched_after_boundary='0' THEN
+					dbg_retire_gate_mask_ctr(0)<='1';
+				END IF;
+				IF avl_read_outstanding/=0 THEN
+					dbg_retire_gate_mask_ctr(1)<='1';
+				END IF;
+				IF avl_readdatavalid='1' THEN
+					dbg_retire_gate_mask_ctr(2)<='1';
+				END IF;
+				IF avl_state/=sIDLE THEN
+					dbg_retire_gate_mask_ctr(3)<='1';
+				END IF;
 			END IF;
 			----------------------------------
 			avl_write_sync<=i_write; -- <ASYNC>

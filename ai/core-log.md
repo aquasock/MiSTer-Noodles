@@ -1601,3 +1601,75 @@ None.
 - [ ] Passed
 
 ---
+
+## 49 COMMIT Unreleased 210b8f4 2026-09-22T20:47:03-07:00
+
+#### Coming From:
+
+Unreleased de91934
+
+#### Purpose:
+
+Widen the recovered temporary PRESENT-retirement probe so its wait-cycle measurement survives multiple frame boundaries instead of saturating at 16 bits within one.
+
+#### Outcome:
+
+Reintroduced the temporary ascal retirement instrumentation with a saturating 32-bit cycle counter that persists across additional frame boundaries, a saturating 16-bit missed-boundary counter, and the existing peak outstanding-read count. `dbg_present_probe` publishes wait cycles at `0x30030000` and packed sequence, peak, and missed-boundary metadata at `0x30030004` as the lowest-priority DDRAM writer; `present-probe-dump` reads a stable two-word sample and is included in normal ARM, host, and deploy builds. `make all`, `make host`, and all seven RTL simulations passed; Quartus completed with zero errors, 60 warnings, and positive timing. The deployed RBF and ARM tools matched their local MD5 hashes. The standard 64-sprite workload completed 129 frames in 10.0 seconds at 12.9 FPS while 291 complete probe samples showed 179 normal retirements at 1,666,662 cycles with zero missed boundaries, 103 at 4,999,989 cycles with two missed boundaries, and 8 at 6,666,652 cycles with three; all samples reported a peak of two outstanding reads.
+
+#### Next Steps:
+
+Add a focused temporary retirement-gate diagnostic to identify whether delayed retirements are blocked by the base-latch acknowledgement, read-drain condition, or non-idle Avalon state before changing arbitration or replacing the scaler, then remove the probe once the root cause and any resulting fix are qualified.
+
+#### Files Modified:
+
+- rtl/dbg_present_probe.sv
+- sys/ascal.vhd
+- sys/emu_ports.vh
+- sys/sys_top.v
+- Noodles.sv
+- files.qip
+- tools/present_probe_dump.c
+- Makefile
+- scripts/deploy.sh
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
+
+## 50 COMMIT Unreleased ??? 2026-09-22T20:57:26-07:00
+
+#### Coming From:
+
+Unreleased 210b8f4
+
+#### Purpose:
+
+Identify which `ascal` retirement predicate blocks the measured multi-frame PRESENT delays before changing framebuffer arbitration or scanout design.
+
+#### Outcome:
+
+Plan: extend the temporary retirement probe with a four-bit, per-retirement gate-reason mask accumulated while retirement is pending: base latch absent, outstanding scanout reads nonzero, read-data valid asserted, and Avalon state non-idle. Publish the mask in the unused top nibble of the existing metadata word at `0x30030004`, report it from `present-probe-dump`, and preserve the current 32-bit wait count, missed-boundary count, read-peak count, and lowest-priority write placement. Validate with ARM and host builds, RTL simulation, a full Quartus compile, deployment, and the standard 64-sprite workload to distinguish scanout read drainage from base-latch or Avalon-state stalls.
+
+#### Next Steps:
+
+Use the captured gate-reason distribution to select the narrowest corrective path, either scanout/DDRAM arbitration, retirement-handshake sequencing, or a fixed-resolution native timing generator, then remove the temporary diagnostic after the fix is qualified.
+
+#### Files Modified:
+
+- rtl/dbg_present_probe.sv
+- sys/ascal.vhd
+- sys/emu_ports.vh
+- sys/sys_top.v
+- Noodles.sv
+- tools/present_probe_dump.c
+- ai/core-log.md
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---

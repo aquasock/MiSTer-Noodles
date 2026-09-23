@@ -24,6 +24,7 @@ ARMPRESENT  := build/arm/present-demo
 ARMSPRITE   := build/arm/sprite-demo
 ARMLOADBMP  := build/arm/load-bmp
 ARMSTRESS   := build/arm/stress-demo
+ARMPRESENTPROBE := build/arm/present-probe-dump
 HOSTLINK    := build/host/link-push
 HOSTSLOTDUMP:= build/host/link-slot-dump
 HOSTMEMSCAN := build/host/mem-scan
@@ -35,6 +36,7 @@ HOSTPRESENT := build/host/present-demo
 HOSTSPRITE  := build/host/sprite-demo
 HOSTLOADBMP := build/host/load-bmp
 HOSTSTRESS  := build/host/stress-demo
+HOSTPRESENTPROBE := build/host/present-probe-dump
 
 HOST    ?= mister.local
 DEST    ?= /media/fat/pet
@@ -52,7 +54,7 @@ BATCH_CMDQ_SIM    := $(SIM_DIR)/cmdq_batch/Vcmdq_batch_dut
 
 .PHONY: all host deploy sim clean
 
-all: $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS)
+all: $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS) $(ARMPRESENTPROBE)
 
 sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(BLIT_COPY_SIM) $(LINK_RING_SIM) $(LINK_FENCE_SIM) $(PRESENT_SIM) $(BATCH_CMDQ_SIM)
 	$(SOLID_FILL_SIM)
@@ -111,6 +113,9 @@ $(ARMLINK): tools/link_push.c lib/noodles_link.c lib/noodles_link.h | build/arm
 $(ARMSLOTDUMP): tools/link_slot_dump.c | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ $<
 
+$(ARMPRESENTPROBE): tools/present_probe_dump.c | build/arm
+	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ $<
+
 $(ARMMEMSCAN): tools/mem_scan.c | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ $<
 
@@ -138,12 +143,15 @@ $(ARMLOADBMP): tools/load_bmp.c tools/bmp_loader.h lib/noodles_link.c lib/noodle
 $(ARMSTRESS): tools/stress_demo.c tools/bmp_loader.h lib/noodles_link.c lib/noodles_link.h | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ tools/stress_demo.c lib/noodles_link.c
 
-host: $(HOSTLINK) $(HOSTSLOTDUMP) $(HOSTMEMSCAN) $(HOSTCOPYPUSH) $(HOSTFILLPUSH) $(HOSTKEYPUSH) $(HOSTBENCH) $(HOSTPRESENT) $(HOSTSPRITE) $(HOSTLOADBMP) $(HOSTSTRESS)
+host: $(HOSTLINK) $(HOSTSLOTDUMP) $(HOSTMEMSCAN) $(HOSTCOPYPUSH) $(HOSTFILLPUSH) $(HOSTKEYPUSH) $(HOSTBENCH) $(HOSTPRESENT) $(HOSTSPRITE) $(HOSTLOADBMP) $(HOSTSTRESS) $(HOSTPRESENTPROBE)
 
 $(HOSTLINK): tools/link_push.c lib/noodles_link.c lib/noodles_link.h | build/host
 	$(HOSTCC) $(CFLAGS) -o $@ tools/link_push.c lib/noodles_link.c
 
 $(HOSTSLOTDUMP): tools/link_slot_dump.c | build/host
+	$(HOSTCC) $(CFLAGS) -o $@ $<
+
+$(HOSTPRESENTPROBE): tools/present_probe_dump.c | build/host
 	$(HOSTCC) $(CFLAGS) -o $@ $<
 
 $(HOSTMEMSCAN): tools/mem_scan.c | build/host
@@ -176,7 +184,7 @@ $(HOSTSTRESS): tools/stress_demo.c tools/bmp_loader.h lib/noodles_link.c lib/noo
 build/arm build/host:
 	mkdir -p $@
 
-deploy: $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS)
+deploy: $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS) $(ARMPRESENTPROBE)
 	scripts/deploy.sh $(HOST)
 
 clean:

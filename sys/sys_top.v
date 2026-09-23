@@ -706,6 +706,14 @@ wire         ascal_fb_base_latched;
 wire         ascal_fb_retired;
 reg  [1:0]   ascal_fb_base_latched_sync;
 reg  [1:0]   ascal_fb_retired_sync;
+wire [31:0]  ascal_dbg_retire_wait_cyc;
+wire [15:0]  ascal_dbg_missed_boundaries;
+wire  [3:0]  ascal_dbg_read_outstanding_pk;
+wire  [3:0]  ascal_dbg_retire_gate_mask;
+reg  [31:0]  ascal_dbg_retire_wait_cyc_r;
+reg  [15:0]  ascal_dbg_missed_boundaries_r;
+reg   [3:0]  ascal_dbg_read_outstanding_pk_r;
+reg   [3:0]  ascal_dbg_retire_gate_mask_r;
 
 wire  [23:0] hdmi_data;
 wire         hdmi_vs, hdmi_hs, hdmi_de, hdmi_vbl, hdmi_brd;
@@ -832,7 +840,11 @@ wire         bob_deint;
 		.avl_read         (vbuf_read),
 		.avl_byteenable   (vbuf_byteenable),
 		.o_fb_base_latched(ascal_fb_base_latched),
-		.o_fb_retired     (ascal_fb_retired)
+		.o_fb_retired     (ascal_fb_retired),
+		.o_dbg_retire_wait_cyc     (ascal_dbg_retire_wait_cyc),
+		.o_dbg_missed_boundaries   (ascal_dbg_missed_boundaries),
+		.o_dbg_read_outstanding_pk (ascal_dbg_read_outstanding_pk),
+		.o_dbg_retire_gate_mask    (ascal_dbg_retire_gate_mask)
 	);
 `endif
 
@@ -848,6 +860,25 @@ always @(posedge clk_sys or posedge reset) begin
 		ascal_fb_retired_sync <= 2'b00;
 	else
 		ascal_fb_retired_sync <= {ascal_fb_retired_sync[0], ascal_fb_retired};
+end
+
+// Temporary diagnostic/instrumentation only -- these are quasi-static buses
+// (they change once per retire event, ms apart, and are held stable for the
+// entire gap), so a plain 2-flop resync per bit is sufficient; no
+// toggle-based handshake is needed the way it is for the single-bit
+// ascal_fb_retired.
+always @(posedge clk_sys or posedge reset) begin
+	if (reset) begin
+		ascal_dbg_retire_wait_cyc_r     <= 32'd0;
+		ascal_dbg_missed_boundaries_r   <= 16'd0;
+		ascal_dbg_read_outstanding_pk_r <= 4'd0;
+		ascal_dbg_retire_gate_mask_r    <= 4'd0;
+	end else begin
+		ascal_dbg_retire_wait_cyc_r     <= ascal_dbg_retire_wait_cyc;
+		ascal_dbg_missed_boundaries_r   <= ascal_dbg_missed_boundaries;
+		ascal_dbg_read_outstanding_pk_r <= ascal_dbg_read_outstanding_pk;
+		ascal_dbg_retire_gate_mask_r    <= ascal_dbg_retire_gate_mask;
+	end
 end
 
 reg        LFB_EN     = 0;
@@ -1817,6 +1848,10 @@ emu emu
 	.FB_VBL(fb_vbl),
 	.FB_BASE_LATCHED(ascal_fb_base_latched_sync[1]),
 	.FB_RETIRED(ascal_fb_retired_sync[1]),
+	.DBG_RETIRE_WAIT_CYC(ascal_dbg_retire_wait_cyc_r),
+	.DBG_MISSED_BOUNDARIES(ascal_dbg_missed_boundaries_r),
+	.DBG_READ_OUTSTANDING_PK(ascal_dbg_read_outstanding_pk_r),
+	.DBG_RETIRE_GATE_MASK(ascal_dbg_retire_gate_mask_r),
 	.FB_LL(lowlat),
 	.FB_FORCE_BLANK(fb_force_blank),
 

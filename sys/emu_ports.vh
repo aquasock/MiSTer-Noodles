@@ -54,6 +54,13 @@ output [13:0] FB_STRIDE,
 input         FB_VBL,
 input         FB_BASE_LATCHED,
 input         FB_RETIRED,
+// Temporary diagnostic/instrumentation only, no effect on scanout -- see
+// ascal.vhd's o_dbg_* port comments. Valid at the same time as a fresh
+// FB_RETIRED edge.
+input  [31:0] DBG_RETIRE_WAIT_CYC,
+input  [15:0] DBG_MISSED_BOUNDARIES,
+input   [3:0] DBG_READ_OUTSTANDING_PK,
+input   [3:0] DBG_RETIRE_GATE_MASK,
 input         FB_LL,
 output        FB_FORCE_BLANK,
 
