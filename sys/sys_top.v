@@ -709,9 +709,11 @@ reg  [1:0]   ascal_fb_retired_sync;
 wire [31:0]  ascal_dbg_retire_wait_cyc;
 wire [15:0]  ascal_dbg_missed_boundaries;
 wire  [3:0]  ascal_dbg_read_outstanding_pk;
+wire  [3:0]  ascal_dbg_retire_gate_mask;
 reg  [31:0]  ascal_dbg_retire_wait_cyc_r;
 reg  [15:0]  ascal_dbg_missed_boundaries_r;
 reg   [3:0]  ascal_dbg_read_outstanding_pk_r;
+reg   [3:0]  ascal_dbg_retire_gate_mask_r;
 
 wire  [23:0] hdmi_data;
 wire         hdmi_vs, hdmi_hs, hdmi_de, hdmi_vbl, hdmi_brd;
@@ -841,7 +843,8 @@ wire         bob_deint;
 		.o_fb_retired     (ascal_fb_retired),
 		.o_dbg_retire_wait_cyc     (ascal_dbg_retire_wait_cyc),
 		.o_dbg_missed_boundaries   (ascal_dbg_missed_boundaries),
-		.o_dbg_read_outstanding_pk (ascal_dbg_read_outstanding_pk)
+		.o_dbg_read_outstanding_pk (ascal_dbg_read_outstanding_pk),
+		.o_dbg_retire_gate_mask    (ascal_dbg_retire_gate_mask)
 	);
 `endif
 
@@ -869,10 +872,12 @@ always @(posedge clk_sys or posedge reset) begin
 		ascal_dbg_retire_wait_cyc_r     <= 32'd0;
 		ascal_dbg_missed_boundaries_r   <= 16'd0;
 		ascal_dbg_read_outstanding_pk_r <= 4'd0;
+		ascal_dbg_retire_gate_mask_r    <= 4'd0;
 	end else begin
 		ascal_dbg_retire_wait_cyc_r     <= ascal_dbg_retire_wait_cyc;
 		ascal_dbg_missed_boundaries_r   <= ascal_dbg_missed_boundaries;
 		ascal_dbg_read_outstanding_pk_r <= ascal_dbg_read_outstanding_pk;
+		ascal_dbg_retire_gate_mask_r    <= ascal_dbg_retire_gate_mask;
 	end
 end
 
@@ -1846,6 +1851,7 @@ emu emu
 	.DBG_RETIRE_WAIT_CYC(ascal_dbg_retire_wait_cyc_r),
 	.DBG_MISSED_BOUNDARIES(ascal_dbg_missed_boundaries_r),
 	.DBG_READ_OUTSTANDING_PK(ascal_dbg_read_outstanding_pk_r),
+	.DBG_RETIRE_GATE_MASK(ascal_dbg_retire_gate_mask_r),
 	.FB_LL(lowlat),
 	.FB_FORCE_BLANK(fb_force_blank),
 

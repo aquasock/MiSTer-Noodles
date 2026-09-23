@@ -274,6 +274,10 @@ ENTITY ascal IS
 		-- still pending from an earlier boundary, saturating. Nonzero here
 		-- means the wait window above spans more than one frame.
 		o_dbg_missed_boundaries    : OUT unsigned(15 DOWNTO 0) := (OTHERS => '0');
+		-- Retirement predicates observed false at least once while the
+		-- matching wait window was pending: base latch, outstanding reads,
+		-- read data valid, and Avalon state idle, in that bit order.
+		o_dbg_retire_gate_mask     : OUT unsigned(3 DOWNTO 0) := (OTHERS => '0');
 
 		------------------------------------
 		reset_na           : IN    std_logic
@@ -458,6 +462,8 @@ ARCHITECTURE rtl OF ascal IS
 	SIGNAL dbg_outstanding_reg     : unsigned(3 DOWNTO 0)  := (OTHERS => '0');
 	SIGNAL dbg_missed_boundaries_ctr : unsigned(15 DOWNTO 0) := (OTHERS => '0');
 	SIGNAL dbg_missed_boundaries_reg : unsigned(15 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL dbg_retire_gate_mask_ctr : unsigned(3 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL dbg_retire_gate_mask_reg : unsigned(3 DOWNTO 0) := (OTHERS => '0');
 
 	FUNCTION buf_next(a,b : natural RANGE 0 TO 2; freeze : std_logic := '0') RETURN natural IS
 	BEGIN
@@ -1196,6 +1202,7 @@ BEGIN
 	o_dbg_retire_wait_cyc <= dbg_retire_wait_reg;
 	o_dbg_read_outstanding_pk <= dbg_outstanding_reg;
 	o_dbg_missed_boundaries <= dbg_missed_boundaries_reg;
+	o_dbg_retire_gate_mask <= dbg_retire_gate_mask_reg;
 
 	-----------------------------------------------------------------------------
 	i_reset_na<='0'   WHEN reset_na='0' ELSE '1' WHEN rising_edge(i_clk);
@@ -1735,6 +1742,8 @@ BEGIN
 			dbg_outstanding_reg<=(OTHERS => '0');
 			dbg_missed_boundaries_ctr<=(OTHERS => '0');
 			dbg_missed_boundaries_reg<=(OTHERS => '0');
+			dbg_retire_gate_mask_ctr<=(OTHERS => '0');
+			dbg_retire_gate_mask_reg<=(OTHERS => '0');
 
 		ELSIF rising_edge(avl_clk) THEN
 			fb_boundary_sync<=fb_boundary_toggle; -- <ASYNC>
@@ -1752,6 +1761,7 @@ BEGIN
 					dbg_retire_wait_ctr<=(OTHERS => '0');
 					dbg_outstanding_pk<=(OTHERS => '0');
 					dbg_missed_boundaries_ctr<=(OTHERS => '0');
+					dbg_retire_gate_mask_ctr<=(OTHERS => '0');
 				ELSIF dbg_missed_boundaries_ctr/=x"FFFF" THEN
 					dbg_missed_boundaries_ctr<=dbg_missed_boundaries_ctr+1;
 				END IF;
@@ -1767,6 +1777,7 @@ BEGIN
 				dbg_retire_wait_reg<=dbg_retire_wait_ctr;
 				dbg_outstanding_reg<=dbg_outstanding_pk;
 				dbg_missed_boundaries_reg<=dbg_missed_boundaries_ctr;
+				dbg_retire_gate_mask_reg<=dbg_retire_gate_mask_ctr;
 			ELSIF avl_retire_pending='1' THEN
 				-- Debug: still waiting -- keep counting cycles and peak
 				-- outstanding reads.
@@ -1775,6 +1786,18 @@ BEGIN
 				END IF;
 				IF to_unsigned(avl_read_outstanding,4)>dbg_outstanding_pk THEN
 					dbg_outstanding_pk<=to_unsigned(avl_read_outstanding,4);
+				END IF;
+				IF avl_base_latched_after_boundary='0' THEN
+					dbg_retire_gate_mask_ctr(0)<='1';
+				END IF;
+				IF avl_read_outstanding/=0 THEN
+					dbg_retire_gate_mask_ctr(1)<='1';
+				END IF;
+				IF avl_readdatavalid='1' THEN
+					dbg_retire_gate_mask_ctr(2)<='1';
+				END IF;
+				IF avl_state/=sIDLE THEN
+					dbg_retire_gate_mask_ctr(3)<='1';
 				END IF;
 			END IF;
 			----------------------------------

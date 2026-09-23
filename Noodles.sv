@@ -280,6 +280,7 @@ dbg_present_probe dbg_present_probe
 	.retire_wait_cyc    (DBG_RETIRE_WAIT_CYC),
 	.missed_boundaries  (DBG_MISSED_BOUNDARIES),
 	.read_outstanding_pk(DBG_READ_OUTSTANDING_PK),
+	.retire_gate_mask   (DBG_RETIRE_GATE_MASK),
 	.wr_addr            (dbg_wr_addr),
 	.wr_data            (dbg_wr_data),
 	.wr_en              (dbg_wr_en),

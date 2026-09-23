@@ -1,7 +1,8 @@
 // Temporary diagnostic (see ai/core-log.md, present-stage stutter
 // investigation): reads rtl/dbg_present_probe.sv's two published words
 // directly from shared DDR3 and reports the widened per-retirement
-// measurements -- see that module's header comment for the exact field
+// measurements, including the accumulated retirement-gate reason mask -- see
+// that module's header comment for the exact field
 // layout. Companion to tools/mem_scan.c and tools/link_slot_dump.c, same
 // direct /dev/mem approach, no LINK/CMDQ involvement.
 //
@@ -82,9 +83,12 @@ int main(int argc, char **argv) {
         uint32_t retire_wait_cyc = w0b;
         uint16_t missed_boundaries = (uint16_t)(w1b & 0xFFFFu);
         uint8_t read_outstanding_pk = (uint8_t)((w1b >> 16) & 0xFu);
+        uint8_t retire_gate_mask = (uint8_t)(w1b >> 28);
 
-        printf("seq=%3u  retire_wait_cyc=%10u  missed_boundaries=%5u  read_outstanding_pk=%u\n",
-               seq_b, retire_wait_cyc, missed_boundaries, read_outstanding_pk);
+        printf("seq=%3u  retire_wait_cyc=%10u  missed_boundaries=%5u  "
+               "read_outstanding_pk=%u  retire_gate_mask=0x%x\n",
+               seq_b, retire_wait_cyc, missed_boundaries, read_outstanding_pk,
+               retire_gate_mask);
 
         last_seq = seq_b;
         last_seq_valid = 1;

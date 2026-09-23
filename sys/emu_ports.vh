@@ -60,6 +60,7 @@ input         FB_RETIRED,
 input  [31:0] DBG_RETIRE_WAIT_CYC,
 input  [15:0] DBG_MISSED_BOUNDARIES,
 input   [3:0] DBG_READ_OUTSTANDING_PK,
+input   [3:0] DBG_RETIRE_GATE_MASK,
 input         FB_LL,
 output        FB_FORCE_BLANK,
 

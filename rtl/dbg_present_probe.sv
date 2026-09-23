@@ -1,6 +1,7 @@
 // Temporary diagnostic (see ai/core-log.md, present-stage stutter
 // investigation): publishes ascal.vhd's o_dbg_retire_wait_cyc /
-// o_dbg_missed_boundaries / o_dbg_read_outstanding_pk to two fixed DRAM
+// o_dbg_missed_boundaries / o_dbg_read_outstanding_pk /
+// o_dbg_retire_gate_mask to two fixed DRAM
 // words, once per PRESENT retirement, so a host tool can poll it without a
 // Signal Tap license. Modeled directly on rtl/link_fence.sv's
 // publish-on-change pattern; not folded into link_fence itself since it
@@ -24,7 +25,11 @@
 //                                   same window (0-8)
 //   [27:20] seq                 -- rolling sample counter, so the host can
 //                                   tell a fresh sample from a repeated one
-//   [31:28] unused, always 0
+//   [31:28] gate_mask:
+//              bit 0: framebuffer base latch had not arrived
+//              bit 1: scanout reads remained outstanding
+//              bit 2: scanout read data was still arriving
+//              bit 3: Avalon request state was not idle
 //
 // The two words are written back-to-back on the same retirement sample and
 // are not updated atomically as a pair: if FB_RETIRED toggles again between
@@ -46,6 +51,7 @@ module dbg_present_probe #(
     input logic [31:0]  retire_wait_cyc,
     input logic [15:0]  missed_boundaries,
     input logic  [3:0]  read_outstanding_pk,
+    input logic  [3:0]  retire_gate_mask,
 
     output logic [31:0] wr_addr,
     output logic [31:0] wr_data,
@@ -61,13 +67,14 @@ module dbg_present_probe #(
     logic [31:0] latched_wait_cyc;
     logic [15:0] latched_missed_boundaries;
     logic  [3:0] latched_outstanding_pk;
+    logic  [3:0] latched_gate_mask;
     logic        initialized;
 
     wire pending = !initialized || (sample_seq != published_seq);
 
     assign wr_addr = (state == WRITE_W1) ? (DBG_ADDR + 32'd4) : DBG_ADDR;
     assign wr_data = (state == WRITE_W1)
-                      ? {4'b0, sample_seq, latched_outstanding_pk, latched_missed_boundaries}
+                      ? {latched_gate_mask, sample_seq, latched_outstanding_pk, latched_missed_boundaries}
                       : latched_wait_cyc;
     assign wr_en   = (state == WRITE_W0) || (state == WRITE_W1);
 
@@ -79,6 +86,7 @@ module dbg_present_probe #(
             latched_wait_cyc          <= '0;
             latched_missed_boundaries <= '0;
             latched_outstanding_pk    <= '0;
+            latched_gate_mask         <= '0;
             initialized               <= 1'b0;
         end else begin
             if (retired_edge) begin
@@ -86,6 +94,7 @@ module dbg_present_probe #(
                 latched_wait_cyc          <= retire_wait_cyc;
                 latched_missed_boundaries <= missed_boundaries;
                 latched_outstanding_pk    <= read_outstanding_pk;
+                latched_gate_mask         <= retire_gate_mask;
             end
 
             unique case (state)
