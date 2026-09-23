@@ -1702,3 +1702,32 @@ None.
 - [x] Passed
 
 ---
+
+## 52 COMMIT Unreleased ??? 2026-09-22T21:22:00-07:00
+
+#### Coming From:
+
+Unreleased 1313218
+
+#### Purpose:
+
+Evaluate replacing ascal/MISTER_FB scan-out with a native HSync/VSync/DE timing generator as an alternative path off OUT-005's unresolved ghosting/retirement stall.
+
+#### Outcome:
+
+No RTL was changed. Discussion established the real scope before any commitment: `ascal`'s scan-out bandwidth comes from a dedicated Avalon-MM port physically separate from `DDRAM_*` (DDR-004), plus vendored burst-read/prefetch machinery this project has never had to build. A native generator would need its own ~25MHz-class pixel-clock PLL output, a from-scratch raster/sync generator, and a burst-capable DDRAM read pipeline with line-buffer prefetch to hide DDR3 latency, since `rtl/ddram_adapter.sv`'s existing read port is single-word/single-outstanding (DDR-003) -- measured at ~8.2 cycles/pixel (bench.c), which caps sustained scanout reads around ~10MB/s on the current adapter. Candidate targets 640x480@60 (~73.7MB/s active-pixel bandwidth) and 800x600@60 (~115MB/s, actually the harder target, not easier) both exceed that by 7-11x. After walking through this, the user chose to stay on the ascal/MISTER_FB path (OUT-002) rather than commit to building a burst-capable scanout read engine first.
+
+#### Next Steps:
+
+OUT-005 remains open. Continue from entry 51's plan: design a phase-specific retirement probe that identifies the first blocking predicate at each stall, rather than pursuing the native-timing-generator alternative. If a burst-capable DDRAM read path is ever built for other reasons, revisit native timing generation as a option at that point rather than re-deriving this bandwidth analysis from scratch.
+
+#### Files Modified:
+
+None.
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
