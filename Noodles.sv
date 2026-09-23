@@ -560,18 +560,37 @@ pll pll
 
 wire reset = RESET | status[0] | buttons[1];
 
+// SDR-002 (core-log entry 64, step 3's open question resolved this step):
+// sdram_cdc/sdram_adapter's domain-B (clk_sdram) flops need their own
+// reset, separate from sdram.sv's own init/startup sequencing (already,
+// separately, tied to ~pll_locked below and left untouched). reset_sdram
+// is a standard async-assert/2FF-synchronized-deassert bridge: reset
+// (clk_sys-domain, asynchronous relative to clk_sdram) can assert
+// reset_sdram immediately, but de-assertion is resynchronized through two
+// clk_sdram-domain flops before the sdram_adapter/sdram_cdc logic actually
+// comes out of reset, so a de-assertion edge landing near a clk_sdram
+// clock edge cannot propagate a metastable value into those domain-B
+// state machines.
+reg [1:0] reset_sdram_sync = 2'b11;
+wire      reset_sdram = reset_sdram_sync[1];
+always_ff @(posedge clk_sdram or posedge reset) begin
+	if (reset) reset_sdram_sync <= 2'b11;
+	else       reset_sdram_sync <= {reset_sdram_sync[0], 1'b0};
+end
+
 // SDR-001 (core-log entry 62, step 2): the local SDRAM board
 // controller, vendored from MiSTer-devel/NeoGeo_MiSTer's rtl/sdram.sv (see
 // rtl/sdram.sv's own header). It is HPS-invisible (GPIO-wired to FPGA
 // fabric only, confirmed this step -- see core-log entry 62's discovery
 // note) and physically separate from DDRAM_*'s DDR3/F2H bridge, so it
 // cannot be reached by the host and never shares an address space with
-// SURF-003's DDR3 window. Its sel/rd/wr/refresh/copy-port inputs are all
-// tied inactive here -- this step only proves the controller initializes
-// and drives real SDRAM_* pins without breaking anything else; nothing
-// depends on it yet. Wiring real sprite-source reads onto it (step 5 of
-// entry 61's plan) needs a CDC boundary (step 3) and an adapter (step 4)
-// first.
+// SURF-003's DDR3 window. Its normal-port sel/addr/rd/dout/ready pins are
+// now driven by sdram_adapter.sv (core-log entry 64, step 4) rather than
+// tied inactive -- but sdram_adapter's own rd64_en is tied to 0 here, so
+// this step is still inert end-to-end: nothing yet issues a real sprite-
+// source read (that rewiring is step 5 of entry 61's plan). wr/bs/din and
+// the copy-port are still tied inactive; sdram_adapter only implements
+// the read path (see its own header for why).
 sdram sdram
 (
 	.init    (~pll_locked),
@@ -590,14 +609,14 @@ sdram sdram
 	.SDRAM_CLK (SDRAM_CLK),
 	.SDRAM_EN  (1'b1),
 
-	.sel   (1'b0),
-	.addr  ('0),
-	.dout  (),
+	.sel   (sdram_adapter_sel),
+	.addr  (sdram_adapter_addr),
+	.dout  (sdram_adapter_dout),
 	.din   ('0),
 	.wr    (1'b0),
 	.bs    (2'b00),
-	.rd    (1'b0),
-	.ready (),
+	.rd    (sdram_adapter_rd),
+	.ready (sdram_adapter_ready),
 	.refresh(sdram_refresh),
 
 	.cpsel (1'b0),
@@ -606,6 +625,37 @@ sdram sdram
 	.cprd  (),
 	.cpreq (1'b0),
 	.cpbusy()
+);
+
+// SDR-002 (core-log entry 64, step 4): the rd64 client-facing side of
+// sdram_adapter is tied inactive here (rd64_en=0) -- this step only wires
+// the adapter+CDC end-to-end through the real sdram module's normal port
+// and confirms it still builds/boots correctly; no client is rewired onto
+// it yet (that's entry 61's plan step 5).
+wire        sdram_adapter_sel, sdram_adapter_rd, sdram_adapter_ready;
+wire [26:1] sdram_adapter_addr;
+wire [15:0] sdram_adapter_dout;
+
+sdram_adapter #(.ADDR_WIDTH(32)) sdram_adapter
+(
+	.clk_sys (clk_sys),
+	.reset   (reset),
+
+	.rd64_addr (32'b0),
+	.rd64_en   (1'b0),
+	.rd64_len  (8'd1),
+	.rd64_ready(),
+	.rd64_data (),
+	.rd64_valid(),
+
+	.clk_sdram(clk_sdram),
+	.reset_b  (reset_sdram),
+
+	.sd_sel  (sdram_adapter_sel),
+	.sd_addr (sdram_adapter_addr),
+	.sd_dout (sdram_adapter_dout),
+	.sd_rd   (sdram_adapter_rd),
+	.sd_ready(sdram_adapter_ready)
 );
 
 // The controller's periodic auto-refresh is host-timed, not self-timed
