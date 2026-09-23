@@ -23,7 +23,7 @@
 // the fix -- see core-log.md for the before/after numbers.
 //
 // Usage, as root on the MiSTer:
-//   ./stress-demo [sprite.bmp] [count] [seconds] [mode] [batches]
+//   ./stress-demo [sprite.bmp] [count] [seconds] [mode] [batches] [sprite_px]
 // mode is "sprites" (default), "sprites-batch", "blit-bench", "fixed", "overlap", "plain", "key-never", "key-all", "key-checker", "clear",
 // "present", or "static". The latter
 // modes isolate framebuffer clearing and PRESENT/scanout from compositing.
@@ -34,6 +34,9 @@
 // blit-bench issues no PRESENT at all, so unlike every other mode it is not
 // capped by the 60Hz vblank-synced flip and reports the engine's real
 // throughput (batches/s, sprites/s, Mpixel/s).
+// sprite_px forces an exact per-side sprite size (scaling the source up or
+// down on the host, since there is no scaling hardware), overriding the
+// automatic coverage-based sizing -- use it to vary per-sprite blit size.
 
 #define _POSIX_C_SOURCE 199309L
 #include <stdio.h>
@@ -193,6 +196,7 @@ int main(int argc, char **argv) {
     double run_seconds = (argc > 3) ? atof(argv[3]) : 15.0;
     const char *mode = (argc > 4) ? argv[4] : "sprites";
     int batches = (argc > 5) ? atoi(argv[5]) : 1;
+    int sprite_px = (argc > 6) ? atoi(argv[6]) : 0;  // 0 = automatic sizing
     int do_sprites = strcmp(mode, "sprites") == 0;
     int do_sprites_batch = strcmp(mode, "sprites-batch") == 0;
     int do_fixed = strcmp(mode, "fixed") == 0;
@@ -231,6 +235,16 @@ int main(int argc, char **argv) {
         }
         count = MAX_SPRITES * batches;
     }
+    // Must leave a non-negative bounce range in both axes (max_x/max_y
+    // below), which caps the sprite at the smaller buffer dimension.
+    if (sprite_px != 0) {
+        const int limit = (NOODLES_BUFFER_WIDTH < NOODLES_BUFFER_HEIGHT)
+                              ? (int)NOODLES_BUFFER_WIDTH : (int)NOODLES_BUFFER_HEIGHT;
+        if (sprite_px < 4 || sprite_px > limit) {
+            fprintf(stderr, "sprite size must be 4-%d\n", limit);
+            return 1;
+        }
+    }
 
     if ((!do_sprites && !do_sprites_batch && !do_fixed && !do_overlap && !do_plain && !do_key_never && !do_key_all && !do_key_checker && !do_clear &&
          !do_present_only && !do_static && !do_blit_bench) ||
@@ -265,7 +279,7 @@ int main(int argc, char **argv) {
     // fraction would ever be visible at once, making "N independently
     // bouncing sprites" misleading for high counts. Downsample once on the
     // host, before upload, to keep total coverage under half the buffer.
-    if ((do_sprites_batch || do_blit_bench) && batches > 1) {
+    if ((do_sprites_batch || do_blit_bench) && batches > 1 && sprite_px == 0) {
         const uint64_t buffer_area = (uint64_t)NOODLES_BUFFER_WIDTH * NOODLES_BUFFER_HEIGHT;
         const uint32_t target_side = isqrt32((buffer_area / 2) / (uint64_t)count);
         uint32_t new_w = target_side < sprite_w ? target_side : sprite_w;
@@ -282,6 +296,23 @@ int main(int argc, char **argv) {
             sprite_w = new_w;
             sprite_h = new_h;
         }
+    }
+
+    // Explicit sprite-size override (argv[6]), mainly for blit-bench: scales
+    // the source to exactly this many pixels per side, UP or down. The
+    // nearest-neighbor resampler handles both directions, and since
+    // sprite_batch has no scaling hardware this is the only way to vary
+    // per-sprite blit size. Overrides the automatic coverage-based
+    // downsample above so the workload is exactly what was asked for.
+    if (sprite_px > 0 && ((uint32_t)sprite_px != sprite_w || (uint32_t)sprite_px != sprite_h)) {
+        uint32_t *resized = downsample_nearest(converted, sprite_w, sprite_h,
+                                               (uint32_t)sprite_px, (uint32_t)sprite_px);
+        if (!resized) { free(converted); return 1; }
+        free(converted);
+        converted = resized;
+        printf("resampled sprite to %dx%d (explicit size override)\n", sprite_px, sprite_px);
+        sprite_w = (uint32_t)sprite_px;
+        sprite_h = (uint32_t)sprite_px;
     }
 
     noodles_link_t link;
