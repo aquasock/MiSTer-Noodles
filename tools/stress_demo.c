@@ -23,10 +23,14 @@
 // the fix -- see core-log.md for the before/after numbers.
 //
 // Usage, as root on the MiSTer:
-//   ./stress-demo [sprite.bmp] [count] [seconds] [mode]
+//   ./stress-demo [sprite.bmp] [count] [seconds] [mode] [batches]
 // mode is "sprites" (default), "sprites-batch", "fixed", "overlap", "plain", "key-never", "key-all", "key-checker", "clear",
 // "present", or "static". The latter
 // modes isolate framebuffer clearing and PRESENT/scanout from compositing.
+// batches (sprites-batch mode only, default 1, max 8) issues that many
+// independent 64-descriptor CMDQ batches per frame -- purely to multiply
+// compositing load for harder stress testing once 64 sprites alone no
+// longer lowers fps enough to be useful.
 
 #define _POSIX_C_SOURCE 199309L
 #include <stdio.h>
@@ -40,6 +44,12 @@
 
 #define SPRITE_SRC_ADDR 0x31400000u
 #define MAX_SPRITES 64
+// sprites-batch can issue more than one 64-descriptor CMDQ batch per frame
+// (BATCHES > 1) purely to multiply compositing load for stress testing --
+// SPRITE_BATCH's hardware descriptor buffer itself is still capped at 64
+// per push (RTL enforces count<=64), so this just repeats the push.
+#define MAX_BATCHES 8
+#define MAX_BATCH_SPRITES (MAX_SPRITES * MAX_BATCHES)
 #define COLORKEY_R 0xFF
 #define COLORKEY_G 0x00
 #define COLORKEY_B 0xFF
@@ -131,6 +141,7 @@ int main(int argc, char **argv) {
     int count = (argc > 2) ? atoi(argv[2]) : 10;
     double run_seconds = (argc > 3) ? atof(argv[3]) : 15.0;
     const char *mode = (argc > 4) ? argv[4] : "sprites";
+    int batches = (argc > 5) ? atoi(argv[5]) : 1;
     int do_sprites = strcmp(mode, "sprites") == 0;
     int do_sprites_batch = strcmp(mode, "sprites-batch") == 0;
     int do_fixed = strcmp(mode, "fixed") == 0;
@@ -142,13 +153,21 @@ int main(int argc, char **argv) {
     int do_clear = do_sprites || do_sprites_batch || do_fixed || do_overlap || do_plain || strcmp(mode, "clear") == 0;
     int do_present_only = strcmp(mode, "present") == 0;
     int do_static = strcmp(mode, "static") == 0;
-    // sprites-batch is intentionally the full approved 64-entry workload;
-    // its descriptor upload is 2 KiB at the reserved address after the ring.
-    if (do_sprites_batch) count = MAX_SPRITES;
+    // sprites-batch is intentionally the full approved 64-entry workload
+    // per batch; its descriptor upload is 2 KiB at the reserved address
+    // after the ring. `batches` multiplies how many independent 64-entry
+    // pushes happen per frame for harder stress testing.
+    if (do_sprites_batch) {
+        if (batches < 1 || batches > MAX_BATCHES) {
+            fprintf(stderr, "batches must be 1-%d\n", MAX_BATCHES);
+            return 1;
+        }
+        count = MAX_SPRITES * batches;
+    }
 
     if ((!do_sprites && !do_sprites_batch && !do_fixed && !do_overlap && !do_plain && !do_key_never && !do_key_all && !do_key_checker && !do_clear &&
          !do_present_only && !do_static) ||
-        ((do_sprites || do_sprites_batch || do_fixed || do_overlap || do_plain || do_key_never || do_key_all || do_key_checker) &&
+        ((do_sprites || do_fixed || do_overlap || do_plain || do_key_never || do_key_all || do_key_checker) &&
          (count < 1 || count > MAX_SPRITES))) {
         fprintf(stderr, "mode must be sprites, sprites-batch, fixed, overlap, plain, key-never, key-all, key-checker, clear, present, or static; count 1-%d\n",
                 MAX_SPRITES);
@@ -204,7 +223,7 @@ int main(int argc, char **argv) {
     const int max_x = (int)NOODLES_BUFFER_WIDTH - (int)sprite_w;
     const int max_y = (int)NOODLES_BUFFER_HEIGHT - (int)sprite_h;
 
-    sprite_state_t sprites[MAX_SPRITES];
+    sprite_state_t sprites[MAX_BATCH_SPRITES];
     srand((unsigned)time(NULL));
     for (int i = 0; i < count; ++i) {
         sprites[i].x = rand() % (max_x + 1);
@@ -227,7 +246,7 @@ int main(int argc, char **argv) {
     uint32_t background = noodles_rgb(BG_COLOR_R, BG_COLOR_G, BG_COLOR_B);
 
     printf("mode=%s, %s for %.1fs...\n", mode,
-           do_sprites ? "bouncing sprites" : do_sprites_batch ? "64-sprite descriptor batches" :
+           do_sprites ? "bouncing sprites" : do_sprites_batch ? (batches == 1 ? "64-sprite descriptor batches" : "multi-batch descriptor stress") :
            do_fixed ? "fixed sprites" :
                         do_overlap ? "fixed overlapping sprites" :
                         do_plain ? "plain copies" :
@@ -278,22 +297,26 @@ int main(int argc, char **argv) {
 
         if (do_sprites_batch) {
             noodles_sprite_descriptor_t descriptors[MAX_SPRITES];
-            for (int i = 0; i < MAX_SPRITES; ++i) {
-                descriptors[i].dst_addr = back + (uint32_t)sprites[i].y * NOODLES_BUFFER_PITCH +
-                                          (uint32_t)sprites[i].x * 4;
-                descriptors[i].dst_pitch = NOODLES_BUFFER_PITCH;
-                descriptors[i].width = sprite_w;
-                descriptors[i].height = sprite_h;
-                descriptors[i].colorkey = colorkey;
-                descriptors[i].src_addr = SPRITE_SRC_ADDR;
-                descriptors[i].src_pitch = sprite_pitch;
-                descriptors[i].flags = 1;
+            for (int b = 0; b < batches; ++b) {
+                for (int j = 0; j < MAX_SPRITES; ++j) {
+                    const int i = b * MAX_SPRITES + j;
+                    descriptors[j].dst_addr = back + (uint32_t)sprites[i].y * NOODLES_BUFFER_PITCH +
+                                              (uint32_t)sprites[i].x * 4;
+                    descriptors[j].dst_pitch = NOODLES_BUFFER_PITCH;
+                    descriptors[j].width = sprite_w;
+                    descriptors[j].height = sprite_h;
+                    descriptors[j].colorkey = colorkey;
+                    descriptors[j].src_addr = SPRITE_SRC_ADDR;
+                    descriptors[j].src_pitch = sprite_pitch;
+                    descriptors[j].flags = 1;
+                }
+                if (push_batch_retry(&link, descriptors, MAX_SPRITES)) {
+                    fprintf(stderr, "frame %ld: ring stuck uploading sprite batch %d\n", frame, b);
+                    failed = 1;
+                    break;
+                }
             }
-            if (push_batch_retry(&link, descriptors, MAX_SPRITES)) {
-                fprintf(stderr, "frame %ld: ring stuck uploading sprite batch\n", frame);
-                failed = 1;
-                break;
-            }
+            if (failed) break;
         }
 
         for (int i = 0; (!do_sprites_batch && (do_sprites || do_fixed || do_overlap || do_plain || do_key_never || do_key_all ||

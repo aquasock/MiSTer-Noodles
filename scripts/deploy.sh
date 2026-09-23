@@ -49,5 +49,6 @@ echo
 echo "stress test: N independently-bouncing copies of a loaded sprite asset,"
 echo "composited every frame (default asset assets/sprite.bmp, a 48x48"
 echo "magenta-colorkeyed smiley):"
-echo "  $DEST/stress-demo [sprite.bmp] [count] [seconds]"
+echo "  $DEST/stress-demo [sprite.bmp] [count] [seconds] [mode] [batches]"
 echo "  e.g.: cd $DEST && ./stress-demo assets/sprite.bmp 10 15"
+echo "  e.g. harder stress: ./stress-demo assets/sprite.bmp 64 15 sprites-batch 4"
