@@ -1797,3 +1797,33 @@ Retry the same clean Quartus compile, since the routing-parallelization issue ha
 - [ ] Passed
 
 ---
+
+## 55 COMMIT Unreleased ec0f52d 2026-09-23T06:20:11-07:00
+
+#### Coming From:
+
+Unreleased 4df8b6a
+
+#### Purpose:
+
+Bisect entry 54's build stall to determine whether it was the project's known intermittent routing flakiness or a real regression from the DEPTH=32 change, then correct it.
+
+#### Outcome:
+
+Entry 54's Outcome mischaracterized the stall as consistent with a prior, generic intermittent issue; that was incorrect and this entry supersedes it. A controlled test with DEPTH reverted to 8 in both `rtl/ddram_adapter.sv` and `rtl/blit_copy64.sv` compiled clean in 3m12s (0 errors, 58 warnings), matching entry 53's baseline, while the committed DEPTH=32 change had stalled past 20 minutes in routing with no completion. The root cause is the response-metadata commit logic in `ddram_adapter.sv`, which scatter-writes up to DEPTH entries per cycle into `rsp_is64_q`/`rsp_half_q` at dynamically-computed wraparound addresses; this costs roughly O(DEPTH squared) placement and routing complexity, and DEPTH=32 pushed that past what the Fitter could route in reasonable time. Reduced DEPTH to 16 in both files: `make sim` passed all eight testbenches, and a clean `quartus_sh --flow compile Noodles` completed in 4m17s with 0 errors, 58 warnings, +0.685ns worst-case setup slack, and +0.244ns worst-case hold slack -- close to the DEPTH=8 baseline and confirming the fix.
+
+#### Next Steps:
+
+Deploy the DEPTH=16 build to the QMTech MiSTer and repeat the standard 64-sprite `stress-demo` workload with `present-probe-dump`, comparing throughput against entry 53's 18.8fps baseline and confirming the OUT-005 retirement-stall pattern is unchanged, as originally planned before entry 54's build failure interrupted it. If a future workload needs a deeper queue than 16, the O(DEPTH squared) response-metadata write should be redesigned (e.g. a log2(DEPTH)-stage barrel shifter or sequential per-word commit) rather than raising DEPTH further, since that cost, not DEPTH itself, is what breaks routing.
+
+#### Files Modified:
+
+- rtl/ddram_adapter.sv
+- rtl/blit_copy64.sv
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
