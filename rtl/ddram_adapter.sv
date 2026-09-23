@@ -62,7 +62,7 @@ module ddram_adapter (
     // request, regardless of its word length) and the total number of
     // response words that may be outstanding across all queued descriptors
     // combined -- a single rd64 request may itself claim up to DEPTH words.
-    localparam int DEPTH = 8;
+    localparam int DEPTH = 32;
     localparam int PTR_W = $clog2(DEPTH);
     localparam int MAX_BURST = DEPTH;
 
@@ -117,7 +117,7 @@ module ddram_adapter (
                 pending_words += rd_is64_q[idx] ? {1'b0, rd_len_q[idx]} : 9'd1;
         end
     end
-    wire [8:0] rsp_committed = {5'b0, rsp_count} + pending_words;
+    wire [8:0] rsp_committed = 9'(rsp_count) + pending_words;
 
     assign wr_ready   = (wr_count < DEPTH);
     assign wr64_ready = (wr_count < DEPTH);
@@ -213,7 +213,7 @@ module ddram_adapter (
             end
             if (read_rsp)
                 rsp_head <= rsp_head + 1'b1;
-            // head_len is at most DEPTH (8), which fits in rsp_count's own
+            // head_len is at most DEPTH, which fits in rsp_count's own
             // width without truncation -- unlike the tail-pointer advance
             // above, this accumulator needs the untruncated magnitude, not
             // a mod-DEPTH wraparound.

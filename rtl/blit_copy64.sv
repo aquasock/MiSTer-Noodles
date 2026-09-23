@@ -13,7 +13,7 @@
 // consumed by the unchanged response/write-out logic below.
 module blit_copy64 #(
     parameter int ADDR_WIDTH = 32,
-    parameter int FIFO_DEPTH = 8
+    parameter int FIFO_DEPTH = 32
 ) (
     input logic clk, input logic reset,
     input logic start,
@@ -43,13 +43,13 @@ module blit_copy64 #(
     logic [FIFO_DEPTH-1:0] valid_fifo;
     logic [PTR_W-1:0] wr_ptr, rd_ptr;
     logic [PTR_W-1:0] resp_ptr;
-    logic [3:0] pair_count;
+    logic [LENB-1:0] pair_count;
     // Pairs reserved (fifo slots claimed) since their read was accepted,
     // freed only once written out -- distinct from pair_count, which only
     // starts counting once a pair's DATA has actually arrived. Gates new
     // burst requests so wr_ptr can never lap rd_ptr regardless of how many
     // requests are still in flight awaiting their response.
-    logic [3:0] reserved_count;
+    logic [LENB-1:0] reserved_count;
     logic [15:0] col, row, width_r, height_r;
     logic [31:0] pairs_issued, pairs_done, total_pairs;
     logic [ADDR_WIDTH-1:0] src_row, dst_row;
@@ -84,7 +84,7 @@ module blit_copy64 #(
     // FIFO capacity and by the pairs remaining in the current source row
     // (crossing into the next row means a non-contiguous DRAM address, so
     // it must end this burst, not extend it).
-    wire [15:0] avail_pairs = 16'(FIFO_DEPTH) - {12'b0, reserved_count};
+    wire [15:0] avail_pairs = 16'(FIFO_DEPTH) - {{(16-LENB){1'b0}}, reserved_count};
     wire [15:0] row_remain = (width_r - col) >> 1;
     wire [15:0] want_len16 = (row_remain < avail_pairs) ? row_remain : avail_pairs;
     wire [LENB-1:0] want_len = want_len16[LENB-1:0];
@@ -139,7 +139,7 @@ module blit_copy64 #(
                     end
                     wr_ptr <= wr_ptr + want_len[PTR_W-1:0];
                     pairs_issued <= pairs_issued + 32'(want_len);
-                    reserved_count <= reserved_count + {{(4-LENB){1'b0}}, want_len};
+                    reserved_count <= reserved_count + want_len;
                     if (new_col >= width_r) begin
                         col <= 0; row <= row + 1'b1;
                         src_row <= src_row + src_pitch_r;
