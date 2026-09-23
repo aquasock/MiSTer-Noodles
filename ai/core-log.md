@@ -2367,3 +2367,32 @@ The scalar (colorkeyed) write port is now the worst path: wr_en/wr_addr/wr_data 
 - [x] Passed
 
 ---
+
+## 73 COMMIT Unreleased ??? 2026-09-23T15:09:32-07:00
+
+#### Coming From:
+
+Unreleased 8b2f0ec
+
+#### Purpose:
+
+Fix the scalar (colorkeyed) write path in blit_copy64.sv, now the worst 100MHz setup path at -1.195ns since entry 72 closed the read-request and paired-write paths ahead of it.
+
+#### Outcome:
+
+Pending: wr_en/wr_addr/wr_data are still driven directly combinationally from rd_ptr through the key-compare chain into ddram_adapter's registered wr_data_q, the same bug shape entry 72 fixed twice already. Plan is a matching local skid register (swr_valid/swr_addr/swr_data), staged on scalar_write and driving wr_en/wr_addr/wr_data as its registered outputs, with scalar_second/FIFO retirement moved to stage time rather than wr_ready-accept time, mirroring the paired-write fix.
+
+#### Next Steps:
+
+Simulate, rebuild with the 3-parallel-seed workflow, and compare setup slack against entry 72's -1.195ns best.
+
+#### Files Modified:
+
+- rtl/blit_copy64.sv
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
