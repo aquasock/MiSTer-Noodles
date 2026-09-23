@@ -2278,3 +2278,92 @@ The sprites-batch stress test can no longer measure this core's actual ceiling, 
 - [x] Passed
 
 ---
+
+## 70 COMMIT Unreleased 9061452 2026-09-23T13:49:51-07:00
+
+#### Coming From:
+
+Unreleased 1a79034
+
+#### Purpose:
+
+Address entry 69's finding that sprites-batch is now vsync-capped at 60.3fps by adding a benchmark mode that measures the engine's real throughput ceiling instead of the display's.
+
+#### Outcome:
+
+Added a blit-bench mode to stress_demo.c: identical 64-descriptor sprite_batch batches to sprites-batch, but skipping the PRESENT/vsync step entirely and waiting only on the LINK-005 completion fence, reporting batches/s, sprites/s and Mpixel/s. At 256 sprites of 24x24 on DDR3 at 65MHz this measured 1113 batches/s, 41.0 Mpixel/s, equivalent to 278.3fps -- 4.6x the vsync-capped 60.3fps entry 69 measured on the same hardware, confirming the display refresh rather than compute was the limiting factor there.
+
+#### Next Steps:
+
+With an uncapped throughput number in hand, the next question is how that Mpixel/s ceiling scales with sprite size, to separate fixed per-sprite overhead from raw bandwidth -- taken up in entry 71.
+
+#### Files Modified:
+
+- tools/stress_demo.c
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
+
+## 71 COMMIT Unreleased b2564aa 2026-09-23T13:53:15-07:00
+
+#### Coming From:
+
+Unreleased 9061452
+
+#### Purpose:
+
+Characterize how blit-bench's throughput ceiling scales with sprite size, to separate fixed per-sprite overhead from raw memory bandwidth.
+
+#### Outcome:
+
+Added an explicit sprite_px override (argv[6]) to stress_demo.c, scaling the loaded sprite up or down on the host to an exact per-side pixel size rather than relying on the automatic coverage-based downsample, since sprite_batch itself has no scaling hardware. Sweeping 16 to 256px at 256 sprites on DDR3 at 65MHz and fitting clocks/sprite across the sweep gave clocks = 289 + 1.113 * pixels, i.e. 289 clocks of fixed per-sprite overhead plus 1.113 clocks per pixel. The engine saturates at roughly 58 Mpixel/s (0.90 pixels/clock, about 467 MB/s counting the 4-byte read plus 4-byte write per pixel), so small sprites such as 16x16 are overhead-bound at 2.24 clocks/pixel while anything from roughly 64px upward sits on the bandwidth plateau. This gives a predictive model for how raising clk_sys should scale fps: the per-pixel bandwidth term scales with clock, but the fixed 289-clock overhead does not shrink, so smaller/more-numerous sprites see less benefit from a faster clock than larger ones do.
+
+#### Next Steps:
+
+The fill-rate model predicts raising clk_sys from 65 to 100MHz should give roughly 1.54x throughput on a bandwidth-bound workload; testing that prediction against a real 100MHz build, and closing whatever timing violations that exposes, is the work taken up starting in entry 72.
+
+#### Files Modified:
+
+- tools/stress_demo.c
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
+
+
+## 72 COMMIT Unreleased ??? 2026-09-23T15:07:00-07:00
+
+#### Coming From:
+
+Unreleased b2564aa
+
+#### Purpose:
+
+Test entry 71's prediction by raising clk_sys/clk_sdram from 65MHz to 100MHz and closing whatever new setup timing violations that exposes in blit_copy64.sv.
+
+#### Outcome:
+
+Raising both clocks to 100MHz first violated at -2.696ns on blit_copy64's row_remain/want_len compare chain feeding back into itself same-cycle. Registering row_remain alone made slack worse (-2.278ns), proving per-stage arithmetic does not reliably predict slack when routing dominates delay; a real PREPARE/COMMIT split was needed instead, computing want_len from currently-registered state into a new want_len_p register and consuming it a cycle later to advance col/row_remain_r, mirroring the read-request registering pattern from a prior segment. That closed the targeted path entirely and reached -2.003ns, exposing a new worst path: paired_write driving wr64_en/wr64_addr/wr64_data combinationally straight into ddram_adapter's registered wr_data_q, with retirement (freeing the FIFO slot, advancing rd_ptr) needing wr64_ready sampled the same cycle. Fixed with the same pattern a third time: a local pwr_valid/pwr_addr/pwr_data skid register now holds a copy of the pair's data, wr64_en/addr/data are its registered outputs, and retirement happens when the pair is staged into this register rather than when ddram_adapter physically accepts it -- safe because the copy is independent of the FIFO slot being reused, and ddram_adapter already buffers outstanding writes internally. Also set up a 3-parallel-seed build workflow per the user's request (three lightweight /tmp copies of the project, SEED 1/2/3 in Noodles.qsf, run concurrently) to observe placement/routing variance going forward; variance proved modest, -1.195 to -1.565ns across the three seeds. make sim passed 15/15 throughout with no cycle-count regression at any step (295745 cycles for the 64x48x48 sprite_batch case, unchanged from before this segment's RTL changes). Deployed the best seed (-1.195ns, seed 2) to the QMTech MiSTer and ran the established 128px benchmark: 15.1fps, 227 frames over 15s, stable with no visible corruption -- consistent with the still-violated timing, so no functional regression from the two register-pipeline changes, and no fps change yet since slack has not yet crossed zero.
+
+#### Next Steps:
+
+The scalar (colorkeyed) write port is now the worst path: wr_en/wr_addr/wr_data are still driven combinationally from rd_ptr through the key-compare logic straight into ddram_adapter, the same shape of bug fixed twice already on the paired-write and read-request paths. Applying the same skid-register pattern there is the proposed next step, expected to further reduce or close the remaining violation.
+
+#### Files Modified:
+
+- rtl/blit_copy64.sv
+- rtl/pll/pll_0002.v
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
