@@ -43,3 +43,19 @@ set_max_delay \
 set_min_delay \
     -from [get_registers {*sdram_cdc*data_captured_b[*]}] \
     -to   [get_clocks {emu|pll|pll_inst|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}] 0.000
+
+# ---------------------------------------------------------------------------
+# f2sdram (HPS-FPGA bridge hard IP, sys/sysmem.sv's sysmem_lite) is dead tie-
+# off logic in this core: MiSTer's Cyclone V template requires instantiating
+# the cyclonev_hps_interface_fpga2sdram hard IP even when no HPS/Linux side
+# is present, so sysmem_lite wires its ram1/ram2/vbuf ports to
+# f2sdram_safe_terminator stubs that never carry real traffic. Its ram1_clk
+# happens to be driven from this design's own DDRAM_CLK (clk_sys), so
+# TimeQuest times its internal register-to-register paths as real
+# same-clock logic even though nothing here is ever functionally exercised.
+# This surfaced as the worst 100MHz setup path once entry 76 fixed the last
+# genuine blit_copy64 violation; false-pathing it here is the standard
+# MiSTer-template fix for this exact situation.
+# ---------------------------------------------------------------------------
+set_false_path -from [get_registers {*f2sdram_safe_terminator*}] -to [get_registers {*f2sdram*}]
+set_false_path -from [get_registers {*f2sdram*}] -to [get_registers {*f2sdram*}]

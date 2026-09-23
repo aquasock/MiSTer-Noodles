@@ -2485,3 +2485,32 @@ Rebuild with the 3-seed workflow to confirm this removes the regression from ent
 - [ ] Passed
 
 ---
+
+## 77 COMMIT Unreleased ??? 2026-09-23T16:42:00-07:00
+
+#### Coming From:
+
+Unreleased 8e22b0b
+
+#### Purpose:
+
+Address the f2sdram_safe_terminator timing violation exposed by entry 76's blit_copy64 fix, which surfaced as the new worst 100MHz setup path once the real rd_ptr duplicate-logic bug was removed.
+
+#### Outcome:
+
+Traced the violating path (sysmem_lite:sysmem|sysmem_HPS_fpga_interfaces:fpga_interfaces|f2sdram~FF_* in sys/sysmem.sv) and confirmed it is dead framework tie-off logic: sysmem_lite instantiates the mandatory cyclonev_hps_interface_fpga2sdram hard IP (required by the Cyclone V template even without an HPS/Linux side) and wires it to f2sdram_safe_terminator stubs that never carry real traffic. Its ram1_clk is driven from this design's own DDRAM_CLK (clk_sys) output, so TimeQuest legitimately times it as same-clock logic even though it is functionally inert. Added a set_false_path pair in Noodles.sdc (from *f2sdram_safe_terminator* registers and from *f2sdram* registers, both to *f2sdram* registers) with a comment explaining why, following the file's existing style for the sdram_cdc cross-domain exceptions. Verified via fast STA against seed5's compiled DB: the f2sdram violation disappeared entirely and the worst path reverted to a real, already-familiar one -- dst0_fifo[rd_ptr] feeding the paired-write skid register's pwr_addr capture -- at -0.161ns, down from -0.573ns before this fix and much closer to closed than any of the post-entry-75 seeds. No RTL changed in this entry, so make sim was not re-run (SDC has no effect on simulation).
+
+#### Next Steps:
+
+Rebuild with the 3-seed workflow using both entry 76's RTL fix and this SDC fix together to get a clean, final closure number, then hardware-check with the 128px sprites-batch and blit-bench benchmarks. If the remaining dst0_fifo[rd_ptr]->pwr_addr path does not close on its own via seed variance, it is a candidate for a further PREPARE/COMMIT-style split (staging dst0_fifo[rd_ptr] into an intermediate register before pwr_addr captures it). After timing is reconfirmed closed, proceed to the clk_sys/clk_sdram unification hardening item.
+
+#### Files Modified:
+
+- Noodles.sdc
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
