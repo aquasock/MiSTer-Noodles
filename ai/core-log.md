@@ -1602,7 +1602,7 @@ None.
 
 ---
 
-## 49 COMMIT Unreleased ??? 2026-09-22T20:47:03-07:00
+## 49 COMMIT Unreleased 210b8f4 2026-09-22T20:47:03-07:00
 
 #### Coming From:
 
@@ -1614,11 +1614,11 @@ Widen the recovered temporary PRESENT-retirement probe so its wait-cycle measure
 
 #### Outcome:
 
-Plan: reintroduce ascal.vhd's per-retirement debug counters, which entry 48 confirmed are not present on current main, with retire_wait_cyc widened to a saturating 32-bit avl_clk cycle count that keeps counting across any additional frame boundaries seen while a retirement is still pending rather than resetting, plus a new saturating 16-bit missed-boundaries counter for those additional boundaries, alongside the existing 4-bit read_outstanding peak. Wire these through emu_ports.vh, sys_top.v, and Noodles.sv to a new temporary rtl/dbg_present_probe.sv that publishes two 32-bit DRAM words (wait cycles, then peak/missed/sequence packed together) at 0x3003_0000 and 0x3003_0004, kept at the lowest priority in the DDRAM write mux with no change to any real path, matching the recovered reference probe's placement. Add a reproducible ARM diagnostic under tools/ that reads both words and reports a stable sample, wired into the Makefile and scripts/deploy.sh. Validate with make sim, a full Quartus compile, deployment to the test MiSTer, and the standard 64-sprite stress-demo workload while collecting probe samples.
+Reintroduced the temporary ascal retirement instrumentation with a saturating 32-bit cycle counter that persists across additional frame boundaries, a saturating 16-bit missed-boundary counter, and the existing peak outstanding-read count. `dbg_present_probe` publishes wait cycles at `0x30030000` and packed sequence, peak, and missed-boundary metadata at `0x30030004` as the lowest-priority DDRAM writer; `present-probe-dump` reads a stable two-word sample and is included in normal ARM, host, and deploy builds. `make all`, `make host`, and all seven RTL simulations passed; Quartus completed with zero errors, 60 warnings, and positive timing. The deployed RBF and ARM tools matched their local MD5 hashes. The standard 64-sprite workload completed 129 frames in 10.0 seconds at 12.9 FPS while 291 complete probe samples showed 179 normal retirements at 1,666,662 cycles with zero missed boundaries, 103 at 4,999,989 cycles with two missed boundaries, and 8 at 6,666,652 cycles with three; all samples reported a peak of two outstanding reads.
 
 #### Next Steps:
 
-Once hardware samples are collected, correlate the widened wait-cycle and missed-boundary values against the 64-sprite stress-demo's frame-time spikes to decide between an ascal arbitration change and a native timing generator, then remove the temporary probe once the root cause is confirmed and any resulting fix is qualified.
+Add a focused temporary retirement-gate diagnostic to identify whether delayed retirements are blocked by the base-latch acknowledgement, read-drain condition, or non-idle Avalon state before changing arbitration or replacing the scaler, then remove the probe once the root cause and any resulting fix are qualified.
 
 #### Files Modified:
 
@@ -1634,7 +1634,7 @@ Once hardware samples are collected, correlate the widened wait-cycle and missed
 
 #### Status:
 
-- [ ] Built
-- [ ] Passed
+- [x] Built
+- [x] Passed
 
 ---
