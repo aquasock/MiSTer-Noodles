@@ -220,7 +220,9 @@ link_ring link_ring
 wire present_start, present_busy, present_done;
 wire front_sel;
 
-present present
+present #(
+	.RETIRE_VBLANKS(0)
+) present
 (
 	.clk       (clk_sys),
 	.reset     (reset),
