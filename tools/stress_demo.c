@@ -270,7 +270,7 @@ int main(int argc, char **argv) {
 
     // sprite_batch's copy engines have no scaling hardware -- at full 48x48
     // size, count sprites (up to 256 at batches=4) cover more area than the
-    // 640x480 buffer holds, so most would occlude each other and only a
+    // framebuffer holds, so most would occlude each other and only a
     // fraction would ever be visible at once, making "N independently
     // bouncing sprites" misleading for high counts. Downsample once on the
     // host, before upload, to keep total coverage under half the buffer.

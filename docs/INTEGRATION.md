@@ -1,10 +1,23 @@
 # Noodles integration baseline
 
-This is the consumer-facing description of the accepted 100MHz core, not
+This is the consumer-facing description of the 100MHz core, not
 a new GPU ABI or an SDL implementation. Architecture decisions remain in
 [ai/core-reference.md](../ai/core-reference.md); later records override
 earlier bring-up assumptions. Relevant records include CMDQ-001,
-BLIT-003/004/006, SURF-003/004/005, LINK-002/005/008 and SDR-008.
+BLIT-003/004/006, SURF-003/004/006, LINK-002/005/008 and SDR-008.
+
+## Next standard configuration: 800x600
+
+Current source renders 800x600 with a 3200-byte pitch (SURF-006), retaining
+the 100MHz GPU, 4:3 aspect ratio and existing buffer addresses. Each buffer
+uses 1920000 bytes and still fits its reserved 2MiB slot. The HDMI mode is
+independent: MiSTer's scaler scales this framebuffer to its configured output.
+This candidate requires fresh timing and hardware qualification; it does
+not inherit the accepted image's hash or timing margins.
+
+Build the host library/tools from the same source as the loaded core.
+Geometry is compile-time, with no runtime discovery: the new 800x600 tools
+must not be used with the fallback 640x480 image, or vice versa.
 
 ## Frozen hardware baseline
 
@@ -42,8 +55,8 @@ Current fixed uses (end addresses are exclusive):
 | `[0x30020000, 0x30020010)` | Shared ring header; fields described below. |
 | `[0x30021000, 0x30021800)` | 64 command slots, 32 bytes each. |
 | `[0x30022000, 0x30022800)` | 64 sprite descriptors, 32 bytes each. |
-| `[0x31000000, 0x3112c000)` | Buffer A pixels; within its fixed 2MiB slot beginning at `0x31000000`. |
-| `[0x31200000, 0x3132c000)` | Buffer B pixels; within its fixed 2MiB slot beginning at `0x31200000`. |
+| `[0x31000000, 0x311d4c00)` | 800x600 buffer A pixels; within its fixed 2MiB slot beginning at `0x31000000`. |
+| `[0x31200000, 0x313d4c00)` | 800x600 buffer B pixels; within its fixed 2MiB slot beginning at `0x31200000`. |
 | `0x31400000` and tool-specific addresses | Demo scratch/assets, not an allocator or a promise of available capacity. |
 
 Leave the control-memory neighborhood and both 2MiB scanout slots reserved;
@@ -56,7 +69,8 @@ Pixels occupy four bytes, with increasing-address bytes **R, G, B, unused**.
 `noodles_rgb(r,g,b)` produces `r | (g << 8) | (b << 16)` with a zero high byte.
 This is not yet an RGBA blending contract. Copies preserve all 32 bits and
 color-key comparisons compare the entire 32-bit pixel; initialize the high
-byte consistently. Scanout uses `FB_FORMAT=00110`, pitch 2560 bytes.
+byte consistently. Scanout uses `FB_FORMAT=00110`, pitch 3200 bytes in
+the SVGA configuration (2560 in the accepted 640x480 fallback).
 
 Addresses and row pitches for pixel operations must be four-byte aligned.
 Pitches are in bytes; widths and heights are in pixels. Supply a sufficient
@@ -169,7 +183,7 @@ fallback while later stages add an identified/versioned SDK, managed
 surfaces and the drawing operations required by GemRB.
 
 There is currently no SDL renderer, texture allocator, alpha blending,
-tint, scaling or flipping API. Output remains 640x480 and core audio is
+tint, scaling or flipping API. The new render target is 800x600 and core audio is
 silent. The planned first consumer is GemRB v0.9.5 through SDL2 2.32.10;
 platform video/audio ownership and software fallback synchronization still
 need design work. These are explicit future requirements, not advertised

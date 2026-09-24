@@ -13,6 +13,11 @@ from. The build procedure itself is in [BUILD.md](BUILD.md).
 
 ## Current build (2)
 
+This remains the accepted fallback. Current source targets 800x600 with a
+3200-byte pitch for the next standard build; its timing and hardware
+acceptance must be recorded separately. Do not pair the new host tools with
+this 640x480 image.
+
 Quartus Prime Lite 17.0.2 Build 602, Cyclone V `5CSEBA6U23I7`,
 revision `Noodles`, seed 5, 16 fitter threads, MEDIUM register packing,
 `BUILD_DATE "260923"`. Accepted RBF SHA-256:

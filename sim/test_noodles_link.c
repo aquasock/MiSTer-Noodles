@@ -14,6 +14,15 @@ static int maps, fail_map;
 static noodles_link_t link;
 static noodles_sprite_descriptor_t descriptors[NOODLES_SPRITE_DESCRIPTOR_MAX];
 
+static void test_framebuffer_geometry(void) {
+    assert(NOODLES_BUFFER_WIDTH == 800 && NOODLES_BUFFER_HEIGHT == 600);
+    assert(NOODLES_BUFFER_PITCH == NOODLES_BUFFER_WIDTH * sizeof(uint32_t));
+    uint32_t bytes = NOODLES_BUFFER_PITCH * NOODLES_BUFFER_HEIGHT;
+    assert(bytes == 1920000u && bytes <= 0x200000u);
+    assert(NOODLES_BUFFER_A_ADDR + bytes <= NOODLES_BUFFER_B_ADDR);
+    assert(NOODLES_BUFFER_B_ADDR + bytes <= 0x31400000u);
+}
+
 void *__wrap_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
     ++maps;
     if (fail_map) {
@@ -61,6 +70,7 @@ static void rejected(int expected_errno, uint16_t count) {
 }
 
 int main(void) {
+    test_framebuffer_geometry();
     const uint32_t fill[8] = {1, 0, 0, 1, 1, 0, 0, 0};
     const uint32_t batch[8] = {5, NOODLES_SPRITE_DESCRIPTOR_ADDR, 0, 1, 0, 0, 0, 0};
     reset(100);

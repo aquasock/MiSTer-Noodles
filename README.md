@@ -20,7 +20,7 @@ or extension of Menu.
   `rtl/blit_copy.sv` implements `BLIT_COPY` (straight rect copy, no
   scale/blend/format conversion). Both drive the real `DDRAM_*` pins
   through `rtl/ddram_adapter.sv`.
-- **SURF** -- two fixed 640x480, 32bpp DDR3 scanout surfaces, flipped by
+- **SURF** -- two fixed 800x600, 32bpp DDR3 scanout surfaces, flipped by
   `PRESENT` and displayed through `MISTER_FB`. Production sprite sources
   also use DDR3; board SDRAM is a separate, optional memory path.
 
@@ -36,6 +36,8 @@ For the current consumer-facing baseline, start with
 [docs/INTEGRATION.md](docs/INTEGRATION.md): memory reservations, command
 layouts, pixel format, ownership and limitations for the planned GemRB
 integration. It describes today's interface, not an implemented SDL renderer.
+The 800x600 configuration is the next standard build candidate; the accepted
+640x480 image remains the fallback until SVGA hardware acceptance.
 
 ## Host-side API
 

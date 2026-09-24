@@ -13,7 +13,7 @@
 // Usage, as root on the MiSTer:
 //   ./load_bmp <file.bmp> [x] [y]
 // x/y default to centering the image on the buffer. The image must fit
-// within the 640x480 buffer.
+// within the configured framebuffer.
 
 #define _POSIX_C_SOURCE 199309L
 #include <stdint.h>

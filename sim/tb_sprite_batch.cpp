@@ -18,6 +18,7 @@
 
 #include "Vengine_sprite_batch_dut.h"
 #include "verilated.h"
+#include "../lib/noodles_link.h"
 
 namespace {
 
@@ -161,7 +162,7 @@ int main(int argc, char **argv) {
     constexpr unsigned kCount = 64;
     constexpr uint32_t kSpriteW = 48, kSpriteH = 48;
     constexpr uint32_t kSrcPitch = kSpriteW * 4;
-    constexpr uint32_t kDstPitch = 640 * 4;  // matches NOODLES_BUFFER_PITCH
+    constexpr uint32_t kDstPitch = NOODLES_BUFFER_PITCH;
     constexpr uint32_t kKeyColor = 0xFF00FF00u;
     constexpr uint32_t kSrcBase = 0x4000'0000u;  // clear of the destination span below
     constexpr uint32_t kDstBase = 0x3120'0000u;  // back buffer, like stress-demo
@@ -171,7 +172,7 @@ int main(int argc, char **argv) {
         // Each descriptor's 48-row destination footprint (kSpriteH rows of
         // kDstPitch bytes each) must not overlap any other descriptor's --
         // a tight per-sprite x-offset (e.g. s*64*4) aliases against
-        // kDstPitch (10*256 == kDstPitch exactly), landing one sprite's
+        // kDstPitch, landing one sprite's
         // rows inside another's. Space sprites a full footprint apart so
         // no two descriptors can ever address the same byte.
         const uint32_t dst = kDstBase + s * (kSpriteH * kDstPitch);

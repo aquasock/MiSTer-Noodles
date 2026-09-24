@@ -134,10 +134,9 @@ always @(posedge clk_sys or posedge reset)
 	else if (blit_start) blit_start_ever <= 1'b1;
 
 // MISTER_FB scan-out (OUT-002) + double buffering (OUT-004): two fixed
-// 640x480, 32bpp (FB_FORMAT[2:0]=3'b110) surfaces (BUFFER_A_ADDR/
-// BUFFER_B_ADDR, declared up top) -- SURF-005 sized this up from the
-// original 64x64 bring-up surface to something StarCraft/OpenBW-scale.
-// Each buffer is ~1.17MB (640*480*4); the two sit in their own 2MB-aligned
+// 800x600, 32bpp (FB_FORMAT[2:0]=3'b110) surfaces (BUFFER_A_ADDR/
+// BUFFER_B_ADDR, declared up top).
+// Each buffer is 1920000 bytes (800*600*4); the two sit in their own 2MB-aligned
 // slots for generous headroom, well clear of each other and of LINK-002's
 // ring (header+slots, a few KB, at 0x30020000+). NOT based at 0x20000000,
 // see SURF-004: MiSTer's own system video scaler uses physical byte
@@ -147,10 +146,10 @@ always @(posedge clk_sys or posedge reset)
 // the host draws into whichever one is NOT front.
 assign FB_EN = 1'b1;
 assign FB_FORMAT = {2'b00, 3'b110};
-assign FB_WIDTH = 12'd640;
-assign FB_HEIGHT = 12'd480;
+assign FB_WIDTH = 12'd800;
+assign FB_HEIGHT = 12'd600;
 assign FB_BASE = front_sel ? BUFFER_B_ADDR : BUFFER_A_ADDR;
-assign FB_STRIDE = 14'd2560;
+assign FB_STRIDE = 14'd3200;
 assign FB_FORCE_BLANK = ~present_done_ever;
 
 ///////////////////////   ENGINE   /////////////////////////////////

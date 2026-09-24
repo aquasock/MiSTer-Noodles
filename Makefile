@@ -98,7 +98,7 @@ $(BATCH_CMDQ_SIM): rtl/cmdq.sv sim/cmdq_batch_dut.sv sim/tb_cmdq_batch.cpp
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
 		rtl/cmdq.sv sim/cmdq_batch_dut.sv sim/tb_cmdq_batch.cpp -o $(notdir $@)
 
-$(SOLID_FILL_SIM): rtl/cmdq.sv rtl/blit.sv sim/engine_dut.sv sim/tb_solid_fill.cpp
+$(SOLID_FILL_SIM): rtl/cmdq.sv rtl/blit.sv sim/engine_dut.sv sim/tb_solid_fill.cpp lib/noodles_link.h
 	@mkdir -p $(dir $@)
 	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module engine_dut \
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
@@ -134,7 +134,7 @@ $(BLIT_COPY64_PIPELINE_SIM): rtl/blit_copy64.sv sim/tb_blit_copy64_pipeline.cpp
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
 		rtl/blit_copy64.sv sim/tb_blit_copy64_pipeline.cpp -o $(notdir $@)
 
-$(SPRITE_BATCH_SIM): rtl/sprite_batch.sv rtl/blit_copy64.sv rtl/ddram_adapter.sv sim/engine_sprite_batch_dut.sv sim/tb_sprite_batch.cpp
+$(SPRITE_BATCH_SIM): rtl/sprite_batch.sv rtl/blit_copy64.sv rtl/ddram_adapter.sv sim/engine_sprite_batch_dut.sv sim/tb_sprite_batch.cpp lib/noodles_link.h
 	@mkdir -p $(dir $@)
 	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module engine_sprite_batch_dut \
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
@@ -170,7 +170,7 @@ $(SDRAM_LOADER_SIM): rtl/sdram_page_buffer.sv rtl/sdram_loader.sv sim/sdram_load
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
 		rtl/sdram_page_buffer.sv rtl/sdram_loader.sv sim/sdram_loader_dut.sv sim/tb_sdram_loader.cpp -o $(notdir $@)
 
-$(SPRITE_BATCH_SDRAM_SIM): rtl/sprite_batch.sv rtl/blit_copy64.sv rtl/ddram_adapter.sv rtl/sdram_adapter.sv sim/sdram_adapter_dut.sv sim/engine_sprite_batch_sdram_dut.sv sim/tb_sprite_batch_sdram.cpp
+$(SPRITE_BATCH_SDRAM_SIM): rtl/sprite_batch.sv rtl/blit_copy64.sv rtl/ddram_adapter.sv rtl/sdram_adapter.sv sim/sdram_adapter_dut.sv sim/engine_sprite_batch_sdram_dut.sv sim/tb_sprite_batch_sdram.cpp lib/noodles_link.h
 	@mkdir -p $(dir $@)
 	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module engine_sprite_batch_sdram_dut \
 		--Wall --Wno-fatal -Wno-DECLFILENAME \

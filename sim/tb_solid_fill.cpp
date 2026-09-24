@@ -11,6 +11,7 @@
 
 #include "Vengine_dut.h"
 #include "verilated.h"
+#include "../lib/noodles_link.h"
 
 namespace {
 
@@ -104,11 +105,9 @@ int Fail(const char *msg) {
 
 }  // namespace
 
-int main(int argc, char **argv) {
-    Verilated::commandArgs(argc, argv);
-
+int RunFill(uint32_t width, uint32_t height, uint32_t pitch) {
     Testbench tb;
-    Memory mem(0x4000);
+    Memory mem(0x1000 + height * pitch + 4);
     Vengine_dut &dut = tb.dut();
 
     // Reset for a few cycles.
@@ -121,9 +120,9 @@ int main(int argc, char **argv) {
     const Command cmd{
         .opcode = kOpSolidFill,
         .dst_addr = 0x1000,
-        .dst_pitch = 8 * 4,  // 8px wide surface, 4 bytes/pixel
-        .width = 8,
-        .height = 4,
+        .dst_pitch = pitch,
+        .width = width,
+        .height = height,
         .color = 0xAABBCCDDu,
     };
     PackCommand(cmd, dut);
@@ -139,7 +138,7 @@ int main(int argc, char **argv) {
     int guard = 0;
     do {
         tb.Tick(mem, /*wr_ready=*/(guard % 3) != 1);
-        if (++guard > 10000) return Fail("blit never completed");
+        if (++guard > 2000000) return Fail("blit never completed");
     } while (!dut.cmd_ready);
 
     // Verify: exactly width*height writes, each landing inside the rect,
@@ -173,4 +172,10 @@ int main(int argc, char **argv) {
     std::printf("PASS: solid-fill %ux%u at 0x%08x, %zu writes, pitch %u\n",
                 cmd.width, cmd.height, cmd.dst_addr, writes.size(), cmd.dst_pitch);
     return 0;
+}
+
+int main(int argc, char **argv) {
+    Verilated::commandArgs(argc, argv);
+    if (RunFill(8, 4, 8 * 4)) return 1;
+    return RunFill(NOODLES_BUFFER_WIDTH, NOODLES_BUFFER_HEIGHT, NOODLES_BUFFER_PITCH);
 }

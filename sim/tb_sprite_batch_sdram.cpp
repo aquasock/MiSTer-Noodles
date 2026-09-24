@@ -24,6 +24,7 @@
 
 #include "Vengine_sprite_batch_sdram_dut.h"
 #include "verilated.h"
+#include "../lib/noodles_link.h"
 
 namespace {
 
@@ -184,7 +185,7 @@ int main(int argc, char **argv) {
     constexpr unsigned kCount = 64;
     constexpr uint32_t kSpriteW = 24, kSpriteH = 24;
     constexpr uint32_t kSrcPitch = kSpriteW * 4;
-    constexpr uint32_t kDstPitch = 640 * 4;
+    constexpr uint32_t kDstPitch = NOODLES_BUFFER_PITCH;
     constexpr uint32_t kKeyColor = 0xFF00FF00u;
     constexpr uint32_t kSrcBase = 0x0000'0000u;  // SDRAM window (byte 0), like SDRAM_SPRITE_ADDR
     constexpr uint32_t kDstBase = 0x3120'0000u;
