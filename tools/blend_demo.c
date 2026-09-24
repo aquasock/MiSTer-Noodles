@@ -10,9 +10,10 @@
 //   blend-demo bench [seconds]     64 blended 128x128 sprites per fence wait
 //                                  into the back buffer, as 64 BLIT_BLEND
 //                                  commands and then as one flagged batch
-//   blend-demo show [seconds] [n]  n translucent, tinted, partly mirrored
-//                                  sprites in one batch per frame, drifting
-//                                  over colour bars
+//   blend-demo show [seconds] [n]  n translucent, tinted arrows in one batch
+//                                  per frame, drifting over colour bars; each
+//                                  points the way it moves (mirror-x) and
+//                                  every fourth is upside down (mirror-y)
 #define _POSIX_C_SOURCE 200809L
 #include "noodles_link.h"
 #include "noodles_surface.h"
@@ -57,15 +58,36 @@ static uint32_t next_random(void) {
         rc_;                                                               \
     })
 
+// Right-pointing arrow with a fin on top of its tail, so both mirror axes are
+// visible: a horizontally mirrored sprite points left, a vertically mirrored
+// one carries its fin underneath. Edges are 4x4 supersampled into alpha.
+static int in_arrow(double x, double y, int *fin) {
+    *fin = 0;
+    if (x >= 14 && x < 76 && y >= 52 && y < 76) return 1;                 // shaft
+    if (x >= 76 && x < 118 && fabs(y - 64) < (118 - x) * 1.05) return 1;  // head
+    if (x >= 14 && x < 40 && y >= 22 && y < 52 && y >= 52 - (x - 14) * 1.15) {
+        *fin = 1;                                                         // tail fin
+        return 1;
+    }
+    return 0;
+}
+
 static void make_sprite(uint32_t *pixels) {
-    const double c = (SPRITE - 1) / 2.0;
     for (int y = 0; y < SPRITE; ++y) {
         for (int x = 0; x < SPRITE; ++x) {
-            double r = sqrt((x - c) * (x - c) + (y - c) * (y - c)) / (SPRITE / 2.0);
-            uint32_t a = r >= 1.0 ? 0 : (uint32_t)(255.0 * (1.0 - r * r));
-            uint32_t red = (uint32_t)(255 * x / (SPRITE - 1));
-            uint32_t green = (uint32_t)(255 * y / (SPRITE - 1));
-            uint32_t blue = 255 - red / 2;
+            int covered = 0, fins = 0;
+            for (int sy = 0; sy < 4; ++sy)
+                for (int sx = 0; sx < 4; ++sx) {
+                    int fin;
+                    if (in_arrow(x + (sx + 0.5) / 4.0, y + (sy + 0.5) / 4.0, &fin)) {
+                        ++covered;
+                        fins += fin;
+                    }
+                }
+            uint32_t a = (uint32_t)(covered * 255 / 16);
+            // Yellow-to-red along the arrow; the fin is white.
+            uint32_t red = 255, green = (uint32_t)(230 - 200 * x / (SPRITE - 1)), blue = 40;
+            if (fins * 2 > covered) green = blue = 255;
             pixels[y * SPRITE + x] = (a << 24) | (blue << 16) | (green << 8) | red;
         }
     }
