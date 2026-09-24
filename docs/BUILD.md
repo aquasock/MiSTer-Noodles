@@ -10,6 +10,8 @@ make            # cross-build the ARM-side host tools (static, armv7/Cortex-A9)
 make host       # native build of the same tools, for the desktop
 make sim        # Verilator RTL simulation (rtl/ engines, no Quartus needed)
 quartus_sh --flow compile Noodles   # full FPGA build -> output_files/Noodles.rbf
+quartus_sta -t tools/report_timing.tcl
+quartus_sta -t tools/report_multicorner.tcl  # required post-fit timing gate
 ```
 
 `Noodles.qsf` pins the fitter settings for the accepted seed-5 build
@@ -28,11 +30,11 @@ working bitstream and says nothing about timing.
 flow (analysis and synthesis, fit, assembler, and the flow's own built-in
 timing pass), producing an actual `.rbf` and `.sof` to run on hardware. Takes
 a few minutes on this design (it is far smaller than a typical whole-system
-MiSTer core). Only a full build proves the design meets timing and is safe
-to load.
+MiSTer core). A successful compile alone is not timing acceptance: inspect
+the reports and run the post-fit checks below before hardware qualification.
 
 Neither level substitutes for the other: a clean fast check only proves the
-design elaborates, and only a full build proves it meets timing.
+design elaborates; timing acceptance requires analysis of the completed fit.
 
 ## Reproducing a bitstream bit for bit
 
@@ -67,6 +69,45 @@ The epoch pins `BUILD_DATE` to `260923` in UTC. The small project adaptation
 in `sys/build_id.tcl` honors this input; without it, normal builds retain the
 framework's local-calendar-date behavior. All synthesis and fitter inputs
 must also match; do not assume a different date changes only a few RBF bytes.
+
+## Post-fit timing qualification
+
+Run both reporting scripts against the completed project's database:
+
+```sh
+quartus_sta -t tools/report_timing.tcl
+quartus_sta -t tools/report_multicorner.tcl
+```
+
+The first retains detailed queue/bridge diagnostics. The second iterates
+every operating condition returned by TimeQuest for the fitted device and
+configured temperature range. For the accepted device/settings these are
+slow and fast models at 1.1V, each at -40C and +100C. It checks global setup,
+hold, recovery, removal and minimum pulse width, plus core-clock setup/hold,
+and verifies exactly one 100MHz core PLL output at each corner.
+
+Reports and `summary.tsv` go into `output_files/multicorner/`. The summary's
+path count is the number of worst paths reported, not the total number of
+timed paths. The command exits with an error for negative slack, missing
+timing evidence or an unexpected core clock. Require a successful exit and
+the final `Multi-corner timing PASS` message; a partial summary is not a pass.
+Quartus warnings must still be reviewed, including any changes from the
+twelve audited warnings in [QUALIFICATION.md](QUALIFICATION.md).
+
+`TIMEQUEST_MULTICORNER_ANALYSIS` stays OFF in the QSF to preserve the accepted
+build settings; this explicit post-fit gate supplies the additional coverage
+without changing placement/routing or the RBF. It does not validate omitted
+constraints or replace board-I/O and hardware qualification.
+
+The script was added after source `c3d04ab`. To analyze that exact historical
+checkout, invoke the newer script by absolute path while the working
+directory is the historical compiled project. Do not copy newer synthesis
+inputs into the reproduction checkout.
+
+`make test-timing` runs the reporting script against mocked TimeQuest
+commands to check its failure handling, corner iteration and clock guards.
+This needs Tcl (`TCLSH` may override `tclsh`) but no fitted database, and is
+not a substitute for actual TimeQuest analysis.
 
 ## Known gotchas
 

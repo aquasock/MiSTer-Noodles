@@ -23,8 +23,12 @@ The core PLL has one 100MHz output. Core setup is +0.541ns and hold
 All reported setup, hold, recovery, removal and pulse-width categories have
 zero TNS. Seeds 4 and 6 also pass, with core setup +0.319/+0.071ns.
 Resources: 11,120 ALMs, 14,286 registers, 362,241 block-memory bits.
-Twelve framework unmatched-filter/ignored-exception warnings remain;
-constraint coverage and multi-corner qualification are not complete.
+A post-fit sweep of this same reproduced database passes all four available
+timing corners; see the results below. The twelve framework
+unmatched-filter/ignored-exception warnings were audited against synthesis
+removal records and the fitted netlist. They refer to eliminated logic in
+this configuration, not twelve timing failures. Broader constraint coverage
+and board-I/O sign-off remain outside this qualification.
 
 On the MiSTer, the 256-sprite 128x128 workload ran at 15.1fps, including a
 60-second run of 905 frames visually accepted by the owner. Key-checker,
@@ -102,12 +106,51 @@ resolution/refresh scaling).
 
 ## Timing coverage and limits
 
-This project runs Quartus's default single-corner TimeQuest analysis
-(`TIMEQUEST_MULTICORNER_ANALYSIS OFF` in `Noodles.qsf`), not a dedicated
-multi-corner sweep across process/voltage/temperature models. A design can
-pass the default check and still fail setup or hold at a corner outside the
-one modeled. Passing this build's single-corner timing is not complete
-board-I/O sign-off.
+The compile flow retains its original single-corner setting
+(`TIMEQUEST_MULTICORNER_ANALYSIS OFF` in `Noodles.qsf`) for reproduction.
+Future qualification also requires the explicit post-fit
+`tools/report_multicorner.tcl` gate described in [BUILD.md](BUILD.md).
+
+On 2026-09-23 the independently reproduced `c3d04ab` seed-5 fitted database
+was analyzed at every operating condition returned by Quartus 17.0.2 for
+`5CSEBA6U23I7` and the configured -40C to +100C junction-temperature range.
+All values below are worst slack in ns; all checks pass.
+
+| Model at 1.1V | Setup | Hold | Core setup | Core hold | Recovery | Removal | Min pulse width |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Slow, +100C | +0.327 | +0.252 | +0.541 | +0.252 | +3.497 | +0.973 | +1.122 |
+| Slow, -40C | +0.239 | +0.117 | +0.317 | +0.235 | +3.742 | +0.872 | +1.122 |
+| Fast, +100C | +3.282 | +0.099 | +4.563 | +0.099 | +5.334 | +0.506 | +1.122 |
+| Fast, -40C | +3.620 | +0.081 | +5.410 | +0.081 | +5.515 | +0.383 | +1.122 |
+
+The minimum setup path is `ascal|o_hacc[8]` to `ascal|o_div[0][20]` in
+the HDMI clock domain. The minimum hold path is the
+`pll_hdmi_adj|i_delay[13]` self-feedback path on the 100MHz core clock.
+The analysis did not rebuild or alter the accepted RBF; its SHA-256 remains
+`b76fb924c43cb25b9c516e216f247dacb576ec72ab6ef408b1a275d9bc247b8d`.
+These results qualify timing under the existing constraints, not their
+completeness, arbitrary board interfaces or every runtime workload.
+
+### Framework constraint warning audit
+
+The twelve messages from `sys/sys_top.sdc:60-70` comprise eight unmatched
+filter patterns (332174) and four ignored empty-source exceptions (332049).
+The synthesis removal report gives the following reasons; TimeQuest queries
+of the fitted registers confirm the targets are absent, rather than merely
+renamed under a different hierarchy.
+
+| Targets | Synthesis evidence and configuration |
+|---|---|
+| `arc*` | `arc1x/y`, `arc2x/y` lost fanout; Noodles supplies a fixed 4:3 ratio instead of selecting programmable alternatives. |
+| `arx*`, `ary*` | Bits reduced to constants matching the core's 4:3 ratio. |
+| `vs_line*` | Lost fanout in the unused native-video synchronization path; core HS/VS/DE are tied low for framebuffer output. |
+| `ascal|o_hdown`, `ascal|o_vdown` | Stuck at GND; framebuffer mode overrides both flags to zero. |
+| `ascal|o_vrr`, `ascal|o_vrrmax*` | Lost fanout; associated VRR synchronization logic reduced to constants. |
+
+No false-path exceptions were added, removed or broadened to silence these
+warnings. This conclusion is specific to the accepted configuration; changes
+to native video, aspect selection, framebuffer mode or VRR require a new
+audit. A surviving path is not exempted by an ignored empty-source exception.
 
 ## Verification during development
 

@@ -9,6 +9,7 @@
 CROSS   ?= arm-linux-gnueabihf-
 ARMCC   := $(CROSS)gcc
 HOSTCC  ?= cc
+TCLSH   ?= tclsh
 
 ARMFLAGS := -march=armv7-a -mtune=cortex-a9 -mfpu=neon -mfloat-abi=hard
 CFLAGS   := -std=c99 -O2 -Wall -Wextra -Wno-unused-parameter
@@ -60,12 +61,15 @@ SDRAM_ADAPTER_SIM := $(SIM_DIR)/sdram_adapter/Vsdram_adapter_dut
 SDRAM_LOADER_SIM := $(SIM_DIR)/sdram_loader/Vsdram_loader_dut
 SPRITE_BATCH_SDRAM_SIM := $(SIM_DIR)/sprite_batch_sdram/Vengine_sprite_batch_sdram_dut
 
-.PHONY: all host deploy sim test-host clean
+.PHONY: all host deploy sim test-host test-timing clean
 
 all: $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS) $(ARMPRESENTPROBE)
 
 test-host: $(HOSTLINKTEST)
 	$(HOSTLINKTEST)
+
+test-timing:
+	$(TCLSH) sim/test_report_multicorner.tcl
 
 $(HOSTLINKTEST): sim/test_noodles_link.c lib/noodles_link.c lib/noodles_link.h
 	@mkdir -p $(dir $@)

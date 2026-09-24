@@ -40,12 +40,12 @@ extern "C" {
 #define NOODLES_SPRITE_DESCRIPTOR_ADDR 0x30022000u  // 2 KiB after the 0x30021000 ring slots
 #define NOODLES_SPRITE_DESCRIPTOR_MAX 64u
 
-// SDR-001/SDR-004: sdram_adapter/sdram_loader's address space is a
+// SDR-008: sdram_adapter/sdram_loader's address space is a
 // SEPARATE, FPGA-fabric-only 128MB window (see rtl/sdram_adapter.sv's own
 // header) -- NOT the same address space as NOODLES_BUFFER_*_ADDR/DDR3.
-// This is where a caller must relocate a sprite bitmap to (via
-// noodles_push_load_sdram()) before sprite_batch's rd64 reads (which now
-// go to sdram_adapter, not ddram_adapter -- SDR-004/step 5b) can read it.
+// Production sprite_batch reads use DDR3, NOT this window. These constants
+// describe the optional board-SDRAM loader path, not texture storage for
+// the accepted production core.
 #define NOODLES_SDRAM_WINDOW_BYTES 0x08000000u  // 128MB, byte-address space
 #define NOODLES_SDRAM_PAGE_BYTES 1024u          // sdram_loader.sv's own page size; dst_addr must be a multiple of this
 
@@ -143,11 +143,10 @@ int noodles_push_sprite_batch(noodles_link_t *link,
 // NOODLES_SDRAM_WINDOW_BYTES above) -- NOT a DDR3 address. sdram_dst_addr
 // MUST already be aligned to NOODLES_SDRAM_PAGE_BYTES (sdram_loader.sv
 // copies whole 1KB pages regardless of length). The SDRAM board has no
-// HPS/host write path at all (SDR-001), so this FPGA-internal copy is the
-// only way to get data there; use this before pointing any
-// sprite_batch descriptor's src_addr at a sdram_dst_addr, since
-// sprite_batch's pixel reads now go to sdram_adapter (SDR-004/step 5b),
-// which only sees whatever has actually been copied into SDRAM this way.
+// HPS/host write path (SDR-001); this FPGA-internal copy populates it.
+// Production sprite_batch still reads DDR3 (SDR-008), so loading board
+// SDRAM does not make it a production sprite source. Keep production
+// descriptor src_addr values in the reserved DDR3 address space.
 // Returns 0 on success, -1 if the ring is full.
 int noodles_push_load_sdram(noodles_link_t *link, uint32_t sdram_dst_addr,
                              uint32_t ddr3_src_addr, uint32_t length);

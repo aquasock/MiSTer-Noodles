@@ -20,9 +20,9 @@ or extension of Menu.
   `rtl/blit_copy.sv` implements `BLIT_COPY` (straight rect copy, no
   scale/blend/format conversion). Both drive the real `DDRAM_*` pins
   through `rtl/ddram_adapter.sv`.
-- **SURF** -- the surface memory model. Currently one fixed 64x64, 32bpp
-  surface at a hardcoded physical address, scanned out over HDMI via
-  `MISTER_FB`.
+- **SURF** -- two fixed 640x480, 32bpp DDR3 scanout surfaces, flipped by
+  `PRESENT` and displayed through `MISTER_FB`. Production sprite sources
+  also use DDR3; board SDRAM is a separate, optional memory path.
 
 Every decision behind this shape -- the ring buffer's memory layout, the
 command slot format, the DDRAM addressing quirks that had to be found on
@@ -31,6 +31,11 @@ real hardware, the host API -- is recorded in
 authoritative source for anything that looks like an interface contract;
 [ai/core-log.md](ai/core-log.md) has the build-by-build history of how it
 got there.
+
+For the current consumer-facing baseline, start with
+[docs/INTEGRATION.md](docs/INTEGRATION.md): memory reservations, command
+layouts, pixel format, ownership and limitations for the planned GemRB
+integration. It describes today's interface, not an implemented SDL renderer.
 
 ## Host-side API
 
@@ -89,6 +94,6 @@ landing where expected.
     sim/                  Verilator testbenches for the RTL above
     lib/                  noodles_link: the real ARM-side host API
     tools/                host-side CLI tools built on lib/noodles_link
-    sys/                  vendored Template_MiSTer framework, unmodified
+    sys/                  Template_MiSTer framework with project adaptations
     ai/                   core.md / core-reference.md / core-log.md -- this
                            project's own architecture-decision and build log
