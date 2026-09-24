@@ -3143,7 +3143,7 @@ None.
 
 ---
 
-## 95 COMMIT Unreleased ??? 2026-09-23T21:23:06-07:00
+## 95 COMMIT Unreleased 7d4b259 2026-09-23T21:23:06-07:00
 
 #### Coming From:
 
@@ -3155,23 +3155,22 @@ Recover the entry 94 uncapped blit-throughput loss by reducing SDK fence-wait an
 
 #### Outcome:
 
-Planned, not yet implemented. Analysis supersedes entry 94's RTL-first hypothesis: link_control issues one 32-bit DDR3 read per 1024 idle-bus cycles, far below the observed loss, while `blit-bench` submits one 1048576-pixel batch and waits for its completion before submitting the next, so host wake-up latency is part of every measured iteration. The pre-SDK tool at `4cd38a7` polled the raw fence every 0.1ms, whereas the SDK's `pause_until` sleeps 1ms per poll and, in verified mode, `noodles_link_poll` issues its liveness ping only after observing the raw fence and then sleeps at least one further 1ms period before reading a response the core returns within microseconds. Iteration time fits this model: about 13.29ms at 78.9 Mpixel/s for the old tool, 14.00ms at 74.89 Mpixel/s for SDK 0.2 without a ping, and 15.30ms at 68.55 Mpixel/s for verified Stage 2B. The planned change is host-only: add submit-to-raw-fence and raw-to-verified timing to `blit-bench` as a diagnostic, then make the SDK check for the ping response immediately with a short bounded spin and replace the flat 1ms sleep with a short-first backoff capped at 1ms, preserving timeouts, reset/ESTALE detection and the verified-completion watermark. No RTL or RBF change is planned.
+This supersedes entry 94's RTL-first hypothesis. link_control issues one 32-bit DDR3 read per 1024 idle-bus cycles, while `blit-bench` waits for each 1048576-pixel batch before submitting the next, so host wake-up latency is inside every measured iteration; the pre-SDK tool at `4cd38a7` polled every 0.1ms, but the SDK slept 1ms per check and, in verified mode, slept at least one more 1ms period after issuing its liveness ping. After explicitly reloading the accepted seed-13 image, whose running path the MiSTer process list confirmed, the opt-in `NOODLES_BENCH_TRACE=1` diagnostic on the old SDK measured 0.075ms submission, 13.680ms engine execution and 1.080ms verified wait per batch, an engine-only rate of 76.65 Mpixel/s against 69.44 Mpixel/s untraced, placing the loss in the host wait. Source `7d4b259` replaces the flat sleep with a 20us-to-0.1ms backoff that resets to 20us whenever a ping is issued, applied to fence waits, close drain and control responses, leaving timeouts, ESTALE reset detection and the verified-completion watermark unchanged. New mocked regressions cover the backoff cap on a long timeout, a single minimum sleep after the ping, a delayed verified completion across fence wraparound and reset during a pending ping, and they fail against the previous SDK. Host tests, AddressSanitizer and UndefinedBehaviorSanitizer runs, installed native and ARM consumers, the ARM tool build and all 34 RTL simulations passed. Hash-verified ARM binaries on the accepted image cut the traced verified wait to 0.097ms, and six canonical 64-sprite one-batch 128x128 runs measured 80.50, 74.80, 77.96, 78.01, 76.61 and 76.60 Mpixel/s, a 77.41 mean, without errors or timeouts; the spread is wider than the old 1ms-sleep runs, consistent with host scheduling jitter, as the MiSTer main process used about half of one core. Two 30-second tile-cache runs completed 1807 and 1808 frames at 60.2fps, matching entry 93. No RTL or RBF change was made.
 
 #### Next Steps:
 
-Run the diagnostic on the accepted seed-13 image first; if it does not place the lost time in the host wait, stop and return a revised plan before touching RTL. Otherwise implement the SDK change, pass host regressions including mocked ping, reset and wraparound cases, sanitizers, installed consumer and ARM builds plus the unchanged RTL suite, then deploy with hash readback and run the canonical 64-sprite one-batch 128x128 `blit-bench` three times, targeting roughly 77 to 79 Mpixel/s without errors or timeouts, and re-run the tile-cache demo to confirm the 60.2fps pacing baseline.
+Obtain user visual acceptance of `tile-cache-demo-waitfix` on the accepted seed-13 image before marking this cycle passed. Then promote `stress-demo-waitfix` and `tile-cache-demo-waitfix` to the standard tool names, preserve the older binaries as fallbacks, and scope the next generic 2D rendering capability.
 
 #### Files Modified:
 
+- docs/SDK.md
 - lib/noodles_link.c
-- lib/noodles_link_internal.h
 - sim/test_noodles_sdk.c
 - tools/stress_demo.c
-- docs/SDK.md
 
 #### Status:
 
-- [ ] Built
+- [x] Built
 - [ ] Passed
 
 ---
