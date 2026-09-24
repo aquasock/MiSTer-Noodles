@@ -10,11 +10,13 @@
 //   blend-demo bench [seconds]     64 blended 128x128 sprites per fence wait
 //                                  into the back buffer, as 64 BLIT_BLEND
 //                                  commands and then as one flagged batch
-//   blend-demo modes [seconds] [n] n arrows passing behind a wall band, drawn
+//   blend-demo modes [seconds] [n] [blend|add|mul]
+//                                  n arrows passing behind a wall band, drawn
 //                                  GemRB-style: copied into a scratch surface,
 //                                  the wall cut from their alpha with the
 //                                  stencil mode, then composited with BLEND,
-//                                  ADD (glow) or MUL in turn (BLIT-009)
+//                                  ADD (glow) or MUL in turn, or all with the
+//                                  one named mode (BLIT-009)
 //   blend-demo show [seconds] [n]  n translucent, tinted arrows in one batch
 //                                  per frame, drifting over colour bars; each
 //                                  points the way it moves (mirror-x) and
@@ -363,7 +365,8 @@ static int show(noodles_link_t *link, noodles_surface_t *sprite, double seconds,
 // GemRB's software-renderer occlusion, per arrow and in batch order: copy the
 // arrow into its scratch surface, scale the scratch's alpha by 1 - wall mask
 // alpha (NOODLES_DRAW_MODE_STENCIL_ALPHA), then composite the scratch.
-static int modes(noodles_link_t *link, noodles_surface_t *sprite, double seconds, int count) {
+static int modes(noodles_link_t *link, noodles_surface_t *sprite, double seconds, int count,
+                 int only) {
     enum { WALL_X = 340, WALL_W = 120 };
     static uint32_t mask_row[NOODLES_BUFFER_WIDTH];
     noodles_surface_t *mask = NULL, *scratch[MAX_SHOW / 3];
@@ -424,8 +427,8 @@ static int modes(noodles_link_t *link, noodles_surface_t *sprite, double seconds
             draws[n++] = (noodles_surface_draw_t){mask, {x, y, SPRITE, SPRITE}, 0, 0,
                                                   NOODLES_DRAW_MODE_STENCIL_ALPHA, 0xffffffffu};
             // 3. Composite: BLEND, ADD (glow) or MUL in turn.
-            draws[n++] = (noodles_surface_draw_t){scratch[i], rect, x, y, finish[i % 3],
-                                                  0xffffffffu};
+            draws[n++] = (noodles_surface_draw_t){scratch[i], rect, x, y,
+                                                  finish[only >= 0 ? only : i % 3], 0xffffffffu};
         }
         // Step 1 draws into scratch surfaces, step 3 onto the back buffer, so
         // issue them as per-destination batches in the same overall order.
@@ -443,8 +446,10 @@ static int modes(noodles_link_t *link, noodles_surface_t *sprite, double seconds
         ++frames;
     }
     double elapsed = now_seconds() - start;
+    static const char *names[3] = {"BLEND", "ADD", "MUL"};
     printf("modes: %ld frames in %.1fs (%.1f fps), %d arrows occluded by the wall, composited "
-           "with BLEND/ADD/MUL\n", frames, elapsed, frames / elapsed, count);
+           "with %s\n", frames, elapsed, frames / elapsed, count,
+           only >= 0 ? names[only] : "BLEND/ADD/MUL in turn");
     for (int i = 0; i < count; ++i) noodles_surface_destroy(scratch[i]);
     noodles_surface_destroy(mask);
     return 0;
@@ -454,12 +459,16 @@ int main(int argc, char **argv) {
     const char *mode = argc > 1 ? argv[1] : "";
     double seconds = argc > 2 ? strtod(argv[2], NULL) : 15.0;
     int count = argc > 3 ? atoi(argv[3]) : 16;
+    const char *only_name = argc > 4 ? argv[4] : "";
+    int only = !strcmp(only_name, "blend") ? 0 : !strcmp(only_name, "add") ? 1
+             : !strcmp(only_name, "mul") ? 2 : -1;
     if ((strcmp(mode, "verify") && strcmp(mode, "bench") && strcmp(mode, "show") &&
          strcmp(mode, "modes")) ||
         seconds <= 0.0 || count < 1 || count > MAX_SHOW ||
-        (!strcmp(mode, "modes") && count > MAX_SHOW / 3)) {
+        (!strcmp(mode, "modes") && count > MAX_SHOW / 3) ||
+        (argc > 4 && (strcmp(mode, "modes") || only < 0))) {
         fprintf(stderr, "usage: %s verify | bench [seconds] | show [seconds] [1-%d] | "
-                "modes [seconds] [1-%d]\n", argv[0], MAX_SHOW, MAX_SHOW / 3);
+                "modes [seconds] [1-%d] [blend|add|mul]\n", argv[0], MAX_SHOW, MAX_SHOW / 3);
         return 2;
     }
     noodles_link_t *link = NULL;
@@ -481,7 +490,7 @@ int main(int argc, char **argv) {
             rc = -1;
         } else {
             rc = !strcmp(mode, "bench")   ? bench(link, sprite, seconds)
-                 : !strcmp(mode, "modes") ? modes(link, sprite, seconds, count)
+                 : !strcmp(mode, "modes") ? modes(link, sprite, seconds, count, only)
                                           : show(link, sprite, seconds, count);
         }
     }
