@@ -254,7 +254,6 @@ present #(
 (
 	.clk       (clk_sys),
 	.reset     (reset),
-	.initialized(fence_initialized),
 	.fb_vbl    (FB_VBL),
 	.fb_retired(FB_RETIRED),
 	.start     (present_start),
@@ -284,6 +283,7 @@ link_fence link_fence
 (
 	.clk       (clk_sys),
 	.reset     (reset),
+	.initialized(fence_initialized),
 	.done_pulse(cmd_done_pulse),
 	.front_sel (front_sel),
 	.wr_addr   (fence_wr_addr),
