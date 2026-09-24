@@ -14,6 +14,48 @@ from. The build procedure itself is in [BUILD.md](BUILD.md).
 
 ## SVGA candidate (3)
 
+### Additional seed comparison
+
+Source `37d21c9` was also built in three isolated copies with only the
+fitter SEED assignment changed to 4, 6 or 7. The date, threads, packing,
+device, RTL and constraints stayed fixed. Three builds ran concurrently;
+each completed within the twenty-minute limit.
+
+| Seed | Compile time | Worst setup across corners | Worst hold across corners | Four-corner result |
+|---|---|---:|---:|---|
+| 4 | 9m09s | -0.081ns | +0.082ns | FAIL: cold slow core setup |
+| 6 | 9m00s | -0.046ns | +0.089ns | FAIL: cold slow core setup |
+| 7 | 9m03s | +0.382ns | +0.084ns | PASS |
+
+Seed7 is the timing-qualified SVGA candidate, not yet hardware accepted.
+The repository QSF still pins seed5: reproducing this candidate requires
+source `37d21c9` plus SEED 7, not the unchanged source revision alone.
+No additional seed has been deployed; seed5's diagnostic remains loaded.
+
+Seed7 per-corner worst slack, in ns:
+
+| Model at 1.1V | Setup | Hold | Core setup | Core hold | Recovery | Removal | Min pulse width |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Slow, +100C | +0.391 | +0.247 | +0.391 | +0.247 | +3.582 | +0.941 | +1.122 |
+| Slow, -40C | +0.382 | +0.186 | +0.382 | +0.239 | +3.808 | +0.876 | +1.122 |
+| Fast, +100C | +3.284 | +0.104 | +4.336 | +0.104 | +5.034 | +0.461 | +1.122 |
+| Fast, -40C | +3.765 | +0.084 | +5.133 | +0.084 | +5.329 | +0.395 | +1.122 |
+
+RBF SHA-256 values:
+
+| Seed | SHA-256 |
+|---|---|
+| 4 | `ceffada3753a9bf2baa02ee3b859202b0f9a312a7fef2eeae7781bf2bc723100` |
+| 6 | `f9c24dbe4527a38b6dd1ea2f6ece4ba03af48eed7b5ffe9aa98119b09052bd77` |
+| 7 | `a020e304aa6903e06e55c2efdba15d1513fb3aa4db9494840b6028a3ba43a47a` |
+
+SVGA remains the intended standard render resolution. Runtime VGA/SVGA
+switching is deferred; the 640x480 image is retained only as a recovery
+baseline. Passing timing does not establish visual acceptance or identical
+hardware performance for a new fit.
+
+### Original seed5 build
+
 A clean clone of online source `37d21c9` built in 4m23s with the same
 Quartus/device/seed/thread/packing settings and `SOURCE_DATE_EPOCH=1790121600`.
 The render framebuffer is 800x600, pitch 3200; the GPU remains 100MHz.
