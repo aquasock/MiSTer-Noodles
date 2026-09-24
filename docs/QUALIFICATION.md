@@ -18,7 +18,7 @@ from. The build procedure itself is in [BUILD.md](BUILD.md).
 
 ## Protocol 1.6 fill-batch candidate (7)
 
-Source `d1702b440022b0b83b72e05c72447827e5a02ef9` publishes protocol
+Source `d1702b435134b6994b2062353b104e0cde40a7c6` publishes protocol
 `0x00010006`, capability mask `0x000007fe` and SDK 0.10. Opcode 10 selects
 one of the existing 64 descriptor tables and executes up to 64 opaque fills
 in list order through the established fill engine, retiring the batch as one
