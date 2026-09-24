@@ -209,6 +209,7 @@ module cmdq #(
                             copy_dst_pitch <= c_dst_pitch;
                             copy_width     <= c_width;
                             copy_height    <= c_height;
+                            blend_mod      <= 8'hff;
                             blend_solid_color <= c_color;
                             blend_solid    <= 1'b1;
                             blend_mode_en  <= 1'b1;

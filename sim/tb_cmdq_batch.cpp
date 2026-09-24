@@ -44,7 +44,7 @@ int main(int argc, char **argv) {
     dut.cmd_data[6] = 0x6c5a3c10;
     dut.cmd_valid = 1;
     dut.clk = 0; dut.eval(); dut.clk = 1; dut.eval(); dut.cmd_valid = 0;
-    if (!dut.blend_start || !dut.blend_solid || !dut.blend_mode_en ||
+    if (!dut.blend_start || dut.blend_mod != 0xff || !dut.blend_solid || !dut.blend_mode_en ||
         dut.blend_solid_color != 0x80402010 || dut.blend_mode != 0x6c5a3c ||
         dut.copy_dst_addr != 0x31200020 || dut.copy_width != 19 || dut.copy_height != 23)
         return std::fprintf(stderr, "FAIL: blend-fill decode\n"), 1;
