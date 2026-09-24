@@ -53,6 +53,18 @@ typedef struct {
     uint32_t modulation;
 } noodles_texture_draw_t;
 
+/* CPU access to the current 800x600 back buffer. Transfers require an
+ * entirely in-bounds rectangle, wait for earlier commands with timeout_ms,
+ * and refuse access while a PRESENT is pending. Fill clips to the buffer. */
+int noodles_back_buffer_update(noodles_link_t *link, const noodles_rect_t *rect,
+                               const void *pixels, size_t source_pitch,
+                               uint32_t timeout_ms);
+int noodles_back_buffer_read(noodles_link_t *link, const noodles_rect_t *rect,
+                             void *pixels, size_t destination_pitch,
+                             uint32_t timeout_ms);
+int noodles_back_buffer_fill(noodles_link_t *link, const noodles_rect_t *rect,
+                             uint32_t color);
+
 int noodles_surface_create(noodles_link_t *link, uint32_t width, uint32_t height,
                            noodles_surface_t **out);
 int noodles_surface_destroy(noodles_surface_t *surface);

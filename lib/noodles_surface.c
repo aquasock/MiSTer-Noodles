@@ -196,6 +196,31 @@ static int wait_for_cpu(noodles_surface_t *surface, uint32_t timeout_ms) {
     return 0;
 }
 
+static int transfer_rows(noodles_link_t *link, uint32_t address, uint32_t device_pitch,
+                         uint32_t width, uint32_t height, void *pixels,
+                         size_t host_pitch, int write) {
+    size_t row_bytes = (size_t)width * 4;
+    size_t span = (size_t)(height - 1) * device_pitch + row_bytes;
+    long page = sysconf(_SC_PAGESIZE);
+    if (page <= 0 || (page & (page - 1))) return fail(EIO);
+    uint32_t aligned = address & ~(uint32_t)(page - 1);
+    size_t offset = address - aligned;
+    size_t map_span = offset + span;
+    map_span = (map_span + (size_t)page - 1) & ~((size_t)page - 1);
+    int protection = write ? PROT_WRITE : PROT_READ;
+    void *map = mmap(NULL, map_span, protection, MAP_SHARED, link->fd, aligned);
+    if (map == MAP_FAILED) return -1;
+
+    for (uint32_t y = 0; y < height; ++y) {
+        void *device_row = (char *)map + offset + (size_t)y * device_pitch;
+        void *host_row = (char *)pixels + y * host_pitch;
+        if (write) memcpy(device_row, host_row, row_bytes);
+        else memcpy(host_row, device_row, row_bytes);
+    }
+    __sync_synchronize();
+    return munmap(map, map_span);
+}
+
 static int transfer(noodles_surface_t *surface, const noodles_rect_t *rect, void *pixels,
                     size_t host_pitch, uint32_t timeout_ms, int write) {
     if (!pixels || !validate_transfer(surface, rect, host_pitch)) return fail(EINVAL);
@@ -204,27 +229,9 @@ static int transfer(noodles_surface_t *surface, const noodles_rect_t *rect, void
 
     uint64_t address64 = (uint64_t)surface->address + (uint32_t)rect->y * surface->pitch +
         (uint32_t)rect->x * 4;
-    size_t row_bytes = (size_t)rect->width * 4;
-    size_t span = (size_t)(rect->height - 1) * surface->pitch + row_bytes;
-    long page = sysconf(_SC_PAGESIZE);
-    if (page <= 0 || (page & (page - 1))) return fail(EIO);
     uint32_t address = (uint32_t)address64;
-    uint32_t aligned = address & ~(uint32_t)(page - 1);
-    size_t offset = address - aligned;
-    size_t map_span = offset + span;
-    map_span = (map_span + (size_t)page - 1) & ~((size_t)page - 1);
-    int protection = write ? PROT_WRITE : PROT_READ;
-    void *map = mmap(NULL, map_span, protection, MAP_SHARED, surface->link->fd, aligned);
-    if (map == MAP_FAILED) return -1;
-
-    for (uint32_t y = 0; y < rect->height; ++y) {
-        void *device_row = (char *)map + offset + (size_t)y * surface->pitch;
-        void *host_row = (char *)pixels + y * host_pitch;
-        if (write) memcpy(device_row, host_row, row_bytes);
-        else memcpy(host_row, device_row, row_bytes);
-    }
-    __sync_synchronize();
-    return munmap(map, map_span);
+    return transfer_rows(surface->link, address, surface->pitch, rect->width,
+                         rect->height, pixels, host_pitch, write);
 }
 
 int noodles_surface_update(noodles_surface_t *surface, const noodles_rect_t *rect,
@@ -235,6 +242,63 @@ int noodles_surface_update(noodles_surface_t *surface, const noodles_rect_t *rec
 int noodles_surface_read(noodles_surface_t *surface, const noodles_rect_t *rect,
                          void *pixels, size_t destination_pitch, uint32_t timeout_ms) {
     return transfer(surface, rect, pixels, destination_pitch, timeout_ms, 0);
+}
+
+static int validate_back_buffer_transfer(const noodles_rect_t *rect, size_t host_pitch) {
+    if (!rect || rect->x < 0 || rect->y < 0 || !rect->width || !rect->height)
+        return 0;
+    uint64_t right = (uint64_t)(uint32_t)rect->x + rect->width;
+    uint64_t bottom = (uint64_t)(uint32_t)rect->y + rect->height;
+    return right <= NOODLES_BUFFER_WIDTH && bottom <= NOODLES_BUFFER_HEIGHT &&
+        host_pitch >= (uint64_t)rect->width * 4;
+}
+
+static int back_buffer_transfer(noodles_link_t *link, const noodles_rect_t *rect,
+                                void *pixels, size_t host_pitch,
+                                uint32_t timeout_ms, int write) {
+    if (!link || !pixels || !validate_back_buffer_transfer(rect, host_pitch))
+        return fail(EINVAL);
+    if (link->present_pending) return fail(EAGAIN);
+    if (noodles_link_drain(link, timeout_ms) != 0) return -1;
+    uint32_t address = noodles_link_back_buffer(link) +
+        (uint32_t)rect->y * NOODLES_BUFFER_PITCH + (uint32_t)rect->x * 4;
+    return transfer_rows(link, address, NOODLES_BUFFER_PITCH, rect->width,
+                         rect->height, pixels, host_pitch, write);
+}
+
+int noodles_back_buffer_update(noodles_link_t *link, const noodles_rect_t *rect,
+                               const void *pixels, size_t source_pitch,
+                               uint32_t timeout_ms) {
+    return back_buffer_transfer(link, rect, (void *)pixels, source_pitch,
+                                timeout_ms, 1);
+}
+
+int noodles_back_buffer_read(noodles_link_t *link, const noodles_rect_t *rect,
+                             void *pixels, size_t destination_pitch,
+                             uint32_t timeout_ms) {
+    return back_buffer_transfer(link, rect, pixels, destination_pitch,
+                                timeout_ms, 0);
+}
+
+int noodles_back_buffer_fill(noodles_link_t *link, const noodles_rect_t *rect,
+                             uint32_t color) {
+    if (!link || !rect || !rect->width || !rect->height) return fail(EINVAL);
+    int64_t left = rect->x;
+    int64_t top = rect->y;
+    int64_t right = left + rect->width;
+    int64_t bottom = top + rect->height;
+    if (right <= 0 || bottom <= 0 || left >= NOODLES_BUFFER_WIDTH ||
+        top >= NOODLES_BUFFER_HEIGHT)
+        return 0;
+    if (left < 0) left = 0;
+    if (top < 0) top = 0;
+    if (right > NOODLES_BUFFER_WIDTH) right = NOODLES_BUFFER_WIDTH;
+    if (bottom > NOODLES_BUFFER_HEIGHT) bottom = NOODLES_BUFFER_HEIGHT;
+    uint32_t address = noodles_link_back_buffer(link) +
+        (uint32_t)top * NOODLES_BUFFER_PITCH + (uint32_t)left * 4;
+    return noodles_push_solid_fill(link, address, NOODLES_BUFFER_PITCH,
+                                   (uint16_t)(right - left),
+                                   (uint16_t)(bottom - top), color);
 }
 
 static int clip_rect(const noodles_surface_t *surface, const noodles_rect_t *requested,

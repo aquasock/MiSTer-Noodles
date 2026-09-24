@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define NOODLES_SDK_VERSION "0.6.0"
+#define NOODLES_SDK_VERSION "0.7.0"
 /* Newest protocol this SDK knows. Verified open accepts any 1.x core;
  * optional operations are gated by capability bits and minor revision
  * (LINK-013). */

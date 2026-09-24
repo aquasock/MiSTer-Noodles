@@ -18,6 +18,7 @@
 static uint32_t memory[2048];
 static unsigned char descriptor_memory[4096];
 static unsigned char surface_memory[2 * 1024 * 1024];
+static unsigned char back_buffer_memory[2][2 * 1024 * 1024];
 static char lock_path[256];
 static int map_fail, device_fail, complete_on_sleep, interrupt_sleep, clock_fail;
 static int maps, unmaps, sleeps;
@@ -56,6 +57,12 @@ void *__wrap_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t 
         assert(length == sizeof(descriptor_memory));
         return descriptor_memory;
     }
+    if (offset >= NOODLES_BUFFER_A_ADDR &&
+        (uint64_t)offset + length <= NOODLES_BUFFER_A_ADDR + sizeof(back_buffer_memory[0]))
+        return back_buffer_memory[0] + (offset - NOODLES_BUFFER_A_ADDR);
+    if (offset >= NOODLES_BUFFER_B_ADDR &&
+        (uint64_t)offset + length <= NOODLES_BUFFER_B_ADDR + sizeof(back_buffer_memory[1]))
+        return back_buffer_memory[1] + (offset - NOODLES_BUFFER_B_ADDR);
     assert(offset >= NOODLES_SURFACE_ARENA_ADDR);
     assert((uint64_t)offset + length <=
            (uint64_t)NOODLES_SURFACE_ARENA_ADDR + sizeof(surface_memory));
@@ -65,6 +72,10 @@ void *__wrap_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t 
 int __wrap_munmap(void *addr, size_t size) {
     assert((addr == memory && size == sizeof(memory)) ||
            (addr == descriptor_memory && size == sizeof(descriptor_memory)) ||
+           ((unsigned char *)addr >= back_buffer_memory[0] &&
+            (unsigned char *)addr + size <= back_buffer_memory[0] + sizeof(back_buffer_memory[0])) ||
+           ((unsigned char *)addr >= back_buffer_memory[1] &&
+            (unsigned char *)addr + size <= back_buffer_memory[1] + sizeof(back_buffer_memory[1])) ||
            ((unsigned char *)addr >= surface_memory &&
             (unsigned char *)addr + size <= surface_memory + sizeof(surface_memory)));
     ++unmaps;
@@ -676,6 +687,41 @@ int main(void) {
         assert(memory[0] == before);
     }
     assert(noodles_surface_destroy(mode_sprite) == 0);
+    closed(a);
+
+    /* CPU back-buffer transfers preserve host pitch, follow the observed
+     * buffer role, refuse a pending present and clip hardware fills. */
+    memory[0] = memory[2] = memory[3] = 0;
+    seed_identity();
+    a = open_verified();
+    complete_on_sleep = 1;
+    noodles_rect_t back_rect = {2, 3, 2, 2};
+    uint32_t back_upload[6] = {0x01020304, 0x11121314, 0xdeadbeef,
+                               0x21222324, 0x31323334, 0xcafebabe};
+    uint32_t back_read[6] = {0};
+    assert(noodles_back_buffer_update(a, &back_rect, back_upload, 12, 10) == 0);
+    assert(noodles_back_buffer_read(a, &back_rect, back_read, 12, 10) == 0);
+    assert(back_read[0] == back_upload[0] && back_read[1] == back_upload[1] &&
+           back_read[2] == 0 && back_read[3] == back_upload[3] &&
+           back_read[4] == back_upload[4] && back_read[5] == 0);
+    noodles_rect_t bad_back_rect = {799, 599, 2, 2};
+    assert(noodles_back_buffer_read(a, &bad_back_rect, back_read, 12, 10) == -1 &&
+           errno == EINVAL);
+    noodles_rect_t clipped_back_fill = {-4, -5, 10, 12};
+    slot = memory[0];
+    assert(noodles_back_buffer_fill(a, &clipped_back_fill, 0x55667788) == 0);
+    published = &memory[1024 + slot * 8];
+    assert(published[0] == 1 && published[1] == NOODLES_BUFFER_B_ADDR &&
+           published[2] == NOODLES_BUFFER_PITCH && published[3] == 6 &&
+           published[4] == 7 && published[5] == 0x55667788);
+    assert(noodles_push_present(a, &fence) == 0);
+    assert(noodles_back_buffer_read(a, &back_rect, back_read, 12, 10) == -1 &&
+           errno == EAGAIN);
+    assert(noodles_link_wait(a, fence, 10) == 0);
+    assert(noodles_link_back_buffer(a) == NOODLES_BUFFER_A_ADDR);
+    assert(noodles_back_buffer_update(a, &back_rect, back_upload, 12, 10) == 0);
+    assert(!memcmp(back_buffer_memory[0] + 3 * NOODLES_BUFFER_PITCH + 2 * 4,
+                   back_upload, 8));
     closed(a);
 
     /* A raw fence that retires after the backoff has grown still gets a

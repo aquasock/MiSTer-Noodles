@@ -1,7 +1,7 @@
 # Host SDK
 
 `libnoodles.a` is a C99 static library with C++-compatible public headers
-`noodles_link.h` and `noodles_surface.h`. SDK 0.6.0 uses hardware protocol 1.x to identify the live
+`noodles_link.h` and `noodles_surface.h`. SDK 0.7.0 uses hardware protocol 1.x to identify the live
 800x600 core, claim one host session and detect reset before accepting a
 fence as completed. Protocol 1.1 cores add opcode 7, BLIT_BLEND, and 1.2 cores add flagged
 batch draws (blend, mirroring and RGBA modulation per draw) and 1.3 cores
@@ -228,6 +228,16 @@ frees; allocation also collects opportunistically. Closing the link drains
 the command stream and releases all allocator metadata, but applications
 must not retain surface or cache pointers after close.
 
+`noodles_back_buffer_update()` and `noodles_back_buffer_read()` provide bounded
+CPU access to an entirely in-bounds rectangle of the currently writable
+800x600 back buffer. They refuse access while a present is pending, wait for
+earlier commands with the caller's timeout, preserve host and device row
+pitches and resolve the buffer role only after the wait. This makes regional
+software fallbacks coherent without exposing `/dev/mem` or a managed-surface
+handle for the framework-owned buffers. `noodles_back_buffer_fill()` clips a
+signed rectangle and submits the existing solid-fill command to that same
+current buffer.
+
 `noodles_surface_blend()` and `noodles_surface_blend_to_back_buffer()` clip
 exactly like the copy calls, then submit BLIT_BLEND (BLIT-007): each source
 pixel's high byte is straight alpha, scaled by the call's `alpha_mod`
@@ -287,7 +297,8 @@ No SDL code, runtime resolution switch or automatic core reload is included.
 Managed surfaces and the texture cache are host-SDK facilities that work
 over protocol 1.0 through 1.3; SDK 0.4 added BLIT_BLEND for protocol 1.1
 cores, SDK 0.5 flagged batch draws for protocol 1.2 cores and SDK 0.6
-explicit blend modes for protocol 1.3 cores.
+explicit blend modes for protocol 1.3 cores. SDK 0.7 adds synchronized CPU
+transfers and fill for the current back buffer without changing the protocol.
 
 ## Stage-2A hardware execution
 
