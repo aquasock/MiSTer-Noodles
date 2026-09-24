@@ -8,10 +8,37 @@ from. The build procedure itself is in [BUILD.md](BUILD.md).
 
 | # | Date | Build | Seed | RBF SHA-256 | Hardware status |
 |---|---|---|---:|---|---|
+| 3 | 2026-09-23 | 800x600 candidate, source `37d21c9`; cold-corner setup failure | 5 | `65ca7861…eb5587` | Not deployed; not qualified |
 | 2 | 2026-09-23 | **Current:** shared 100MHz clock, registered write ingress and slot enables, honest DDR3 constraints | 5 | `b76fb924…247b8d` | Accepted; clean-commit reproduction verified |
 | 1 | 2026-09-22 | Historical: SPRITE_BATCH engine, 64-bit DDRAM path, PRESENT retirement-acknowledgement fix | 1 | `25f9d3a1…edba93` | Accepted -- see below |
 
-## Current build (2)
+## SVGA candidate (3)
+
+A clean clone of online source `37d21c9` built in 4m23s with the same
+Quartus/device/seed/thread/packing settings and `SOURCE_DATE_EPOCH=1790121600`.
+The render framebuffer is 800x600, pitch 3200; the GPU remains 100MHz.
+RBF SHA-256:
+`65ca7861f16add6df078287e79ad52e584f20fc3fb4fc6698990a8c156eb5587`.
+
+The default slow +100C check passes, but the explicit four-corner gate
+correctly exits nonzero: slow -40C setup fails at -0.137ns from the
+`vga_out:vga_scaler_out` line-buffer RAM to `y_1r[13]`, on the HDMI PLL
+clock. This candidate is not timing-qualified and has not been deployed.
+
+| Model at 1.1V | Overall setup | Overall hold | Core setup | Core hold |
+|---|---:|---:|---:|---:|
+| Slow, +100C | +0.349 | +0.225 | +0.679 | +0.244 |
+| Slow, -40C | -0.137 | +0.127 | +0.542 | +0.190 |
+| Fast, +100C | +3.230 | +0.131 | +4.410 | +0.131 |
+| Fast, -40C | +3.629 | +0.114 | +5.304 | +0.116 |
+
+Recovery, removal and pulse width pass at every corner. The same twelve
+framework unmatched-filter/empty-source warnings remain. Host and ARM/native
+builds and the full RTL suite pass, including the 480000-pixel fill and
+sprite-batch tests with 3200-byte destination pitch. These do not override
+the failing timing gate or establish hardware acceptance.
+
+## Current accepted build (2)
 
 This remains the accepted fallback. Current source targets 800x600 with a
 3200-byte pitch for the next standard build; its timing and hardware
