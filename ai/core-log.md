@@ -2750,7 +2750,7 @@ Publish the pinned source and qualification record without claiming independent 
 
 ---
 
-## 84 COMMIT Unreleased ??? 2026-09-23T19:25:30-07:00
+## 84 COMMIT Unreleased 775405d 2026-09-23T19:25:30-07:00
 
 #### Coming From:
 
@@ -2762,19 +2762,42 @@ Package the host library as a reusable legacy-mode SDK without changing the acce
 
 #### Outcome:
 
-The user approved stage 2A: static ARM/native libraries, installed headers and pkg-config metadata, an opaque handle, centralized bounded completion and presentation handling, lifecycle errors and migrated tools. Hardware identity and reset detection are explicitly unavailable on this core and remain stage 2B. Cooperative locking must not be described as protection against legacy tools or direct memory writers, and timeouts must not imply cancellation.
+Implemented and published the approved host-only stage 2A as source 775405d: static ARM/native libraries, an installed opaque public header and pkg-config metadata, bounded polling/wait/drain/close, separated PRESENT submission, command validation and migrated tools with propagated errors. Cooperative flock and a per-boot dirty marker use /run/noodles.lock because the target has no /run/lock directory. The SDK reports legacy/unverified assumptions; hardware identity, readiness and reset detection remain stage 2B. Timeouts fault handles without cancelling queued work, and dirty-session acknowledgement requires a caller-performed reload. Native lifecycle and transport regressions, installed C/C++ and ARM consumer builds, ARM/native tool builds and the full RTL simulation suite passed. After source publication, FTP readback verified separately named sdk-smoke-2a and stress-demo-sdk binaries. On the unchanged accepted seed7 core, the installed consumer completed two sequential fill/present/close sessions; the 256-sprite, four-batch, 128x128 workload completed 227 frames in fifteen seconds at 15.1fps. Three-second clear/present and present-only runs reported 60.5fps and 60.3fps. All returned zero and the final session marker was clean. No core reload or Quartus build was performed, and fallback binaries were preserved. Hardware execution succeeded, but user visual acceptance of this SDK run remains pending; the Passed box is therefore unchecked.
 
 #### Next Steps:
 
-Publish this proposal, implement and validate the host-only SDK against mocked memory and the accepted SVGA core, and prove a separate consumer builds against an installed SDK. Document explicit legacy attachment assumptions and conservative recovery after abandoned work. Preserve the 800x600 geometry, command layouts, 100MHz clock and all FPGA source/settings; no Quartus build is required.
+Obtain user visual acceptance of the migrated host workload before recording hardware acceptance. Stage 2B remains a separately approved hardware cycle for live identification, readiness and reset/session detection; do not infer those guarantees from the host lock or DDR3 contents. Preserve the accepted SVGA seed7 core and fixed geometry while preparing that scope.
 
 #### Files Modified:
 
-None.
+- Makefile
+- README.md
+- docs/BUILD.md
+- docs/INTEGRATION.md
+- docs/SDK.md
+- examples/sdk_smoke.c
+- lib/noodles.pc.in
+- lib/noodles_link.c
+- lib/noodles_link.h
+- lib/noodles_link_internal.h
+- scripts/deploy.sh
+- sim/test_noodles_link.c
+- sim/test_noodles_sdk.c
+- sim/test_sdk_install.sh
+- tools/bench.c
+- tools/blit_copy_key_push.c
+- tools/blit_copy_push.c
+- tools/link_push.c
+- tools/load_bmp.c
+- tools/present_demo.c
+- tools/sdk_helpers.h
+- tools/solid_fill_push.c
+- tools/sprite_demo.c
+- tools/stress_demo.c
 
 #### Status:
 
-- [ ] Built
+- [x] Built
 - [ ] Passed
 
 ---
