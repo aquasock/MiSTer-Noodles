@@ -2980,3 +2980,44 @@ Implement host regressions for allocation pressure, coalescing, partial transfer
 - [ ] Passed
 
 ---
+
+## 90 COMMIT Unreleased ??? 2026-09-23T21:02:00-07:00
+
+#### Coming From:
+
+Unreleased 3741e66
+
+#### Purpose:
+
+Implement entry 89's engine-agnostic managed surfaces and fixed-cell texture cache.
+
+#### Outcome:
+
+Add SDK 0.3 opaque XRGB8888 surfaces backed by the reserved 224MiB DDR3 arena, with aligned allocation, coalescing, bounded partial transfers, clipped fill/copy/batch operations, raw-access exclusion, and fence-verified deferred reuse. Add a generic fixed-cell LRU atlas whose application-defined keys and batched visible draws do not expose a tilemap-specific ABI, plus a scrolling 64x64 tile demo using 154 visible tiles and a 256-cell cache. Host regressions cover arena pressure, complete coalescing, partial pitched transfers, clipping, in-flight destruction, delayed reuse, atlas eviction, packaging, and sanitizer execution; ARM and native builds must pass before hardware deployment, and no RTL or RBF change is required.
+
+#### Next Steps:
+
+Commit the SDK source, deploy the ARM tile-cache demo against the accepted Stage 2B seed-13 image, and record its measured frame rate and user visual acceptance before marking this milestone passed.
+
+#### Files Modified:
+
+- Makefile
+- docs/INTEGRATION.md
+- docs/SDK.md
+- lib/noodles.pc.in
+- lib/noodles_link.c
+- lib/noodles_link.h
+- lib/noodles_link_internal.h
+- lib/noodles_surface.c
+- lib/noodles_surface.h
+- scripts/deploy.sh
+- sim/test_noodles_sdk.c
+- sim/test_sdk_install.sh
+- tools/tile_cache_demo.c
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
