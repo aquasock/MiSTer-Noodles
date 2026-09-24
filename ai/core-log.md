@@ -3077,7 +3077,39 @@ Add host regression coverage for redundant-wait elimination, fence wraparound an
 
 #### Status:
 
-- [ ] Built
+- [x] Built
 - [ ] Passed
+
+---
+
+## 93 COMMIT Unreleased ??? 2026-09-23T21:12:18-07:00
+
+#### Coming From:
+
+Unreleased 45566e8
+
+#### Purpose:
+
+Record hardware and visual acceptance of the managed texture-cache pacing fixes.
+
+#### Outcome:
+
+Frame analysis of the original constant-60fps HDMI capture found low-motion events every 32 to 33 frames, matching horizontal 64-pixel tile-boundary crossings, while the first fix in `6acc2f2` cached the highest live-verified completion fence and improved the workload from 57.6fps to 59.3fps. A second mid-stream capture contained zero exact duplicate frames but exposed a smaller 64 to 65-frame cadence matching vertical tile-row crossings; `45566e8` removed the remaining burst by keeping each atlas persistently mapped instead of performing fourteen mapping pairs at that boundary. The hash-verified final ARM binary completed 1807 and 1808 frames in separate 30.0-second runs at 60.2fps without command errors or timeouts, and the user watched the final run and confirmed it was perfect.
+
+#### Next Steps:
+
+Keep source commits `6acc2f2` and `45566e8` as the accepted SDK 0.3 pacing baseline and scope the next generic 2D rendering capability before changing the accepted seed-13 RBF.
+
+#### Files Modified:
+
+- lib/noodles_link.c
+- lib/noodles_link_internal.h
+- lib/noodles_surface.c
+- sim/test_noodles_sdk.c
+
+#### Status:
+
+- [x] Built
+- [x] Passed
 
 ---
