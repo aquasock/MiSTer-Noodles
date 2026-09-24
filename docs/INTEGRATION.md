@@ -80,7 +80,8 @@ Addresses and row pitches for pixel operations must be four-byte aligned.
 Pitches are in bytes; widths and heights are in pixels. Supply a sufficient
 pitch and valid backing storage for every row. There is no hardware bounds
 checking, automatic clipping, format conversion or defined overlapping-copy
-semantics. The host wrappers do not generally validate these requirements.
+semantics. The stage-2A SDK validates basic alignment, geometry and address
+spans, but cannot prove allocation or ownership; see [SDK.md](SDK.md).
 
 Board SDRAM is a separate FPGA-only, byte-addressed 128MiB window beginning
 at zero. It is not HPS DDR3, not host-mappable and not a production sprite
@@ -146,14 +147,15 @@ before updating the write pointer. Use the library's barriers and mapped
 access path rather than substituting cached mappings or `volatile` alone.
 
 Open one handle only after core initialization and after previous work has
-drained, or following a fresh core load and initialization. The library has
-no ready handshake, interprocess exclusion or reset-generation detection.
-Serialize calls; concurrent producers and resetting/reloading the FPGA
-during a handle's lifetime are unsupported.
+drained, or following a fresh core load and initialization. Stage 2A adds
+cooperative process locking and a dirty-session marker, but no ready
+handshake or reset-generation detection. Serialize calls; concurrent
+producers and resetting/reloading the FPGA during a handle's lifetime are
+unsupported. The lock does not exclude legacy/direct memory writers.
 
 Successful push means submission, not completion. After a successful push,
-capture `link.done_baseline + noodles_link_submitted_count(&link)` and use
-`noodles_link_fence_reached(&link, target)`. Comparison is modulo 2^31 and
+capture `noodles_link_last_fence(device)` and use
+`noodles_link_poll()` or `noodles_link_wait()`. Comparison is modulo 2^31 and
 requires a target distance less than 2^30 completions. Do not compare raw
 counts with `>=`, or use the ring read pointer to authorize asset reuse.
 
@@ -163,21 +165,24 @@ fixed descriptor table has library-managed ownership today:
 `noodles_push_sprite_batch()` returns `-1/EAGAIN` before any descriptor
 write when that table is busy or the ring is full. Raw opcode-5 submissions
 also claim it; overlapping library uploads are blocked until completion.
-Direct `/dev/mem` writes and GPU commands targeting that table bypass
-this protection. It is not general texture lifetime management.
+Direct `/dev/mem` writes bypass this protection; the stage-2A SDK rejects
+draw commands targeting the control region. It is not general texture
+lifetime management.
 
 Draw into `noodles_link_back_buffer()`, then call
 `noodles_present_and_wait()`, then query the back buffer again. The helper
-returns 0 on completed presentation, -1 on submission failure, or 1 after
-its bounded polling loop expires. A timeout does not cancel the submitted
-command; do not resubmit blindly or assume either buffer is safe to reuse.
-Raw PRESENT submissions do not update the helper's local buffer tracking;
-use the helper for the supported presentation sequence.
+returns 0 on completed presentation or -1 with errno on failure.
+`noodles_push_present()` also supports submission separately from waiting.
+A timeout faults the handle without cancelling the submitted command;
+do not resubmit blindly or assume either buffer is safe to reuse. Raw and
+typed PRESENT submissions both block further writes until SDK poll/wait
+observes retirement and refreshes buffer tracking.
 
-Drain all pending work before closing. Close does not cancel work, reclaim
-in-flight inputs safely or repair an abandoned queue. Only retry transient
-`EAGAIN`; report other errors. Recovery, bounded general fence waits and
-safe restart semantics remain SDK work, not guarantees of this baseline.
+Close with a deadline drains and always frees local resources; check its
+return value. Failure leaves the session dirty, requiring explicit external
+core reload before recovery acknowledgement. Only retry transient `EAGAIN`;
+report other errors. See [SDK.md](SDK.md) for the host-only lifecycle policy
+and the limitations that require a stage-2B hardware handshake.
 
 ## Handoff boundary
 

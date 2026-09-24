@@ -15,13 +15,13 @@
 #include <stdlib.h>
 #include <time.h>
 
-#include "../lib/noodles_link.h"
+#include "sdk_helpers.h"
 
 int main(int argc, char **argv) {
     double seconds = (argc > 1) ? atof(argv[1]) : 1.0;
 
-    noodles_link_t link;
-    if (noodles_link_open(&link) != 0) {
+    noodles_link_t *link = NULL;
+    if (tool_open(&link) != 0) {
         perror("noodles_link_open (are you root?)");
         return 1;
     }
@@ -36,25 +36,24 @@ int main(int argc, char **argv) {
     const int n_colors = (int)(sizeof(colors) / sizeof(colors[0]));
 
     for (int i = 0; i < n_colors; ++i) {
-        uint32_t back = noodles_link_back_buffer(&link);
+        uint32_t back = noodles_link_back_buffer(link);
         uint32_t color = noodles_rgb(colors[i].r, colors[i].g, colors[i].b);
 
-        uint32_t done_before = noodles_link_done_count(&link);
-        if (noodles_push_solid_fill(&link, back, NOODLES_BUFFER_PITCH, NOODLES_BUFFER_WIDTH,
+        if (noodles_push_solid_fill(link, back, NOODLES_BUFFER_PITCH, NOODLES_BUFFER_WIDTH,
                                      NOODLES_BUFFER_HEIGHT, color) != 0) {
-            fprintf(stderr, "ring full filling back buffer\n");
-            noodles_link_close(&link);
+            perror("back buffer fill submission");
+            tool_close(link);
             return 1;
         }
-        struct timespec delay = {.tv_sec = 0, .tv_nsec = 1000000};
-        for (int j = 0; j < 200 && noodles_link_done_count(&link) <= done_before; ++j) {
-            nanosleep(&delay, NULL);
+        if (tool_wait(link, "fill completion") != 0) {
+            tool_close(link);
+            return 1;
         }
 
-        int rc = noodles_present_and_wait(&link);
+        int rc = noodles_present_and_wait(link);
         if (rc != 0) {
             fprintf(stderr, "present failed (rc=%d) on color %s\n", rc, colors[i].name);
-            noodles_link_close(&link);
+            tool_close(link);
             return 1;
         }
 
@@ -65,7 +64,7 @@ int main(int argc, char **argv) {
         nanosleep(&hold, NULL);
     }
 
-    noodles_link_close(&link);
+    tool_close(link);
     printf("done -- screen should have cycled cleanly through all %d colors, "
            "one solid color at a time, no tearing.\n",
            n_colors);

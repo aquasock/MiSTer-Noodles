@@ -16,7 +16,7 @@
 #include <stdlib.h>
 #include <time.h>
 
-#include "../lib/noodles_link.h"
+#include "sdk_helpers.h"
 
 int main(int argc, char **argv) {
     if (argc != 8) {
@@ -34,34 +34,23 @@ int main(int argc, char **argv) {
     uint8_t g = (uint8_t)strtoul(argv[6], NULL, 16);
     uint8_t b = (uint8_t)strtoul(argv[7], NULL, 16);
 
-    noodles_link_t link;
-    if (noodles_link_open(&link) != 0) {
+    noodles_link_t *link = NULL;
+    if (tool_open(&link) != 0) {
         perror("noodles_link_open (are you root?)");
         return 1;
     }
 
     uint32_t color = noodles_rgb(r, g, b);
-    uint32_t done_before = noodles_link_done_count(&link);
 
-    if (noodles_push_solid_fill(&link, dst_addr, pitch, width, height, color) != 0) {
-        fprintf(stderr, "ring full\n");
-        noodles_link_close(&link);
+    if (noodles_push_solid_fill(link, dst_addr, pitch, width, height, color) != 0) {
+        perror("solid fill submission");
+        tool_close(link);
         return 1;
     }
 
-    struct timespec delay = {.tv_sec = 0, .tv_nsec = 1000000};  // 1ms
-    for (int i = 0; i < 200; ++i) {
-        uint32_t done_now = noodles_link_done_count(&link);
-        if (done_now > done_before) {
-            printf("filled %ux%u at 0x%08x with r=%02x g=%02x b=%02x (fence %u -> %u)\n", width,
-                   height, dst_addr, r, g, b, done_before, done_now);
-            noodles_link_close(&link);
-            return 0;
-        }
-        nanosleep(&delay, NULL);
-    }
-
-    fprintf(stderr, "fence never advanced past %u after 200ms\n", done_before);
-    noodles_link_close(&link);
-    return 1;
+    int result = tool_wait(link, "fill completion");
+    if (!result) printf("filled %ux%u at 0x%08x with r=%02x g=%02x b=%02x\n",
+                        width, height, dst_addr, r, g, b);
+    tool_close(link);
+    return result != 0;
 }

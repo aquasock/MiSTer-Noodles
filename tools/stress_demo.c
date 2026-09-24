@@ -46,7 +46,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "../lib/noodles_link.h"
+#include "sdk_helpers.h"
 #include "bmp_loader.h"
 
 // Integer sqrt (Newton's method), just enough precision for the sprite
@@ -111,6 +111,7 @@ static int push_fill_retry(noodles_link_t *link, uint32_t dst, uint16_t pitch, u
     struct timespec delay = {.tv_sec = 0, .tv_nsec = PUSH_RETRY_DELAY_NS};
     for (int i = 0; i < PUSH_RETRY_ITERS; ++i) {
         if (noodles_push_solid_fill(link, dst, pitch, w, h, color) == 0) return 0;
+        if (errno != EAGAIN) { perror("fill submission"); return 1; }
         nanosleep(&delay, NULL);
     }
     return 1;
@@ -122,6 +123,7 @@ static int push_copy_retry(noodles_link_t *link, uint32_t dst, uint16_t dst_pitc
     for (int i = 0; i < PUSH_RETRY_ITERS; ++i) {
         if (noodles_push_blit_copy(link, dst, dst_pitch, src, src_pitch, w, h) == 0)
             return 0;
+        if (errno != EAGAIN) { perror("copy submission"); return 1; }
         nanosleep(&delay, NULL);
     }
     return 1;
@@ -133,6 +135,7 @@ static int push_key_retry(noodles_link_t *link, uint32_t dst, uint16_t dst_pitch
     for (int i = 0; i < PUSH_RETRY_ITERS; ++i) {
         if (noodles_push_blit_copy_key(link, dst, dst_pitch, src, src_pitch, w, h, colorkey) == 0)
             return 0;
+        if (errno != EAGAIN) { perror("keyed copy submission"); return 1; }
         nanosleep(&delay, NULL);
     }
     return 1;
@@ -154,21 +157,17 @@ static int push_batch_retry(noodles_link_t *link,
     return 1;
 }
 
-// noodles_present_and_wait() returns -1 on ring-full (LINK-004's documented,
-// non-retrying contract) -- with this file's own commands pipelined ahead
-// of it, the ring can genuinely still be full of undrained draws at the
-// moment PRESENT is pushed, so -1 here means "try again shortly", not
-// failure. A 1 return (pushed fine, fence never caught up) is a real
-// problem and stays fatal.
+// Only EAGAIN is safe to retry; timeout does not cancel a submitted flip.
 static int present_retry(noodles_link_t *link) {
     struct timespec delay = {.tv_sec = 0, .tv_nsec = PUSH_RETRY_DELAY_NS};
     for (int i = 0; i < PUSH_RETRY_ITERS; ++i) {
         int rc = noodles_present_and_wait(link);
         if (rc == 0) return 0;
-        if (rc == -1) {
+        if (errno == EAGAIN) {
             nanosleep(&delay, NULL);
             continue;
         }
+        perror("present");
         return 1;
     }
     return 1;
@@ -177,12 +176,9 @@ static int present_retry(noodles_link_t *link) {
 // Used by blit-bench to count completed work, not to protect descriptors:
 // the library now owns that exclusion.
 static int wait_for_fence(noodles_link_t *link, uint32_t target) {
-    struct timespec delay = {.tv_sec = 0, .tv_nsec = PUSH_RETRY_DELAY_NS};
-    for (int i = 0; i < PUSH_RETRY_ITERS; ++i) {
-        if (noodles_link_fence_reached(link, target)) return 0;
-        nanosleep(&delay, NULL);
-    }
-    return 1;
+    if (noodles_link_wait(link, target, NOODLES_DEFAULT_TIMEOUT_MS) == 0) return 0;
+    perror("GPU completion");
+    return -1;
 }
 
 int main(int argc, char **argv) {
@@ -310,22 +306,23 @@ int main(int argc, char **argv) {
         sprite_h = (uint32_t)sprite_px;
     }
 
-    noodles_link_t link;
-    if (noodles_link_open(&link) != 0) {
+    noodles_link_t *link = NULL;
+    if (tool_open(&link) != 0) {
         perror("noodles_link_open (are you root?)");
         free(converted);
         return 1;
     }
     printf("startup fence=0x%08x, front parity=%u, back=0x%08x\n",
-           link.header[3], link.presents_completed,
-           noodles_link_back_buffer(&link));
+           noodles_link_done_count(link),
+           noodles_link_back_buffer(link) == NOODLES_BUFFER_A_ADDR,
+           noodles_link_back_buffer(link));
 
     uint32_t sprite_pitch = sprite_w * 4;
     size_t sprite_bytes = (size_t)sprite_h * sprite_pitch;
-    if (noodles_link_upload(&link, SPRITE_SRC_ADDR, converted, sprite_bytes) != 0) {
+    if (noodles_link_upload(link, SPRITE_SRC_ADDR, converted, sprite_bytes) != 0) {
         perror("noodles_link_upload");
         free(converted);
-        noodles_link_close(&link);
+        tool_close(link);
         return 1;
     }
     free(converted);
@@ -340,7 +337,7 @@ int main(int argc, char **argv) {
 
     if (sprite_w >= NOODLES_BUFFER_WIDTH || sprite_h >= NOODLES_BUFFER_HEIGHT) {
         fprintf(stderr, "sprite too large to bounce within the buffer\n");
-        noodles_link_close(&link);
+        tool_close(link);
         return 1;
     }
 
@@ -385,24 +382,24 @@ int main(int argc, char **argv) {
     if (do_present_only || do_static) {
         // Populate both surfaces while output is still blank, then establish
         // a known initial front/back relationship before presenting only.
-        if (push_fill_retry(&link, NOODLES_BUFFER_A_ADDR, NOODLES_BUFFER_PITCH,
+        if (push_fill_retry(link, NOODLES_BUFFER_A_ADDR, NOODLES_BUFFER_PITCH,
                             NOODLES_BUFFER_WIDTH, NOODLES_BUFFER_HEIGHT, background) ||
-            push_fill_retry(&link, NOODLES_BUFFER_B_ADDR, NOODLES_BUFFER_PITCH,
+            push_fill_retry(link, NOODLES_BUFFER_B_ADDR, NOODLES_BUFFER_PITCH,
                             NOODLES_BUFFER_WIDTH, NOODLES_BUFFER_HEIGHT,
                             noodles_rgb(0x30, 0x20, 0x10)) ||
-            present_retry(&link)) {
+            present_retry(link)) {
             fprintf(stderr, "present-only initialization failed\n");
-            noodles_link_close(&link);
+            tool_close(link);
             return 1;
         }
         if (do_static) {
             if (sleep((unsigned int)run_seconds) != 0) {
                 fprintf(stderr, "static observation interrupted\n");
-                noodles_link_close(&link);
+                tool_close(link);
                 return 1;
             }
             printf("done -- static frame held for %.1fs\n", run_seconds);
-            noodles_link_close(&link);
+            tool_close(link);
             return 0;
         }
     }
@@ -420,7 +417,7 @@ int main(int argc, char **argv) {
         // shared descriptor table against early reuse.
         // Must be the live back buffer, not a hardcoded constant: which of
         // A/B is currently back depends on the parity the FPGA came up with.
-        const uint32_t back = noodles_link_back_buffer(&link);
+        const uint32_t back = noodles_link_back_buffer(link);
         noodles_sprite_descriptor_t descriptors[MAX_SPRITES];
         for (int j = 0; j < MAX_SPRITES; ++j) {
             descriptors[j].dst_addr = back + (uint32_t)sprites[j].y * NOODLES_BUFFER_PITCH +
@@ -439,17 +436,17 @@ int main(int argc, char **argv) {
         int bench_failed = 0;
         while (now_s() - b_start < run_seconds) {
             for (int b = 0; b < batches; ++b) {
-                if (push_batch_retry(&link, descriptors, MAX_SPRITES)) {
+                if (push_batch_retry(link, descriptors, MAX_SPRITES)) {
                     fprintf(stderr, "blit-bench: batch submission failed\n");
                     bench_failed = 1;
                     break;
                 }
-                const uint32_t target = link.done_baseline + link.submitted;
-                if (wait_for_fence(&link, target)) {
+                const uint32_t target = noodles_link_last_fence(link);
+                if (wait_for_fence(link, target)) {
                     fprintf(stderr, "blit-bench: batch never retired "
-                            "(baseline=%u submitted=%u target=%u done=%u)\n",
-                            link.done_baseline, link.submitted, target,
-                            noodles_link_done_count(&link));
+                            "(submitted=%u target=%u done=%u)\n",
+                            noodles_link_submitted_count(link), target,
+                            noodles_link_done_count(link));
                     bench_failed = 1;
                     break;
                 }
@@ -470,7 +467,7 @@ int main(int argc, char **argv) {
         // number (which cannot exceed the 60Hz refresh).
         printf("  equivalent %.1f fps at %d sprites/frame\n",
                (done_batches / b_elapsed) / (double)batches, MAX_SPRITES * batches);
-        noodles_link_close(&link);
+        tool_close(link);
         return bench_failed;
     }
 
@@ -478,9 +475,9 @@ int main(int argc, char **argv) {
     long frame = 0;
     int failed = 0;
     while (now_s() - t_start < run_seconds) {
-        uint32_t back = noodles_link_back_buffer(&link);
+        uint32_t back = noodles_link_back_buffer(link);
 
-        if (do_clear && push_fill_retry(&link, back, NOODLES_BUFFER_PITCH, NOODLES_BUFFER_WIDTH,
+        if (do_clear && push_fill_retry(link, back, NOODLES_BUFFER_PITCH, NOODLES_BUFFER_WIDTH,
                              NOODLES_BUFFER_HEIGHT, background)) {
             fprintf(stderr, "frame %ld: ring stuck clearing background\n", frame);
             failed = 1;
@@ -502,7 +499,7 @@ int main(int argc, char **argv) {
                     descriptors[j].src_pitch = sprite_pitch;
                     descriptors[j].flags = 1;
                 }
-                if (push_batch_retry(&link, descriptors, MAX_SPRITES)) {
+                if (push_batch_retry(link, descriptors, MAX_SPRITES)) {
                     fprintf(stderr, "frame %ld: sprite batch %d submission failed\n", frame, b);
                     failed = 1;
                     break;
@@ -517,9 +514,9 @@ int main(int argc, char **argv) {
                             (uint32_t)sprites[i].x * 4;
             uint32_t frame_key = do_key_never ? 0xFFFFFFFFu : colorkey;
             int copy_failed = do_plain
-                ? push_copy_retry(&link, dst, NOODLES_BUFFER_PITCH, SPRITE_SRC_ADDR, sprite_pitch,
+                ? push_copy_retry(link, dst, NOODLES_BUFFER_PITCH, SPRITE_SRC_ADDR, sprite_pitch,
                                   (uint16_t)sprite_w, (uint16_t)sprite_h)
-                : push_key_retry(&link, dst, NOODLES_BUFFER_PITCH, SPRITE_SRC_ADDR, sprite_pitch,
+                : push_key_retry(link, dst, NOODLES_BUFFER_PITCH, SPRITE_SRC_ADDR, sprite_pitch,
                                  (uint16_t)sprite_w, (uint16_t)sprite_h, frame_key);
             if (copy_failed) {
                 fprintf(stderr, "frame %ld: ring stuck compositing sprite %d\n", frame, i);
@@ -529,7 +526,7 @@ int main(int argc, char **argv) {
         }
         if (failed) break;
 
-        if (present_retry(&link)) {
+        if (present_retry(link)) {
             fprintf(stderr, "frame %ld: present failed\n", frame);
             failed = 1;
             break;
@@ -561,6 +558,6 @@ int main(int argc, char **argv) {
     printf("done -- %ld frames in %.1fs (%.1f fps average)%s\n", frame, elapsed,
            frame / (elapsed > 0 ? elapsed : 1), failed ? " -- STOPPED EARLY" : "");
 
-    noodles_link_close(&link);
+    tool_close(link);
     return failed ? 1 : 0;
 }

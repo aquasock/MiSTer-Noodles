@@ -25,7 +25,7 @@
 #include <string.h>
 #include <time.h>
 
-#include "../lib/noodles_link.h"
+#include "sdk_helpers.h"
 
 // Own 2MB-aligned scratch slot for the sprite's source art, clear of both
 // double-buffer surfaces and of LINK-002's ring -- same convention as
@@ -55,41 +55,31 @@ static double now_s(void) {
     return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
 
-static int wait_fence(noodles_link_t *link, uint32_t done_before, const char *what) {
-    struct timespec delay = {.tv_sec = 0, .tv_nsec = 500000};  // 0.5ms
-    for (int i = 0; i < 4000; ++i) {
-        if (noodles_link_done_count(link) > done_before) return 0;
-        nanosleep(&delay, NULL);
-    }
-    fprintf(stderr, "%s: fence never caught up\n", what);
-    return 1;
-}
-
 static int build_sprite(noodles_link_t *link) {
     uint32_t colorkey = noodles_rgb(0xFF, 0x00, 0xFF);          // magenta
     uint32_t body = noodles_rgb(0xC0, 0x70, 0x20);              // brown/orange
     uint32_t head = noodles_rgb(0xE0, 0xB0, 0x80);              // lighter tan
 
-    uint32_t before = noodles_link_done_count(link);
     if (noodles_push_solid_fill(link, SPRITE_SRC_ADDR, NOODLES_BUFFER_PITCH, SPRITE_W, SPRITE_H,
                                  colorkey) != 0) {
+        perror("sprite colorkey background submission");
         return 1;
     }
-    if (wait_fence(link, before, "sprite colorkey background")) return 1;
+    if (tool_wait(link, "sprite colorkey background")) return 1;
 
-    before = noodles_link_done_count(link);
     if (noodles_push_solid_fill(link, SPRITE_SRC_ADDR + BODY_Y * NOODLES_BUFFER_PITCH + BODY_X * 4,
                                  NOODLES_BUFFER_PITCH, BODY_W, BODY_H, body) != 0) {
+        perror("sprite body submission");
         return 1;
     }
-    if (wait_fence(link, before, "sprite body")) return 1;
+    if (tool_wait(link, "sprite body")) return 1;
 
-    before = noodles_link_done_count(link);
     if (noodles_push_solid_fill(link, SPRITE_SRC_ADDR + HEAD_Y * NOODLES_BUFFER_PITCH + HEAD_X * 4,
                                  NOODLES_BUFFER_PITCH, HEAD_W, HEAD_H, head) != 0) {
+        perror("sprite head submission");
         return 1;
     }
-    if (wait_fence(link, before, "sprite head")) return 1;
+    if (tool_wait(link, "sprite head")) return 1;
 
     return 0;
 }
@@ -98,17 +88,17 @@ int main(int argc, char **argv) {
     double run_seconds = (argc > 1) ? atof(argv[1]) : 15.0;
     int use_batch = (argc > 2 && strcmp(argv[2], "batch") == 0);
 
-    noodles_link_t link;
-    if (noodles_link_open(&link) != 0) {
+    noodles_link_t *link = NULL;
+    if (tool_open(&link) != 0) {
         perror("noodles_link_open (are you root?)");
         return 1;
     }
 
     printf("building sprite at 0x%08x (%ux%u, colorkey magenta)...\n", SPRITE_SRC_ADDR, SPRITE_W,
            SPRITE_H);
-    if (build_sprite(&link)) {
+    if (build_sprite(link)) {
         fprintf(stderr, "failed to build sprite\n");
-        noodles_link_close(&link);
+        tool_close(link);
         return 1;
     }
 
@@ -125,27 +115,27 @@ int main(int argc, char **argv) {
 
     double t_start = now_s();
     long frame = 0;
+    int failed = 0;
     while (now_s() - t_start < run_seconds) {
-        uint32_t back = noodles_link_back_buffer(&link);
+        uint32_t back = noodles_link_back_buffer(link);
 
-        uint32_t done_before = noodles_link_done_count(&link);
-        if (noodles_push_solid_fill(&link, back, NOODLES_BUFFER_PITCH, NOODLES_BUFFER_WIDTH,
+        if (noodles_push_solid_fill(link, back, NOODLES_BUFFER_PITCH, NOODLES_BUFFER_WIDTH,
                                      NOODLES_BUFFER_HEIGHT, background) != 0) {
-            fprintf(stderr, "frame %ld: ring full clearing background\n", frame);
+            perror("background clear submission");
+            failed = 1;
             break;
         }
-        if (wait_fence(&link, done_before, "background clear")) break;
+        if (tool_wait(link, "background clear")) { failed = 1; break; }
 
-        done_before = noodles_link_done_count(&link);
         int queued;
         if (use_batch) {
             noodles_sprite_descriptor_t descriptor = {
                 back + (uint32_t)y * NOODLES_BUFFER_PITCH + (uint32_t)x * 4,
                 NOODLES_BUFFER_PITCH, SPRITE_W, SPRITE_H, colorkey, SPRITE_SRC_ADDR,
                 NOODLES_BUFFER_PITCH, 1u};
-            queued = noodles_push_sprite_batch(&link, &descriptor, 1);
+            queued = noodles_push_sprite_batch(link, &descriptor, 1);
         } else {
-            queued = noodles_push_blit_copy_key(&link,
+            queued = noodles_push_blit_copy_key(link,
                 back + (uint32_t)y * NOODLES_BUFFER_PITCH + (uint32_t)x * 4,
                 NOODLES_BUFFER_PITCH, SPRITE_SRC_ADDR, NOODLES_BUFFER_PITCH,
                 SPRITE_W, SPRITE_H, colorkey);
@@ -153,12 +143,14 @@ int main(int argc, char **argv) {
         if (queued != 0) {
             fprintf(stderr, "frame %ld: sprite submission failed\n", frame);
             perror("sprite submission");
+            failed = 1;
             break;
         }
-        if (wait_fence(&link, done_before, "sprite composite")) break;
+        if (tool_wait(link, "sprite composite")) { failed = 1; break; }
 
-        if (noodles_present_and_wait(&link) != 0) {
-            fprintf(stderr, "frame %ld: present failed\n", frame);
+        if (noodles_present_and_wait(link) != 0) {
+            perror("present");
+            failed = 1;
             break;
         }
 
@@ -181,9 +173,9 @@ int main(int argc, char **argv) {
     }
 
     double elapsed = now_s() - t_start;
-    printf("done -- %ld frames in %.1fs (%.1f fps average)\n", frame, elapsed,
-           frame / (elapsed > 0 ? elapsed : 1));
+    printf("done -- %ld frames in %.1fs (%.1f fps average)%s\n", frame, elapsed,
+           frame / (elapsed > 0 ? elapsed : 1), failed ? " -- STOPPED EARLY" : "");
 
-    noodles_link_close(&link);
-    return 0;
+    tool_close(link);
+    return failed;
 }

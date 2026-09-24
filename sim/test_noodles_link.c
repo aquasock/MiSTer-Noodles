@@ -1,5 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
-#include "../lib/noodles_link.h"
+#include "../lib/noodles_link_internal.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -43,7 +43,9 @@ static void reset(uint32_t baseline) {
     memset(header, 0, sizeof(header));
     memset(slots, 0, sizeof(slots));
     memset(memory, 0xa5, sizeof(memory));
-    memset(descriptors, 0x3c, sizeof(descriptors));
+    for (unsigned i = 0; i < NOODLES_SPRITE_DESCRIPTOR_MAX; ++i)
+        descriptors[i] = (noodles_sprite_descriptor_t){
+            NOODLES_BUFFER_B_ADDR, 3200, 1, 1, 0, 0x31400000u, 4, 0};
     maps = fail_map = 0;
     header[3] = baseline;
     link.header = header;
@@ -71,7 +73,7 @@ static void rejected(int expected_errno, uint16_t count) {
 
 int main(void) {
     test_framebuffer_geometry();
-    const uint32_t fill[8] = {1, 0, 0, 1, 1, 0, 0, 0};
+    const uint32_t fill[8] = {1, NOODLES_BUFFER_B_ADDR, 3200, 1, 1, 0, 0, 0};
     const uint32_t batch[8] = {5, NOODLES_SPRITE_DESCRIPTOR_ADDR, 0, 1, 0, 0, 0, 0};
     reset(100);
     assert(noodles_push_command(&link, fill) == 0);
@@ -79,7 +81,8 @@ int main(void) {
     assert(maps == 1 && link.batch_pending && link.batch_fence == 102);
     assert(memcmp(memory, descriptors, sizeof(descriptors)) == 0);
     assert(header[0] == 2 && slots[8] == 5 && slots[11] == 64);
-    memset(descriptors, 0x7e, sizeof(descriptors));
+    for (unsigned i = 0; i < NOODLES_SPRITE_DESCRIPTOR_MAX; ++i)
+        descriptors[i].colorkey = 0x7e7e7e7eu;
     rejected(EAGAIN, 64);
     header[2] = header[0];  // fetched is not completed
     header[3] = 0x80000065u;  // only the preceding fill retired; parity must be ignored
@@ -150,7 +153,8 @@ int main(void) {
 
     reset(0);
     assert(noodles_push_sprite_batch(&link, descriptors, 1) == 0);
-    assert(noodles_link_upload(&link, NOODLES_SPRITE_DESCRIPTOR_ADDR - 32, descriptors, 32) == 0);
+    assert(noodles_link_upload(&link, NOODLES_SPRITE_DESCRIPTOR_ADDR - 32, descriptors, 32) == -1);
+    assert(errno == EINVAL);
     assert(noodles_link_upload(&link, NOODLES_SPRITE_DESCRIPTOR_ADDR + 2048, descriptors, 32) == 0);
     assert(link.batch_pending);  // adjacent uploads do not release ownership
 
@@ -164,6 +168,16 @@ int main(void) {
     assert(link.write_ptr == 0 && link.submitted == 256);
     // A completed owner must not stay latched through a long non-batch stream.
     assert(noodles_push_command(&link, fill) == 0 && !link.batch_pending);
+    reset(0);
+    descriptors[0].flags = 2;
+    rejected(EINVAL, 1);
+    descriptors[0].flags = 0;
+    descriptors[0].src_pitch = 3;
+    rejected(EINVAL, 1);
+    assert(noodles_link_upload(&link, 0xfffffff0u, descriptors, 32) == -1 && errno == EINVAL);
+    assert(noodles_link_upload(&link, 0x31400000u, NULL, 32) == -1 && errno == EINVAL);
+    assert(noodles_link_upload(&link, 0x31400000u, descriptors, 0) == -1 && errno == EINVAL);
+    assert(maps == 0 && link.submitted == 0);
     puts("PASS: descriptor ownership, non-destructive retries, raw uploads, errors and fence/ring wrap");
     return 0;
 }

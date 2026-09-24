@@ -9,6 +9,8 @@ Lite 17.0.2 Build 602.
 make            # cross-build the ARM-side host tools (static, armv7/Cortex-A9)
 make host       # native build of the same tools, for the desktop
 make sim        # Verilator RTL simulation (rtl/ engines, no Quartus needed)
+make test-host  # mocked transport and SDK lifecycle tests
+make test-sdk-install # installed SDK consumers, native C/C++ and ARM
 quartus_sh --flow compile Noodles   # full FPGA build -> output_files/Noodles.rbf
 quartus_sta -t tools/report_timing.tcl
 quartus_sta -t tools/report_multicorner.tcl  # required post-fit timing gate
@@ -17,6 +19,10 @@ quartus_sta -t tools/report_multicorner.tcl  # required post-fit timing gate
 `Noodles.qsf` pins the fitter settings for the accepted SVGA seed-7 build
 (see below); the Quartus project is named
 `Noodles`, so a full build writes `output_files/Noodles.rbf`.
+
+`make sdk` / `make sdk-host` build the static SDK independently of the demos.
+See [SDK.md](SDK.md) for staged installation, pkg-config and external consumers.
+Host-only SDK work does not require a new FPGA build.
 
 ## Two levels of build
 

@@ -41,17 +41,20 @@ seed7. The older accepted 640x480 image remains a recovery fallback.
 
 ## Host-side API
 
-`lib/noodles_link.h`/`.c` is the real ARM-side library: open the ring,
+`libnoodles.a` is the ARM-side static SDK: open the device,
 push a `SOLID_FILL` or `BLIT_COPY`, pack a color (note: the byte order is
 R in the low byte, not the `0xRRGGBB` reading a hex literal suggests --
 see BLIT-004). After a successful push, capture
-`link.done_baseline + noodles_link_submitted_count(&link)` and use
-`noodles_link_fence_reached(&link, target)` to check that command's completion.
+`noodles_link_last_fence(device)` and use `noodles_link_poll()` or the
+deadline-based `noodles_link_wait()` to check completion.
 
-Use one serialized producer/handle, opened only when earlier work has drained
-or after a fresh core load. Finish outstanding commands before closing; close
-does not cancel FPGA work. Concurrent producers and reset during a handle's
-lifetime are not supported.
+Use an opaque handle from `noodles_link_open_legacy(&device, 0)`, with
+serialized calls and a matching initialized, idle SVGA core. Hardware identity
+is explicitly **unverified**. Cooperative process locking and a dirty-session
+marker prevent another SDK producer from silently taking over unfinished work.
+Bounded close drains and frees the handle; failure does not cancel FPGA work.
+Reset during a handle's lifetime remains unsupported and undetectable.
+See [docs/SDK.md](docs/SDK.md) for installation, lifecycle, errors and recovery.
 
 `noodles_push_sprite_batch()` protects the fixed descriptor table until the
 previous batch completes. It returns `-1` with `errno == EAGAIN` when the table
@@ -67,6 +70,8 @@ Direct memory writes bypass this protection.
     make host     # native build of the same tools, for testing off-device
     make sim      # Verilator simulation of the RTL (CMDQ/BLIT/LINK)
     make test-host # native host-library regression; no MiSTer or /dev/mem needed
+    make test-sdk-install # independent installed C/C++ and ARM consumers
+    make install-sdk SDK_TARGET=arm PREFIX=/usr DESTDIR="$PWD/build/stage"
     make deploy HOST=192.168.1.42   # scp the tools to /media/fat/pet (root / "1")
     make clean
 

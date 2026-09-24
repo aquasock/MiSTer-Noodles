@@ -9,7 +9,13 @@
 CROSS   ?= arm-linux-gnueabihf-
 ARMCC   := $(CROSS)gcc
 HOSTCC  ?= cc
+HOSTAR  ?= ar
+ARMAR   := $(CROSS)ar
 TCLSH   ?= tclsh
+PREFIX  ?= /usr/local
+DESTDIR ?=
+SDK_TARGET ?= arm
+CPPFLAGS += -Ilib
 
 ARMFLAGS := -march=armv7-a -mtune=cortex-a9 -mfpu=neon -mfloat-abi=hard
 CFLAGS   := -std=c99 -O2 -Wall -Wextra -Wno-unused-parameter
@@ -61,17 +67,53 @@ SDRAM_ADAPTER_SIM := $(SIM_DIR)/sdram_adapter/Vsdram_adapter_dut
 SDRAM_LOADER_SIM := $(SIM_DIR)/sdram_loader/Vsdram_loader_dut
 SPRITE_BATCH_SDRAM_SIM := $(SIM_DIR)/sprite_batch_sdram/Vengine_sprite_batch_sdram_dut
 
-.PHONY: all host deploy sim test-host test-timing clean
+.PHONY: all host deploy sim test-host test-timing test-sdk-install sdk sdk-host install-sdk clean
 
-all: $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS) $(ARMPRESENTPROBE)
+all: sdk $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS) $(ARMPRESENTPROBE)
 
-test-host: $(HOSTLINKTEST)
+sdk: build/arm/libnoodles.a build/arm/sdk-smoke
+sdk-host: build/host/libnoodles.a build/host/sdk-smoke
+
+build/arm/noodles_link.o: lib/noodles_link.c lib/noodles_link.h lib/noodles_link_internal.h | build/arm
+	$(ARMCC) $(CPPFLAGS) $(ARMFLAGS) $(CFLAGS) -c $< -o $@
+
+build/host/noodles_link.o: lib/noodles_link.c lib/noodles_link.h lib/noodles_link_internal.h | build/host
+	$(HOSTCC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+build/arm/libnoodles.a: build/arm/noodles_link.o
+	$(ARMAR) rcs $@ $<
+
+build/host/libnoodles.a: build/host/noodles_link.o
+	$(HOSTAR) rcs $@ $<
+
+build/arm/sdk-smoke: examples/sdk_smoke.c build/arm/libnoodles.a
+	$(ARMCC) $(CPPFLAGS) $(ARMFLAGS) $(CFLAGS) -static -o $@ $< build/arm/libnoodles.a
+
+build/host/sdk-smoke: examples/sdk_smoke.c build/host/libnoodles.a
+	$(HOSTCC) $(CPPFLAGS) $(CFLAGS) -o $@ $< build/host/libnoodles.a
+
+install-sdk: build/$(SDK_TARGET)/libnoodles.a
+	install -d "$(DESTDIR)$(PREFIX)/lib/pkgconfig" "$(DESTDIR)$(PREFIX)/include"
+	install -m 644 build/$(SDK_TARGET)/libnoodles.a "$(DESTDIR)$(PREFIX)/lib/"
+	install -m 644 lib/noodles_link.h "$(DESTDIR)$(PREFIX)/include/"
+	sed 's|@PREFIX@|$(PREFIX)|g' lib/noodles.pc.in > "$(DESTDIR)$(PREFIX)/lib/pkgconfig/noodles.pc"
+
+test-host: $(HOSTLINKTEST) build/host/test-noodles-sdk
 	$(HOSTLINKTEST)
+	build/host/test-noodles-sdk
+
+build/host/test-noodles-sdk: sim/test_noodles_sdk.c build/host/libnoodles.a
+	$(HOSTCC) $(CPPFLAGS) $(CFLAGS) -o $@ $< build/host/libnoodles.a \
+		-Wl,--wrap=open -Wl,--wrap=mmap -Wl,--wrap=munmap \
+		-Wl,--wrap=clock_gettime -Wl,--wrap=nanosleep
 
 test-timing:
 	$(TCLSH) sim/test_report_multicorner.tcl
 
-$(HOSTLINKTEST): sim/test_noodles_link.c lib/noodles_link.c lib/noodles_link.h
+test-sdk-install:
+	HOSTCC="$(HOSTCC)" CROSS="$(CROSS)" sh sim/test_sdk_install.sh
+
+$(HOSTLINKTEST): sim/test_noodles_link.c lib/noodles_link.c lib/noodles_link.h lib/noodles_link_internal.h
 	@mkdir -p $(dir $@)
 	$(HOSTCC) $(CFLAGS) -o $@ sim/test_noodles_link.c lib/noodles_link.c \
 		-Wl,--wrap=mmap -Wl,--wrap=munmap
@@ -176,8 +218,8 @@ $(SPRITE_BATCH_SDRAM_SIM): rtl/sprite_batch.sv rtl/blit_copy64.sv rtl/ddram_adap
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
 		rtl/sprite_batch.sv rtl/blit_copy64.sv rtl/ddram_adapter.sv rtl/sdram_adapter.sv sim/sdram_adapter_dut.sv sim/engine_sprite_batch_sdram_dut.sv sim/tb_sprite_batch_sdram.cpp -o $(notdir $@)
 
-$(ARMLINK): tools/link_push.c lib/noodles_link.c lib/noodles_link.h | build/arm
-	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ tools/link_push.c lib/noodles_link.c
+$(ARMLINK): tools/link_push.c build/arm/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/arm
+	$(ARMCC) $(ARMFLAGS) $(CPPFLAGS) $(CFLAGS) -static -o $@ tools/link_push.c build/arm/libnoodles.a
 
 $(ARMSLOTDUMP): tools/link_slot_dump.c | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ $<
@@ -188,34 +230,34 @@ $(ARMPRESENTPROBE): tools/present_probe_dump.c | build/arm
 $(ARMMEMSCAN): tools/mem_scan.c | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ $<
 
-$(ARMCOPYPUSH): tools/blit_copy_push.c lib/noodles_link.c lib/noodles_link.h | build/arm
-	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ tools/blit_copy_push.c lib/noodles_link.c
+$(ARMCOPYPUSH): tools/blit_copy_push.c build/arm/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/arm
+	$(ARMCC) $(ARMFLAGS) $(CPPFLAGS) $(CFLAGS) -static -o $@ tools/blit_copy_push.c build/arm/libnoodles.a
 
-$(ARMFILLPUSH): tools/solid_fill_push.c lib/noodles_link.c lib/noodles_link.h | build/arm
-	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ tools/solid_fill_push.c lib/noodles_link.c
+$(ARMFILLPUSH): tools/solid_fill_push.c build/arm/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/arm
+	$(ARMCC) $(ARMFLAGS) $(CPPFLAGS) $(CFLAGS) -static -o $@ tools/solid_fill_push.c build/arm/libnoodles.a
 
-$(ARMKEYPUSH): tools/blit_copy_key_push.c lib/noodles_link.c lib/noodles_link.h | build/arm
-	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ tools/blit_copy_key_push.c lib/noodles_link.c
+$(ARMKEYPUSH): tools/blit_copy_key_push.c build/arm/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/arm
+	$(ARMCC) $(ARMFLAGS) $(CPPFLAGS) $(CFLAGS) -static -o $@ tools/blit_copy_key_push.c build/arm/libnoodles.a
 
-$(ARMBENCH): tools/bench.c lib/noodles_link.c lib/noodles_link.h | build/arm
-	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ tools/bench.c lib/noodles_link.c
+$(ARMBENCH): tools/bench.c build/arm/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/arm
+	$(ARMCC) $(ARMFLAGS) $(CPPFLAGS) $(CFLAGS) -static -o $@ tools/bench.c build/arm/libnoodles.a
 
-$(ARMPRESENT): tools/present_demo.c lib/noodles_link.c lib/noodles_link.h | build/arm
-	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ tools/present_demo.c lib/noodles_link.c
+$(ARMPRESENT): tools/present_demo.c build/arm/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/arm
+	$(ARMCC) $(ARMFLAGS) $(CPPFLAGS) $(CFLAGS) -static -o $@ tools/present_demo.c build/arm/libnoodles.a
 
-$(ARMSPRITE): tools/sprite_demo.c lib/noodles_link.c lib/noodles_link.h | build/arm
-	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ tools/sprite_demo.c lib/noodles_link.c
+$(ARMSPRITE): tools/sprite_demo.c build/arm/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/arm
+	$(ARMCC) $(ARMFLAGS) $(CPPFLAGS) $(CFLAGS) -static -o $@ tools/sprite_demo.c build/arm/libnoodles.a
 
-$(ARMLOADBMP): tools/load_bmp.c tools/bmp_loader.h lib/noodles_link.c lib/noodles_link.h | build/arm
-	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ tools/load_bmp.c lib/noodles_link.c
+$(ARMLOADBMP): tools/load_bmp.c tools/bmp_loader.h build/arm/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/arm
+	$(ARMCC) $(ARMFLAGS) $(CPPFLAGS) $(CFLAGS) -static -o $@ tools/load_bmp.c build/arm/libnoodles.a
 
-$(ARMSTRESS): tools/stress_demo.c tools/bmp_loader.h lib/noodles_link.c lib/noodles_link.h | build/arm
-	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ tools/stress_demo.c lib/noodles_link.c
+$(ARMSTRESS): tools/stress_demo.c tools/bmp_loader.h build/arm/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/arm
+	$(ARMCC) $(ARMFLAGS) $(CPPFLAGS) $(CFLAGS) -static -o $@ tools/stress_demo.c build/arm/libnoodles.a
 
-host: $(HOSTLINK) $(HOSTSLOTDUMP) $(HOSTMEMSCAN) $(HOSTCOPYPUSH) $(HOSTFILLPUSH) $(HOSTKEYPUSH) $(HOSTBENCH) $(HOSTPRESENT) $(HOSTSPRITE) $(HOSTLOADBMP) $(HOSTSTRESS) $(HOSTPRESENTPROBE)
+host: sdk-host $(HOSTLINK) $(HOSTSLOTDUMP) $(HOSTMEMSCAN) $(HOSTCOPYPUSH) $(HOSTFILLPUSH) $(HOSTKEYPUSH) $(HOSTBENCH) $(HOSTPRESENT) $(HOSTSPRITE) $(HOSTLOADBMP) $(HOSTSTRESS) $(HOSTPRESENTPROBE)
 
-$(HOSTLINK): tools/link_push.c lib/noodles_link.c lib/noodles_link.h | build/host
-	$(HOSTCC) $(CFLAGS) -o $@ tools/link_push.c lib/noodles_link.c
+$(HOSTLINK): tools/link_push.c build/host/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/host
+	$(HOSTCC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/link_push.c build/host/libnoodles.a
 
 $(HOSTSLOTDUMP): tools/link_slot_dump.c | build/host
 	$(HOSTCC) $(CFLAGS) -o $@ $<
@@ -226,34 +268,34 @@ $(HOSTPRESENTPROBE): tools/present_probe_dump.c | build/host
 $(HOSTMEMSCAN): tools/mem_scan.c | build/host
 	$(HOSTCC) $(CFLAGS) -o $@ $<
 
-$(HOSTCOPYPUSH): tools/blit_copy_push.c lib/noodles_link.c lib/noodles_link.h | build/host
-	$(HOSTCC) $(CFLAGS) -o $@ tools/blit_copy_push.c lib/noodles_link.c
+$(HOSTCOPYPUSH): tools/blit_copy_push.c build/host/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/host
+	$(HOSTCC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/blit_copy_push.c build/host/libnoodles.a
 
-$(HOSTFILLPUSH): tools/solid_fill_push.c lib/noodles_link.c lib/noodles_link.h | build/host
-	$(HOSTCC) $(CFLAGS) -o $@ tools/solid_fill_push.c lib/noodles_link.c
+$(HOSTFILLPUSH): tools/solid_fill_push.c build/host/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/host
+	$(HOSTCC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/solid_fill_push.c build/host/libnoodles.a
 
-$(HOSTKEYPUSH): tools/blit_copy_key_push.c lib/noodles_link.c lib/noodles_link.h | build/host
-	$(HOSTCC) $(CFLAGS) -o $@ tools/blit_copy_key_push.c lib/noodles_link.c
+$(HOSTKEYPUSH): tools/blit_copy_key_push.c build/host/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/host
+	$(HOSTCC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/blit_copy_key_push.c build/host/libnoodles.a
 
-$(HOSTBENCH): tools/bench.c lib/noodles_link.c lib/noodles_link.h | build/host
-	$(HOSTCC) $(CFLAGS) -o $@ tools/bench.c lib/noodles_link.c
+$(HOSTBENCH): tools/bench.c build/host/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/host
+	$(HOSTCC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/bench.c build/host/libnoodles.a
 
-$(HOSTPRESENT): tools/present_demo.c lib/noodles_link.c lib/noodles_link.h | build/host
-	$(HOSTCC) $(CFLAGS) -o $@ tools/present_demo.c lib/noodles_link.c
+$(HOSTPRESENT): tools/present_demo.c build/host/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/host
+	$(HOSTCC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/present_demo.c build/host/libnoodles.a
 
-$(HOSTSPRITE): tools/sprite_demo.c lib/noodles_link.c lib/noodles_link.h | build/host
-	$(HOSTCC) $(CFLAGS) -o $@ tools/sprite_demo.c lib/noodles_link.c
+$(HOSTSPRITE): tools/sprite_demo.c build/host/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/host
+	$(HOSTCC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/sprite_demo.c build/host/libnoodles.a
 
-$(HOSTLOADBMP): tools/load_bmp.c tools/bmp_loader.h lib/noodles_link.c lib/noodles_link.h | build/host
-	$(HOSTCC) $(CFLAGS) -o $@ tools/load_bmp.c lib/noodles_link.c
+$(HOSTLOADBMP): tools/load_bmp.c tools/bmp_loader.h build/host/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/host
+	$(HOSTCC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/load_bmp.c build/host/libnoodles.a
 
-$(HOSTSTRESS): tools/stress_demo.c tools/bmp_loader.h lib/noodles_link.c lib/noodles_link.h | build/host
-	$(HOSTCC) $(CFLAGS) -o $@ tools/stress_demo.c lib/noodles_link.c
+$(HOSTSTRESS): tools/stress_demo.c tools/bmp_loader.h build/host/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/host
+	$(HOSTCC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/stress_demo.c build/host/libnoodles.a
 
 build/arm build/host:
 	mkdir -p $@
 
-deploy: $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS) $(ARMPRESENTPROBE)
+deploy: sdk $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS) $(ARMPRESENTPROBE)
 	scripts/deploy.sh $(HOST)
 
 clean:

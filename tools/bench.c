@@ -19,8 +19,9 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <time.h>
+#include <errno.h>
 
-#include "../lib/noodles_link.h"
+#include "sdk_helpers.h"
 
 // Benchmark destination/source are fixed scratch addresses, not the real
 // double-buffer surfaces (OUT-004) -- this tool never presents anything,
@@ -39,15 +40,6 @@ static double now_s(void) {
     return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
 
-static int wait_fence_at_least(noodles_link_t *link, uint32_t target) {
-    struct timespec delay = {.tv_sec = 0, .tv_nsec = 200000};  // 0.2ms
-    for (int i = 0; i < 50000; ++i) {
-        if (noodles_link_done_count(link) >= target) return 0;
-        nanosleep(&delay, NULL);
-    }
-    return 1;
-}
-
 typedef enum { OP_FILL, OP_COPY, OP_COPY_KEY } op_t;
 
 static void run_bench(noodles_link_t *link, const char *label, op_t op, uint16_t w, uint16_t h,
@@ -55,11 +47,11 @@ static void run_bench(noodles_link_t *link, const char *label, op_t op, uint16_t
     uint32_t color = noodles_rgb(0x11, 0x22, 0x33);
     uint32_t colorkey = 0xFFFFFFFFu;  // never matches source content below
 
-    uint32_t start_done = noodles_link_done_count(link);
     double t0 = now_s();
 
     for (int i = 0; i < n; ++i) {
         int rc;
+        double deadline = now_s() + 2.0;
         do {
             switch (op) {
                 case OP_FILL:
@@ -73,12 +65,19 @@ static void run_bench(noodles_link_t *link, const char *label, op_t op, uint16_t
                                                      h, colorkey);
                     break;
             }
-        } while (rc != 0);  // ring full -- retry once the FPGA has drained a slot
+            if (rc && (errno != EAGAIN || now_s() >= deadline)) {
+                if (errno == EAGAIN) errno = ETIMEDOUT;
+                perror("benchmark submission");
+                tool_close(link);
+                exit(EXIT_FAILURE);
+            }
+        } while (rc != 0);
     }
 
-    if (wait_fence_at_least(link, start_done + (uint32_t)n)) {
+    if (tool_wait(link, "benchmark completion")) {
         printf("%-28s FAILED (fence never caught up)\n", label);
-        return;
+        tool_close(link);
+        exit(EXIT_FAILURE);
     }
     double elapsed = now_s() - t0;
 
@@ -91,35 +90,37 @@ static void run_bench(noodles_link_t *link, const char *label, op_t op, uint16_t
 }
 
 int main(void) {
-    noodles_link_t link;
-    if (noodles_link_open(&link) != 0) {
+    noodles_link_t *link = NULL;
+    if (tool_open(&link) != 0) {
         perror("noodles_link_open (are you root?)");
         return 1;
     }
 
     // Give BLIT_COPY/BLIT_COPY_KEY a valid, fully-written source region
     // before timing anything against it.
-    uint32_t before = noodles_link_done_count(&link);
-    while (noodles_push_solid_fill(&link, SRC_ADDR, PITCH, 64, 64,
-                                    noodles_rgb(0x44, 0x55, 0x66)) != 0) {
+    if (noodles_push_solid_fill(link, SRC_ADDR, PITCH, 64, 64,
+                              noodles_rgb(0x44, 0x55, 0x66)) != 0 ||
+        tool_wait(link, "benchmark initialization") != 0) {
+        perror("benchmark initialization");
+        tool_close(link);
+        return 1;
     }
-    wait_fence_at_least(&link, before + 1);
 
     printf("%-28s %-9s %-11s %-12s %-12s %-12s\n", "test", "count", "size", "latency",
            "throughput", "pixel rate");
 
-    run_bench(&link, "SOLID_FILL (fixed cost)", OP_FILL, 1, 1, 500);
-    run_bench(&link, "SOLID_FILL", OP_FILL, 8, 8, 300);
-    run_bench(&link, "SOLID_FILL", OP_FILL, 32, 32, 100);
-    run_bench(&link, "SOLID_FILL", OP_FILL, 64, 64, 50);
+    run_bench(link, "SOLID_FILL (fixed cost)", OP_FILL, 1, 1, 500);
+    run_bench(link, "SOLID_FILL", OP_FILL, 8, 8, 300);
+    run_bench(link, "SOLID_FILL", OP_FILL, 32, 32, 100);
+    run_bench(link, "SOLID_FILL", OP_FILL, 64, 64, 50);
 
-    run_bench(&link, "BLIT_COPY", OP_COPY, 8, 8, 300);
-    run_bench(&link, "BLIT_COPY", OP_COPY, 32, 32, 100);
-    run_bench(&link, "BLIT_COPY", OP_COPY, 64, 64, 50);
+    run_bench(link, "BLIT_COPY", OP_COPY, 8, 8, 300);
+    run_bench(link, "BLIT_COPY", OP_COPY, 32, 32, 100);
+    run_bench(link, "BLIT_COPY", OP_COPY, 64, 64, 50);
 
-    run_bench(&link, "BLIT_COPY_KEY (no skips)", OP_COPY_KEY, 32, 32, 100);
-    run_bench(&link, "BLIT_COPY_KEY (no skips)", OP_COPY_KEY, 64, 64, 50);
+    run_bench(link, "BLIT_COPY_KEY (no skips)", OP_COPY_KEY, 32, 32, 100);
+    run_bench(link, "BLIT_COPY_KEY (no skips)", OP_COPY_KEY, 64, 64, 50);
 
-    noodles_link_close(&link);
+    tool_close(link);
     return 0;
 }

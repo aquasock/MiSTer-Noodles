@@ -1,0 +1,10 @@
+prefix=@PREFIX@
+exec_prefix=${prefix}
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: noodles
+Description: MiSTer Noodles host SDK (explicit legacy SVGA transport)
+Version: 0.1.0
+Libs: -L${libdir} -lnoodles
+Cflags: -I${includedir}

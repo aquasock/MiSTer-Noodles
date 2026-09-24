@@ -5,7 +5,7 @@ set -e
 
 HOST="${1:-${MISTER_HOST:-mister.local}}"
 DEST="${DEST:-/media/fat/pet}"
-BINS="build/arm/link-push build/arm/link-slot-dump build/arm/mem-scan build/arm/blit-copy-push build/arm/solid-fill-push build/arm/blit-copy-key-push build/arm/bench build/arm/present-demo build/arm/sprite-demo build/arm/load-bmp build/arm/stress-demo build/arm/present-probe-dump"
+BINS="build/arm/sdk-smoke build/arm/link-push build/arm/link-slot-dump build/arm/mem-scan build/arm/blit-copy-push build/arm/solid-fill-push build/arm/blit-copy-key-push build/arm/bench build/arm/present-demo build/arm/sprite-demo build/arm/load-bmp build/arm/stress-demo build/arm/present-probe-dump"
 ASSETS="assets/sprite.bmp"
 
 for b in $BINS; do [ -f "$b" ] || { echo "missing $b -- run make first" >&2; exit 1; }; done
@@ -13,6 +13,9 @@ for b in $BINS; do [ -f "$b" ] || { echo "missing $b -- run make first" >&2; exi
 ssh "root@$HOST" "mkdir -p $DEST/assets"
 scp $BINS "root@$HOST:$DEST/"
 scp $ASSETS "root@$HOST:$DEST/assets/"
+echo
+echo "SDK smoke check, requiring the matching initialized, idle SVGA core:"
+echo "  $DEST/sdk-smoke --legacy-svga"
 echo
 echo "after loading the Noodles core, push a real host-driven command into LINK's ring buffer:"
 echo "  $DEST/link-push"
