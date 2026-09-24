@@ -141,3 +141,50 @@ Close the remaining slow -40C setup paths in `blend_walk` request formation, `bl
 - [x] Passed
 
 ---
+
+## 4 COMMIT Unreleased ??? 2026-09-23T23:28:23-07:00
+
+#### Coming From:
+
+Unreleased 0b48215
+
+#### Purpose:
+
+Close the remaining slow-corner setup paths and add a factor-based blend-mode unit for flagged draws.
+
+#### Outcome:
+
+Planned, not yet implemented. The timing work splits `blend_walk` request formation into registered prepare and commit steps, registers `blit_copy64`'s per-entry destination address arithmetic and registers `link_control`'s read request. A new reference record will add descriptor flag bit 4, selecting a blend mode encoded in flag bits 31:8: SDL 2.32.10's software ADD, MOD and MUL, bit-exact including MUL's single rounding over a two-product sum, computed exactly as (x * 131587) >> 25 for x up to 130050, and composed modes with SDL's ten blend factors and five operations for colour and alpha, which SDL's software renderer lacks. For composed modes the project defines its own exact 8-bit arithmetic: each term is floor(value * factor / 255), the operation combines the terms and the result clamps to 0 to 255, while minimum and maximum compare raw values and ignore the factors. This covers GemRB's additive, modulate, multiply, glow and wall-occlusion stencil modes. The blend stage of each pixel lane becomes one general two-product, operation and clamp unit reusing the existing multipliers, published as protocol 1.3, with SDK 0.6 carrying modes in SDL's own factor and operation numbering.
+
+#### Next Steps:
+
+Verify built-in modes exhaustively per channel and composed modes over exhaustive factor and operation tables plus random compositions, extend the batch tests, pass all simulation and host regressions, run a local fit and four-corner gate before publishing, then build three seeds, deploy, check hardware readback and benchmarks, and obtain user visual acceptance of a demo showing additive glow and stencil occlusion.
+
+#### Files Modified:
+
+- Noodles.sv
+- rtl/blend_px.sv
+- rtl/blend_walk.sv
+- rtl/blit_blend.sv
+- rtl/blit_copy64.sv
+- rtl/link_control.sv
+- rtl/sprite_batch.sv
+- sim/blend_ref.h
+- sim/tb_blend_px.cpp
+- sim/tb_blit_blend.cpp
+- sim/tb_sprite_batch.cpp
+- lib/noodles_link.c
+- lib/noodles_link.h
+- lib/noodles_surface.c
+- lib/noodles_surface.h
+- sim/test_noodles_sdk.c
+- tools/blend_demo.c
+- docs/INTEGRATION.md
+- docs/SDK.md
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
