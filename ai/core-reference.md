@@ -103,7 +103,7 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 | Why doesn't the engine have a third (noise-fill) op? | BLIT component records | BLIT-005 |
 | How do I composite a sprite over a background without a bounding box? | BLIT component records | BLIT-006 |
 | How does alpha blending work, and what exact arithmetic does it use? | BLIT component records | BLIT-007 |
-| Which protocol version and capability bits does the core publish? | LINK component records | LINK-015 |
+| Which protocol version and capability bits does the core publish? | LINK component records | LINK-016 |
 | How do I draw with ADD, MOD, MUL or custom blend factors? | BLIT component records | BLIT-009 |
 | How do I blend a constant colour over a rectangle without a source surface? | BLIT component records | BLIT-010 |
 | How do I batch blended, mirrored or tinted sprites? | BLIT component records | BLIT-008 |
@@ -154,7 +154,8 @@ LINK-013: "SUPERSEDED by LINK-014 -- protocol 1.2 (0x00010002) enabled BLIT-008 
 BLIT-009: "Descriptor flag bit 4 selects a blend mode: SDL factors/operations for colour and alpha in flag bits 31:10, bit 8 single rounding (SDL MUL); project-defined exact 8-bit arithmetic"
 LINK-014: "SUPERSEDED by LINK-015 -- protocol 1.3 (0x00010003) enabled BLIT-009 blend modes"
 BLIT-010: "BLEND_FILL (opcode 8): constant straight-RGBA source in word 5, explicit BLIT-009 mode in word 6, destination-only reads"
-LINK-015: "Protocol 1.4 (0x00010004) adds capability bit 8 for BLEND_FILL; capability mask 0x000001fe"
+LINK-015: "SUPERSEDED by LINK-016 -- protocol 1.4 (0x00010004) added capability bit 8 for BLEND_FILL"
+LINK-016: "Protocol 1.5 (0x00010005) adds capability bit 9 for the 64-table sprite-descriptor ring; capability mask 0x000003fe"
 LINK-002: "64-slot ring buffer at phys 0x30020000 (header: write_ptr +0, read_ptr +8) / 0x30021000 (slots), reusing CMDQ-001's 32-byte slot format"
 LINK-003: "link_ring.sv polls write_ptr only while CMDQ is idle (cmd_ready), fetches via 8 sequential reads, dispatches to CMDQ, writes back read_ptr"
 LINK-004: "lib/noodles_link.{h,c} is the real host-side API (open/close, noodles_rgb, push_command/solid_fill/blit_copy) -- fire-and-forget, no completion signal by deliberate choice"
@@ -492,7 +493,7 @@ OUT-005: "OUT-004's single-fresh-vblank-edge PRESENT margin is not reliably suff
   kind: INTERFACE
   component_id: LINK
   title: "Host library retains fixed sprite-descriptor ownership until completion"
-  status: DECIDED
+  status: SUPERSEDED
   decided_date: 2026-09-23
   decision: "With one serialized producer/handle opened on a quiescent ring, an accepted SPRITE_BATCH owns the fixed 2KiB descriptor table until its baseline-adjusted completion fence retires. noodles_push_sprite_batch returns -1 with errno EAGAIN before any descriptor upload when that table is busy or the ring is full; invalid pointer/count returns EINVAL and upload failures publish no command. Raw opcode-5 submissions also acquire ownership, and library uploads overlapping the reserved table return EAGAIN while it is owned. Non-batch commands may still pipeline. Completion checks use modulo-2^31 arithmetic excluding front-buffer parity, with targets less than 2^30 completions away. Descriptor and slot writes are ordered before command publication."
   consequence: "Callers retry EAGAIN without needing their own per-batch wait to prevent descriptor corruption. Explicit waits remain necessary when measuring completed work or reusing other in-flight resources. Open only after prior work drains or a fresh core load, finish work before close, and do not reset the core during a handle's lifetime. Concurrent producers, abandoned in-flight work across reopen, direct-memory writes and commands that overwrite the reserved table are not protected by this host-side contract. No RTL, opcode layout or timing constraints change."
@@ -691,11 +692,21 @@ OUT-005: "OUT-004's single-fresh-vblank-edge PRESENT margin is not reliably suff
   kind: INTERFACE
   component_id: LINK
   title: "Protocol 1.4 adds the BLEND_FILL capability"
-  status: DECIDED
+  status: SUPERSEDED
   decided_date: 2026-09-24
   decision: "A core implementing BLIT-010 publishes protocol 0x00010004 and opcode capability mask 0x000001fe, where bit 8 advertises BLEND_FILL. Every other LINK-014 control word, session and additive-minor-version rule is unchanged."
   consequence: "Hosts gate opcode 8 on capability bit 8 and fail it with ENOTSUP without publishing when the bit is absent. Protocol 1.0 through 1.3 cores remain attachable for their advertised operations."
   supersedes: "LINK-014"
+
+- record_id: LINK-016
+  kind: INTERFACE
+  component_id: LINK
+  title: "Protocol 1.5 adds a 64-table sprite-descriptor ring"
+  status: DECIDED
+  decided_date: 2026-09-24
+  decision: "A core implementing the descriptor ring publishes protocol 0x00010005 and opcode capability mask 0x000003fe, where bit 9 advertises selectable SPRITE_BATCH descriptor tables. Opcode 5 word 1 selects one 0x800-byte-aligned table base in the reserved physical DDR3 range [0x30022000,0x30042000); each of the 64 tables holds at most 64 fixed 32-byte descriptors. CMDQ validates and captures the selected base when it accepts the command, and sprite_batch uses that stable base for the command's complete execution. Command dispatch and descriptor execution remain strictly ordered. On a core without capability bit 9, the SDK accepts only the original table at 0x30022000 and retains LINK-008's single-table behavior."
+  consequence: "SDK 0.9 selects free tables round-robin and tracks one baseline-adjusted completion fence per table, so accepted batches may remain queued or execute concurrently with host preparation of later batches without overwriting live descriptors. Typed and raw opcode-5 submissions acquire only their selected table; uploads overlapping any owned table fail with EAGAIN, and the complete descriptor pool remains excluded from general surface allocation and raw uploads. A table becomes reusable when its command fence retires. Ring-full and no-free-table retries publish no command and do not modify descriptor storage. Protocol 1.0 through 1.4 cores remain attachable for their advertised operations."
+  supersedes: "LINK-008, LINK-015"
 
 ```yaml
 - record_id: "<COMPONENT>-<NNN>"
