@@ -3113,3 +3113,32 @@ Keep source commits `6acc2f2` and `45566e8` as the accepted SDK 0.3 pacing basel
 - [x] Passed
 
 ---
+
+## 94 COMMIT Unreleased ??? 2026-09-23T21:17:38-07:00
+
+#### Coming From:
+
+Unreleased 45566e8
+
+#### Purpose:
+
+Record the reproducible uncapped blit-throughput regression for agent handoff.
+
+#### Outcome:
+
+The initial 256-sprite, four-batch, 128x128 `blit-bench` run measured 68.61 Mpixel/s, but that batch count was not explicit in the historical record and was therefore not accepted as a direct comparison. The canonical 64-sprite, one-batch, 128x128 workload was then run three times for fifteen seconds and measured 68.58, 68.53 and 68.57 Mpixel/s without errors or timeouts, proving batch count was not the explanation. This is a repeatable roughly thirteen-percent reduction from the prior accepted seed-7 results of 77.13, 78.75 and 79.04 Mpixel/s and the earlier closed-timing 100MHz result of 79.07 Mpixel/s. The SDK 0.3 managed-surface and pacing changes are not on this raw `stress-demo` path, and no source or RBF change was made during this measurement.
+
+#### Next Steps:
+
+Investigate the throughput difference from the accepted pre-Stage-2B seed-7 baseline, beginning with Stage 2B's continuous link-control DDR3 polling and shared scalar-read arbitration as plausible new traffic, while preserving the accepted response-ownership fix. Use the exact 64-sprite, one-batch, 128x128 `blit-bench` command for comparisons, require three distinct timing seeds for any RTL change, and do not infer causation from fitter seed differences without a controlled build and hardware comparison.
+
+#### Files Modified:
+
+None.
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
