@@ -2582,3 +2582,39 @@ The user authorized publication and reproduction verification. Source c3d04ab wa
 - [x] Passed
 
 ---
+
+## 79 COMMIT Unreleased 141940c 2026-09-23T18:43:21-07:00
+
+#### Coming From:
+
+Unreleased c3d04ab
+
+#### Purpose:
+
+Freeze the accepted 100MHz integration baseline and make its multi-corner timing qualification repeatable before GemRB SDK work.
+
+#### Outcome:
+
+The user approved step 1 of the GemRB readiness plan: record the warning audit and four-corner results, document existing command layouts, pixel order, memory reservations and ownership, and correct stale production-SDRAM guidance without changing RTL or the accepted fitter settings. All twelve framework warnings refer to registers explicitly removed by synthesis, with absence confirmed in the fitted netlist. The accepted reproduced seed5 database passes slow and fast 1.1V models at both -40C and +100C. Minimum overall setup is +0.239ns in the HDMI scaler, minimum overall hold is +0.081ns in the core-clock HDMI PLL adjustment logic, and minimum core setup is +0.317ns. Setup, hold, recovery, removal and pulse-width checks pass at every corner. The new post-fit timing gate reproduces those results, checks the single 100MHz core clock, writes per-corner evidence and rejects negative slack or missing results. Mocked reporting regressions pass for all seven negative-slack categories, missing/malformed evidence, missing corners and missing/duplicate/wrong-frequency core clocks; the native host regression also passes. The integration document describes the current unversioned wire interface and its limitations rather than claiming an implemented SDL renderer, texture allocator or reset-safe SDK. The accepted RBF hash is unchanged. No new FPGA build or hardware run is needed for these documentation, reporting and header-comment changes; the status boxes do not represent requalification of a new source build.
+
+#### Next Steps:
+
+The core-syntax.md audit confirms the six-section format, resolved source hash and unchanged settled history. A real negative control on the retained, timing-failing unified seed6 fit also completed all four corners and correctly made Quartus exit nonzero (3), reporting four checks with negative slack. The user authorized commit and push; source changes are recorded in 141940c. Step 2 remains separate: establish a reusable host SDK with identification and capabilities, bounded waits and defined lifecycle behavior before managed surfaces and GemRB-required drawing operations. Keep the current 100MHz DDR3 baseline and matching RBF as the fallback.
+
+#### Files Modified:
+
+- README.md
+- Makefile
+- docs/BUILD.md
+- docs/QUALIFICATION.md
+- docs/INTEGRATION.md
+- lib/noodles_link.h
+- tools/report_multicorner.tcl
+- sim/test_report_multicorner.tcl
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
