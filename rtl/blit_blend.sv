@@ -157,11 +157,13 @@ module blit_blend #(
 
     // ---------------------------------------------------------------
     // Tag FIFO: one entry per accepted burst, in adapter response order.
-    logic [TAG_DEPTH-1:0] tag_is_dst, tag_lo, tag_hi;
-    logic [4:0]  tag_len  [0:TAG_DEPTH-1];
-    logic [5:0]  tag_px   [0:TAG_DEPTH-1];
-    logic [PX_W-1:0] tag_px_base [0:TAG_DEPTH-1];
-    logic [28:0] tag_word [0:TAG_DEPTH-1];
+    // Kept in registers: as block RAM its unregistered read feeds the slot
+    // arithmetic below and set the 100MHz critical path.
+    (* ramstyle = "logic" *) logic [TAG_DEPTH-1:0] tag_is_dst, tag_lo, tag_hi;
+    (* ramstyle = "logic" *) logic [4:0]  tag_len  [0:TAG_DEPTH-1];
+    (* ramstyle = "logic" *) logic [5:0]  tag_px   [0:TAG_DEPTH-1];
+    (* ramstyle = "logic" *) logic [PX_W-1:0] tag_px_base [0:TAG_DEPTH-1];
+    (* ramstyle = "logic" *) logic [28:0] tag_word [0:TAG_DEPTH-1];
     logic [TAG_W-1:0] tag_head, tag_tail;
     logic [4:0]  beat;
     logic [5:0]  burst_px;   // pixels already placed from the current burst
@@ -191,6 +193,17 @@ module blit_blend #(
         PX_W'(mirror_x_r ? h_px - 6'd1 - slot_hi_k : slot_hi_k);
     wire [31:0] px0 = px_mem[px_rp];
     wire [31:0] px1 = px_mem[px_rp + 1'b1];
+
+    // Response stage: each beat, with its pixel slots and destination
+    // metadata already decoded from the tag, is registered here and written
+    // into the pixel or destination FIFO on the following cycle. Counters
+    // that make those entries visible use this stage, so nothing can read
+    // an entry before it is written.
+    logic        r_src, r_dst, r_we_lo, r_we_hi, r_publish, r_dlo, r_dhi;
+    logic [63:0] r_data;
+    logic [PX_W-1:0] r_slot_lo, r_slot_hi;
+    logic [5:0]  r_px;
+    logic [28:0] r_word;
 
     // ---------------------------------------------------------------
     // Destination word FIFO.
@@ -260,7 +273,8 @@ module blit_blend #(
     wire wr_fire = (wr64_en && wr64_ready) || (wr_en && wr_ready);
 
     wire finished = busy && prep == 2'd0 && !walk_start && s_finished && d_finished &&
-                    !req_valid && (tag_count == 0) && (dw_count == 0) && (out_res == 0);
+                    !req_valid && (tag_count == 0) && !r_src && !r_dst && (dw_count == 0) &&
+                    (out_res == 0);
 
     // ---------------------------------------------------------------
     always_ff @(posedge clk) begin
@@ -273,15 +287,22 @@ module blit_blend #(
             tag_px_base[tag_tail] <= req_px_base;
             tag_word[tag_tail] <= req_addr[31:3];
         end
-        if (src_beat && beat_lo)
-            px_mem[slot_lo] <= rd64_data[31:0];
-        if (src_beat && beat_hi)
-            px_mem[slot_hi] <= rd64_data[63:32];
-        if (dst_beat) begin
-            dw_mem[dw_wp] <= rd64_data;
-            dw_word[dw_wp] <= tag_word[tag_head] + {24'd0, beat};
-            dw_lo[dw_wp] <= beat_lo;
-            dw_hi[dw_wp] <= beat_hi;
+        r_data <= rd64_data;
+        r_slot_lo <= slot_lo;
+        r_slot_hi <= slot_hi;
+        r_px <= h_px;
+        r_word <= tag_word[tag_head] + {24'd0, beat};
+        r_dlo <= beat_lo;
+        r_dhi <= beat_hi;
+        if (r_we_lo)
+            px_mem[r_slot_lo] <= r_data[31:0];
+        if (r_we_hi)
+            px_mem[r_slot_hi] <= r_data[63:32];
+        if (r_dst) begin
+            dw_mem[dw_wp] <= r_data;
+            dw_word[dw_wp] <= r_word;
+            dw_lo[dw_wp] <= r_dlo;
+            dw_hi[dw_wp] <= r_dhi;
         end
         sb_dst[0] <= dw_mem[dw_rp];
         sb_word[0] <= dw_word[dw_rp];
@@ -322,6 +343,7 @@ module blit_blend #(
             prefer_dst <= 1'b1;
             px_res <= '0; dst_res <= '0; out_res <= '0;
             tag_count <= '0; tag_head <= '0; tag_tail <= '0; beat <= '0; burst_px <= '0;
+            r_src <= 1'b0; r_dst <= 1'b0; r_we_lo <= 1'b0; r_we_hi <= 1'b0; r_publish <= 1'b0;
             px_wp <= '0; px_rp <= '0; px_count <= '0;
             dw_wp <= '0; dw_rp <= '0; dw_count <= '0;
             of_wp <= '0; of_rp <= '0; of_count <= '0;
@@ -378,16 +400,22 @@ module blit_blend #(
             tag_count <= tag_count + (req_fire ? (TAG_W+1)'(1) : '0)
                                    - ((rd64_valid && h_last) ? (TAG_W+1)'(1) : '0);
 
+            r_src <= src_beat;
+            r_dst <= dst_beat;
+            r_we_lo <= src_beat && beat_lo;
+            r_we_hi <= src_beat && beat_hi;
+            r_publish <= src_beat && h_last;
+
             if (s_form) px_wp <= px_wp + PX_W'(s_px);
             if (launch) px_rp <= px_rp + PX_W'(pop_n);
-            px_count <= px_count + ((src_beat && h_last) ? (PX_W+1)'(h_px) : '0)
+            px_count <= px_count + (r_publish ? (PX_W+1)'(r_px) : '0)
                                  - (launch ? (PX_W+1)'(pop_n) : '0);
             px_res <= px_res + (s_form ? (PX_W+1)'(s_px) : '0)
                              - (launch ? (PX_W+1)'(pop_n) : '0);
 
-            if (dst_beat) dw_wp <= dw_wp + 1'b1;
+            if (r_dst) dw_wp <= dw_wp + 1'b1;
             if (launch) dw_rp <= dw_rp + 1'b1;
-            dw_count <= dw_count + (dst_beat ? (DST_W+1)'(1) : '0)
+            dw_count <= dw_count + (r_dst ? (DST_W+1)'(1) : '0)
                                  - (launch ? (DST_W+1)'(1) : '0);
             dst_res <= dst_res + (d_form ? (DST_W+1)'(d_len) : '0)
                                - (launch ? (DST_W+1)'(1) : '0);
