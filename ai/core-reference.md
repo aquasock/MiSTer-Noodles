@@ -581,6 +581,24 @@ OUT-005: "OUT-004's single-fresh-vblank-edge PRESENT margin is not reliably suff
   decision: "The optional board SDRAM remains FPGA-fabric-only and physically separate from HPS-shared DDR3. The core PLL has one 100MHz zero-phase output, clk_sys, driving the GPU, DDRAM adapter, SDRAM controller, read adapter, loader, page buffer and refresh counter. The SDRAM adapter and loader use the common core reset; the controller retains its separate PLL-lock-driven initialization. Per-word reads and per-page handoff use synchronous sequencers without sdram_cdc. Framework HDMI and audio clocks are unchanged."
   consequence: "No core-to-SDRAM clock-crossing exceptions or secondary reset-domain bridge are needed. Page buffering remains necessary to feed uninterrupted SDRAM copy bursts from variable-latency DDR3 reads. Host code still cannot address board SDRAM directly; OP_LOAD_SDRAM remains the FPGA-mediated load path. Production sprite reads, descriptors and destination writes remain on DDR3; clock unification does not select the optional SDRAM sprite-source path or establish timing closure."
 
+- record_id: LINK-009
+  kind: INTERFACE
+  component_id: LINK
+  title: "Host SDK legacy-mode lifecycle and opaque handles"
+  status: DECIDED
+  decided_date: 2026-09-23
+  decision: "The host SDK exposes opaque noodles_link_t handles through noodles_link_open_legacy, explicitly requiring the caller to guarantee an initialized, quiescent, matching SVGA core. Information queries report compiled-in assumptions and hardware_verified=0, not live capabilities. Cooperating producers use an exclusive nonblocking flock on /run/noodles.lock with a persistent-per-boot dirty marker from open until successful drained close. Dirty sessions require explicit external core reload before an acknowledgement flag permits reopening. APIs return 0 or -1 with errno; submissions remain nonblocking with EAGAIN. Completion tokens use the existing 31-bit fence with a less-than-2^30 distance requirement. Polling is nonblocking; waiting and draining use monotonic deadlines. Timeout or clock/sleep failure faults the handle without cancelling work. Close always releases the handle and reports failure rather than claiming completion. All calls require caller serialization."
+  consequence: "The public C API replaces stack handles and caller baseline arithmetic; tools and consumers must migrate together. Raw and typed PRESENT submission block further submissions/uploads until poll/wait observes retirement and updates back-buffer tracking. SDK version 0.1.0 identifies the host package, not a hardware protocol revision. The static library, public header and pkg-config metadata are installable independently of demos. No reset detection, ready handshake, automatic recovery, multi-client scheduling or protection from noncooperating memory writers is implied; these limitations remain explicit in docs/SDK.md."
+
+- record_id: LINK-010
+  kind: INTERFACE
+  component_id: LINK
+  title: "Conservative validation envelope for legacy SDK submissions"
+  status: DECIDED
+  decided_date: 2026-09-23
+  decision: "The legacy SDK admits only implemented opcode encodings with zero reserved bits/words, nonzero valid dimensions/counts, four-byte-aligned pixel addresses and pitches, sufficient row pitch and overflow-safe spans. DDR3 accesses are restricted to [0x30000000,0x40000000), excluding the control neighborhood [0x30020000,0x30022800); direct uploads wholly inside the fixed descriptor table are allowed under LINK-008 ownership. Typed sprite batches validate each descriptor; raw batches validate the command but leave manually uploaded descriptor contents to the caller. LOAD_SDRAM requires a 1024-byte-aligned board-SDRAM destination, an eight-byte-aligned DDR3 source and rounded-page backing storage within bounds."
+  consequence: "This host validation policy leaves the FPGA command layouts unchanged and is stricter than raw hardware behavior for malformed or zero-size commands. The admitted address envelope is not an allocation grant, exclusive arena or sandbox; callers still own resource lifetimes, nonoverlap and scanout safety. Raw diagnostic tools remain outside the SDK policy. Surface allocation and clipping remain separate work."
+
 ```yaml
 - record_id: "<COMPONENT>-<NNN>"
   kind: ARCHITECTURE | INTERFACE | CONVENTION
