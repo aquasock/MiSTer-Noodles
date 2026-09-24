@@ -8,11 +8,48 @@ from. The build procedure itself is in [BUILD.md](BUILD.md).
 
 | # | Date | Build | Seed | RBF SHA-256 | Hardware status |
 |---|---|---|---:|---|---|
+| 4 | 2026-09-23 | **Current:** 800x600 at 100MHz, four-corner timing pass | 7 | `a020e304…43a47a` | User visually accepted; independent reproduction waived |
 | 3 | 2026-09-23 | 800x600 candidate, source `37d21c9`; cold-corner setup failure | 5 | `65ca7861…eb5587` | Diagnostic hardware run only; not qualified |
-| 2 | 2026-09-23 | **Current:** shared 100MHz clock, registered write ingress and slot enables, honest DDR3 constraints | 5 | `b76fb924…247b8d` | Accepted; clean-commit reproduction verified |
+| 2 | 2026-09-23 | Recovery fallback: 640x480, shared 100MHz clock, registered write ingress and slot enables | 5 | `b76fb924…247b8d` | Accepted; clean-commit reproduction verified |
 | 1 | 2026-09-22 | Historical: SPRITE_BATCH engine, 64-bit DDRAM path, PRESENT retirement-acknowledgement fix | 1 | `25f9d3a1…edba93` | Accepted -- see below |
 
-## SVGA candidate (3)
+## Current SVGA build (4)
+
+The seed7 RBF from the additional seed comparison below was uploaded as
+`Noodles_svga_seed7.rbf`, verified by FTP readback and loaded with matching
+`stress-demo-svga-seed7`. The user reported "Looks good" and explicitly
+waived independent clean-rebuild verification. This is visual acceptance
+of the tested workload, not exhaustive pixel-readback validation.
+
+The source is `37d21c9b5535df0a8dff604516a423e3653c7f29` with only SEED
+overridden to 7. The repository now pins seed7 without changing RTL,
+constraints, clock frequency or other fitter settings. The RBF SHA-256 is
+`a020e304aa6903e06e55c2efdba15d1513fb3aa4db9494840b6028a3ba43a47a`.
+All four timing corners pass as recorded below. An exact online pinned
+revision has not been independently rebuilt to prove a byte-identical RBF;
+do not confuse the verified 640x480 reproduction with this SVGA build.
+
+The SVGA seed5 diagnostic and accepted 640x480 image remain preserved.
+Seed7 is the loaded standard image; a runtime resolution switcher is deferred.
+
+Hardware measurements using the matching SVGA tool:
+
+| Workload | Result |
+|---|---|
+| 256 sprites, 128x128, four batches, 15 seconds | 227 frames, 15.1fps |
+| Same workload, 60 seconds | 905 frames, 15.1fps |
+| Uncapped blits, three 15-second runs | 77.13 / 78.75 / 79.04 Mpixel/s |
+| Key-checker, 64 sprites at 128x128, 15 seconds | 453 frames, 30.1fps |
+| Full-screen clear/present, 15 seconds | 906 frames, 60.3fps |
+| Present-only, 15 seconds | 905 frames, 60.3fps |
+
+The initial key-checker invocation incorrectly requested 256 sprites; the
+tool rejected it because that mode permits at most 64, before submitting
+work. The corrected run and remaining checks completed without reported
+command errors or timeouts. The key-checker result uses an explicit sprite
+size/count and is not directly comparable to earlier differently sized runs.
+
+## SVGA seed comparison and original candidate (3)
 
 ### Additional seed comparison
 
@@ -27,10 +64,10 @@ each completed within the twenty-minute limit.
 | 6 | 9m00s | -0.046ns | +0.089ns | FAIL: cold slow core setup |
 | 7 | 9m03s | +0.382ns | +0.084ns | PASS |
 
-Seed7 is the timing-qualified SVGA candidate, not yet hardware accepted.
-The repository QSF still pins seed5: reproducing this candidate requires
-source `37d21c9` plus SEED 7, not the unchanged source revision alone.
-No additional seed has been deployed; seed5's diagnostic remains loaded.
+At comparison time seed7 was timing-qualified but not yet hardware accepted,
+and the repository QSF still pinned seed5. Reproducing that experiment
+requires source `37d21c9` plus SEED 7, not the unchanged source revision alone.
+Subsequent seed7 hardware acceptance and pinning are recorded above.
 
 Seed7 per-corner worst slack, in ns:
 
@@ -99,14 +136,13 @@ These are short-run performance observations, not pixel-readback or visual
 acceptance. One uncapped sample does not establish a persistent regression.
 SVGA has 56.25% more framebuffer pixels, but the fixed sprite workload has
 the same sprite count and dimensions. The timing violation remains unresolved;
-the diagnostic image remains loaded after the run.
+the diagnostic image remained loaded after that run, until seed7 superseded it.
 
-## Current accepted build (2)
+## Accepted 640x480 recovery build (2)
 
-This remains the accepted fallback. Current source targets 800x600 with a
-3200-byte pitch for the next standard build; its timing and hardware
-acceptance must be recorded separately. Do not pair the new host tools with
-this 640x480 image.
+This remains the accepted recovery fallback. Current source targets 800x600
+with a 3200-byte pitch and seed7, qualified separately above. Do not pair
+the new host tools with this 640x480 image.
 
 Quartus Prime Lite 17.0.2 Build 602, Cyclone V `5CSEBA6U23I7`,
 revision `Noodles`, seed 5, 16 fitter threads, MEDIUM register packing,

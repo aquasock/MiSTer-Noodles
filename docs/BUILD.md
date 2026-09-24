@@ -14,7 +14,7 @@ quartus_sta -t tools/report_timing.tcl
 quartus_sta -t tools/report_multicorner.tcl  # required post-fit timing gate
 ```
 
-`Noodles.qsf` pins the fitter settings for the accepted seed-5 build
+`Noodles.qsf` pins the fitter settings for the accepted SVGA seed-7 build
 (see below); the Quartus project is named
 `Noodles`, so a full build writes `output_files/Noodles.rbf`.
 
@@ -42,7 +42,7 @@ Three settings must match for a build to reproduce a previously validated
 result -- all three are already pinned in `Noodles.qsf`, committed to source
 control, so an ordinary clone and build reproduces them automatically:
 
-- `SEED` (currently `5`) -- Quartus's fitter uses its seed as the starting
+- `SEED` (currently `7`) -- Quartus's fitter uses its seed as the starting
   point for placement search; a different seed can produce meaningfully
   different placement, routing and timing closure on the *same* source.
 - `NUM_PARALLEL_PROCESSORS` (currently `16`) -- fitter thread count. This
@@ -55,7 +55,15 @@ and the recorded build date. Matching settings alone is not proof of
 reproducibility; compare the resulting RBF hash against
 [QUALIFICATION.md](QUALIFICATION.md).
 
-For the accepted 2026-09-23 build, use a clean checkout without prior Quartus
+The current SVGA image was built from `37d21c9` with SEED overridden to 7;
+the current QSF pins that setting. It passes all four timing corners and
+was visually accepted on hardware. An independent clean rebuild of the
+pinned revision was explicitly waived by the user, so byte-identical
+reproduction is not yet verified for SVGA. Use `SOURCE_DATE_EPOCH=1790121600`
+and compare against the seed7 hash in [QUALIFICATION.md](QUALIFICATION.md)
+when reproducing it.
+
+For the older accepted 640x480 build, use a clean checkout without prior Quartus
 databases and run:
 
 ```sh

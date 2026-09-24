@@ -6,20 +6,24 @@ a new GPU ABI or an SDL implementation. Architecture decisions remain in
 earlier bring-up assumptions. Relevant records include CMDQ-001,
 BLIT-003/004/006, SURF-003/004/006, LINK-002/005/008 and SDR-008.
 
-## Next standard configuration: 800x600
+## Standard configuration: 800x600
 
 Current source renders 800x600 with a 3200-byte pitch (SURF-006), retaining
 the 100MHz GPU, 4:3 aspect ratio and existing buffer addresses. Each buffer
 uses 1920000 bytes and still fits its reserved 2MiB slot. The HDMI mode is
 independent: MiSTer's scaler scales this framebuffer to its configured output.
-This candidate requires fresh timing and hardware qualification; it does
-not inherit the accepted image's hash or timing margins.
+Seed7 passes all four timing corners and the user accepted its visible
+hardware run. Its RBF SHA-256 is
+`a020e304aa6903e06e55c2efdba15d1513fb3aa4db9494840b6028a3ba43a47a`.
+It was built from `37d21c9` with only SEED changed to 7, now pinned in the
+repository QSF. Independent clean-rebuild verification was waived, not
+completed. See [QUALIFICATION.md](QUALIFICATION.md) for provenance and results.
 
 Build the host library/tools from the same source as the loaded core.
 Geometry is compile-time, with no runtime discovery: the new 800x600 tools
 must not be used with the fallback 640x480 image, or vice versa.
 
-## Frozen hardware baseline
+## Preserved 640x480 recovery baseline
 
 - Source: `c3d04ab68dd1d2f14ba7bd858f6cfe98c1508e86`.
 - RBF SHA-256: `b76fb924c43cb25b9c516e216f247dacb576ec72ab6ef408b1a275d9bc247b8d`.
@@ -177,10 +181,11 @@ safe restart semantics remain SDK work, not guarantees of this baseline.
 
 ## Handoff boundary
 
-Step 1 freezes and documents the existing behavior; it does not introduce
-an ABI number or change the bitstream. Preserve this baseline as the
-fallback while later stages add an identified/versioned SDK, managed
-surfaces and the drawing operations required by GemRB.
+Step 1 documented the existing unversioned interface. The subsequent SVGA
+change keeps command layouts and buffer addresses but changes framebuffer
+geometry, requiring matching host tools. Preserve the older 640x480 image
+as the recovery fallback while later stages add an identified/versioned SDK,
+managed surfaces and the drawing operations required by GemRB.
 
 There is currently no SDL renderer, texture allocator, alpha blending,
 tint, scaling or flipping API. The new render target is 800x600 and core audio is
