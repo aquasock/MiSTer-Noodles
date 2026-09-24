@@ -103,7 +103,8 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 | Why doesn't the engine have a third (noise-fill) op? | BLIT component records | BLIT-005 |
 | How do I composite a sprite over a background without a bounding box? | BLIT component records | BLIT-006 |
 | How does alpha blending work, and what exact arithmetic does it use? | BLIT component records | BLIT-007 |
-| Which protocol version and capability bits does the core publish? | LINK component records | LINK-013 |
+| Which protocol version and capability bits does the core publish? | LINK component records | LINK-014 |
+| How do I draw with ADD, MOD, MUL or custom blend factors? | BLIT component records | BLIT-009 |
 | How do I batch blended, mirrored or tinted sprites? | BLIT component records | BLIT-008 |
 | What's the real host-side API for pushing commands, and does it tell me when a draw finished? | LINK component records | LINK-004 |
 | How does the host know a specific command has actually finished, not just been dispatched? | LINK component records | LINK-005 |
@@ -148,7 +149,9 @@ BLIT-006: "BLIT_COPY_KEY (opcode 3): colorkey transparency for sprite compositin
 BLIT-007: "BLIT_BLEND (opcode 7): straight-alpha source-over with 8-bit alpha modulation in word 5, bit-exact to SDL 2.32.10's generic truncating /255 blend path"
 LINK-012: "SUPERSEDED by LINK-013 -- protocol 1.1 (0x00010001) added capability bit 7 for BLIT_BLEND; minor revisions are additive"
 BLIT-008: "SPRITE_BATCH descriptor flags: bit 1 blend, bit 2 mirror-x, bit 3 mirror-y; flagged descriptors carry RGBA modulation in word 4 with SDL 2.32.10 generic-path arithmetic"
-LINK-013: "Protocol 1.2 (0x00010002) enables BLIT-008 descriptor flags; capability mask unchanged"
+LINK-013: "SUPERSEDED by LINK-014 -- protocol 1.2 (0x00010002) enabled BLIT-008 descriptor flags"
+BLIT-009: "Descriptor flag bit 4 selects a blend mode: SDL factors/operations for colour and alpha in flag bits 31:10, bit 8 single rounding (SDL MUL); project-defined exact 8-bit arithmetic"
+LINK-014: "Protocol 1.3 (0x00010003) enables BLIT-009 blend modes; capability mask unchanged"
 LINK-002: "64-slot ring buffer at phys 0x30020000 (header: write_ptr +0, read_ptr +8) / 0x30021000 (slots), reusing CMDQ-001's 32-byte slot format"
 LINK-003: "link_ring.sv polls write_ptr only while CMDQ is idle (cmd_ready), fetches via 8 sequential reads, dispatches to CMDQ, writes back read_ptr"
 LINK-004: "lib/noodles_link.{h,c} is the real host-side API (open/close, noodles_rgb, push_command/solid_fill/blit_copy) -- fire-and-forget, no completion signal by deliberate choice"
@@ -647,11 +650,30 @@ OUT-005: "OUT-004's single-fresh-vblank-edge PRESENT margin is not reliably suff
   kind: INTERFACE
   component_id: LINK
   title: "Protocol 1.2 adds BLIT-008 descriptor flags"
-  status: DECIDED
+  status: SUPERSEDED
   decided_date: 2026-09-23
   decision: "A core implementing BLIT-008 publishes protocol 0x00010002 with the unchanged capability mask 0x000000fe. Descriptor flag bits 1-3 are defined only on protocol 1.2 and later; every other LINK-012 rule is unchanged."
   consequence: "Hosts gate flagged descriptors on protocol minor at least 2 and fail them with ENOTSUP otherwise, without publishing. Protocol 1.0 and 1.1 cores remain attachable for their existing operations."
   supersedes: "LINK-012"
+
+- record_id: BLIT-009
+  kind: INTERFACE
+  component_id: BLIT
+  title: "Descriptor blend modes: factor, operation and single-rounding encoding"
+  status: DECIDED
+  decided_date: 2026-09-24
+  decision: "Descriptor flag bit 4 selects an explicit blend mode for a flagged draw (BLIT-008); bit 1 must then be zero and bits 7:5 and 9 are zero. Bits 13:10 hold the colour source factor, 17:14 the colour destination factor, 20:18 the colour operation, 24:21 the alpha source factor, 28:25 the alpha destination factor and 31:29 the alpha operation, using SDL 2.32.10's SDL_BlendFactor values 1-10 (ZERO, ONE, SRC_COLOR, ONE_MINUS_SRC_COLOR, SRC_ALPHA, ONE_MINUS_SRC_ALPHA, DST_COLOR, ONE_MINUS_DST_COLOR, DST_ALPHA, ONE_MINUS_DST_ALPHA) and SDL_BlendOperation values 1-5 (ADD, SUBTRACT, REV_SUBTRACT, MINIMUM, MAXIMUM). Bit 8 selects single rounding and is valid only with both operations ADD. The source is the BLIT-008 modulated pixel (c, a), not premultiplied; per channel S is the source value and V the destination value, and factor values are ZERO 0, ONE 255, SRC_COLOR S, SRC_ALPHA a, DST_COLOR V, DST_ALPHA dstA, with ONE_MINUS forms 255 minus those. With D(x) = floor(x / 255), Ps = S * Fs and Pd = V * Fd: ADD gives min(255, D(Ps) + D(Pd)), or min(255, floor((Ps + Pd) / 255)) with single rounding; SUBTRACT gives max(0, D(Ps) - D(Pd)); REV_SUBTRACT gives max(0, D(Pd) - D(Ps)); MINIMUM and MAXIMUM give min or max of S and V, ignoring factors. SDL's software renderer has no composed modes, so this 8-bit arithmetic is the project's own definition."
+  consequence: "SDL 2.32.10's software modes are exact presets: BLEND is (SRC_ALPHA, ONE_MINUS_SRC_ALPHA, ADD; ONE, ONE_MINUS_SRC_ALPHA, ADD), NONE is (ONE, ZERO, ADD; ONE, ZERO, ADD), ADD is (SRC_ALPHA, ONE, ADD; ZERO, ONE, ADD), MOD is (DST_COLOR, ZERO, ADD; ZERO, ONE, ADD) and MUL is (DST_COLOR, ONE_MINUS_SRC_ALPHA, ADD; ZERO, ONE, ADD) with single rounding. GemRB's composed glow modes and its wall-occlusion stencil pass (ZERO, ONE, ADD; ZERO, ONE_MINUS_SRC_ALPHA, ADD) are expressible directly. Descriptors with bit 4 need a protocol 1.3 core (LINK-014); the BLIT-008 bit 1 BLEND and plain-store meanings are unchanged."
+
+- record_id: LINK-014
+  kind: INTERFACE
+  component_id: LINK
+  title: "Protocol 1.3 adds BLIT-009 descriptor blend modes"
+  status: DECIDED
+  decided_date: 2026-09-24
+  decision: "A core implementing BLIT-009 publishes protocol 0x00010003 with the unchanged capability mask 0x000000fe. Descriptor flag bit 4 and flag bits 31:8 are defined only on protocol 1.3 and later; every other LINK-013 rule is unchanged."
+  consequence: "Hosts gate descriptors using bit 4 on protocol minor at least 3 and fail them with ENOTSUP otherwise, without publishing."
+  supersedes: "LINK-013"
 
 ```yaml
 - record_id: "<COMPONENT>-<NNN>"
