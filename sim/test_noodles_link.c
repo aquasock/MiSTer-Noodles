@@ -13,6 +13,7 @@ static unsigned char memory[8192];
 static int maps, fail_map;
 static noodles_link_t link;
 static noodles_sprite_descriptor_t descriptors[NOODLES_SPRITE_DESCRIPTOR_MAX];
+static noodles_fill_descriptor_t fill_descriptors[NOODLES_SPRITE_DESCRIPTOR_MAX];
 
 static void test_framebuffer_geometry(void) {
     assert(NOODLES_BUFFER_WIDTH == 800 && NOODLES_BUFFER_HEIGHT == 600);
@@ -46,6 +47,9 @@ static void reset(uint32_t baseline) {
     for (unsigned i = 0; i < NOODLES_SPRITE_DESCRIPTOR_MAX; ++i)
         descriptors[i] = (noodles_sprite_descriptor_t){
             NOODLES_BUFFER_B_ADDR, 3200, 1, 1, 0, 0x31400000u, 4, 0};
+    for (unsigned i = 0; i < NOODLES_SPRITE_DESCRIPTOR_MAX; ++i)
+        fill_descriptors[i] = (noodles_fill_descriptor_t){
+            NOODLES_BUFFER_B_ADDR + i * 4, 3200, 1, 1, 0xff000000u | i, {0, 0, 0}};
     maps = fail_map = 0;
     header[3] = baseline;
     link.header = header;
@@ -215,6 +219,28 @@ int main(void) {
     assert(noodles_link_upload(&link, raw_ring_batch[1], descriptors, 32) == 0);
     raw_ring_batch[1] += 4;
     assert(noodles_push_command(&link, raw_ring_batch) == -1 && errno == EINVAL);
+
+    // Fill and sprite batches rotate through and own the same bounded table
+    // pool, so neither can overwrite the other's in-flight descriptors.
+    reset(20);
+    link.capabilities = 0x7feu;
+    assert(noodles_push_fill_batch(&link, fill_descriptors, 64) == 0);
+    assert(slots[0] == 10 && slots[1] == NOODLES_SPRITE_DESCRIPTOR_ADDR &&
+           slots[3] == 64 && link.batch_fence[0] == 21);
+    assert(memcmp(memory, fill_descriptors, sizeof(fill_descriptors)) == 0);
+    assert(noodles_push_sprite_batch(&link, descriptors, 1) == 0);
+    assert(slots[8] == 5 && slots[9] == NOODLES_SPRITE_DESCRIPTOR_ADDR +
+                                     NOODLES_SPRITE_DESCRIPTOR_TABLE_BYTES);
+    assert((link.batch_pending & 3) == 3);
+    fill_descriptors[0].reserved[1] = 1;
+    int maps_before_fill_reject = maps;
+    assert(noodles_push_fill_batch(&link, fill_descriptors, 1) == -1 && errno == EINVAL);
+    assert(maps == maps_before_fill_reject && header[0] == 2);
+    fill_descriptors[0].reserved[1] = 0;
+    reset(0);
+    assert(noodles_push_fill_batch(&link, fill_descriptors, 1) == -1 && errno == ENOTSUP);
+    assert(maps == 0 && header[0] == 0);
+
     reset(0);
     descriptors[0].flags = 2;       /* BLIT-008 draw flag: needs protocol 1.2 */
     rejected(ENOTSUP, 1);
@@ -244,6 +270,6 @@ int main(void) {
     assert(noodles_link_upload(&link, 0x31400000u, NULL, 32) == -1 && errno == EINVAL);
     assert(noodles_link_upload(&link, 0x31400000u, descriptors, 0) == -1 && errno == EINVAL);
     assert(maps == 0 && link.submitted == 0);
-    puts("PASS: descriptor ownership, non-destructive retries, raw uploads, errors and fence/ring wrap");
+    puts("PASS: shared sprite/fill descriptor ownership, non-destructive retries, raw uploads, errors and fence/ring wrap");
     return 0;
 }

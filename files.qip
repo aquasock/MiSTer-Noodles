@@ -6,6 +6,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/blit.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/blit_copy.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/blit_copy64.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sprite_batch.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/fill_batch.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/blend_px.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/blend_walk.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/blit_blend.sv

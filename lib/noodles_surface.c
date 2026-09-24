@@ -321,25 +321,32 @@ int noodles_back_buffer_blend_fill(noodles_link_t *link, const noodles_rect_t *r
                                    (uint16_t)(bottom - top), color, blend_mode);
 }
 
-static int clip_rect(const noodles_surface_t *surface, const noodles_rect_t *requested,
-                     int32_t *x, int32_t *y, uint32_t *width, uint32_t *height) {
-    if (!active_surface(surface) || !requested || !requested->width || !requested->height)
+static int clip_bounds(uint32_t surface_width, uint32_t surface_height,
+                       const noodles_rect_t *requested, int32_t *x, int32_t *y,
+                       uint32_t *width, uint32_t *height) {
+    if (!requested || !requested->width || !requested->height)
         return fail(EINVAL);
     int64_t left = requested->x;
     int64_t top = requested->y;
     int64_t right = left + requested->width;
     int64_t bottom = top + requested->height;
-    if (right <= 0 || bottom <= 0 || left >= surface->width || top >= surface->height)
+    if (right <= 0 || bottom <= 0 || left >= surface_width || top >= surface_height)
         return 0;
     if (left < 0) left = 0;
     if (top < 0) top = 0;
-    if (right > surface->width) right = surface->width;
-    if (bottom > surface->height) bottom = surface->height;
+    if (right > surface_width) right = surface_width;
+    if (bottom > surface_height) bottom = surface_height;
     *x = (int32_t)left;
     *y = (int32_t)top;
     *width = (uint32_t)(right - left);
     *height = (uint32_t)(bottom - top);
     return 1;
+}
+
+static int clip_rect(const noodles_surface_t *surface, const noodles_rect_t *requested,
+                     int32_t *x, int32_t *y, uint32_t *width, uint32_t *height) {
+    if (!active_surface(surface)) return fail(EINVAL);
+    return clip_bounds(surface->width, surface->height, requested, x, y, width, height);
 }
 
 static void mark_used(noodles_surface_t *surface) {
@@ -360,6 +367,37 @@ int noodles_surface_fill(noodles_surface_t *destination, const noodles_rect_t *r
     };
     if (noodles_link_push_command_managed(destination->link, command) != 0) return -1;
     mark_used(destination);
+    return 0;
+}
+
+int noodles_surface_fill_batch(noodles_link_t *link, noodles_surface_t *destination,
+                               const noodles_surface_fill_t *fills, size_t count) {
+    if (!link || !fills || !count || count > NOODLES_SPRITE_DESCRIPTOR_MAX ||
+        (destination && (!active_surface(destination) || destination->link != link)))
+        return fail(EINVAL);
+    const uint32_t address = destination ? destination->address : noodles_link_back_buffer(link);
+    const uint32_t pitch = destination ? destination->pitch : NOODLES_BUFFER_PITCH;
+    const uint32_t surface_width = destination ? destination->width : NOODLES_BUFFER_WIDTH;
+    const uint32_t surface_height = destination ? destination->height : NOODLES_BUFFER_HEIGHT;
+    noodles_fill_descriptor_t descriptors[NOODLES_SPRITE_DESCRIPTOR_MAX];
+    size_t descriptor_count = 0;
+    for (size_t i = 0; i < count; ++i) {
+        int32_t x, y;
+        uint32_t width, height;
+        int clipped = clip_bounds(surface_width, surface_height, &fills[i].rect,
+                                  &x, &y, &width, &height);
+        if (clipped < 0) return -1;
+        if (!clipped) continue;
+        descriptors[descriptor_count++] = (noodles_fill_descriptor_t){
+            address + (uint32_t)y * pitch + (uint32_t)x * 4,
+            pitch, width, height, fills[i].color, {0, 0, 0}
+        };
+    }
+    if (!descriptor_count) return 0;
+    if (noodles_link_push_fill_descriptors_managed(
+            link, descriptors, (uint16_t)descriptor_count) != 0)
+        return -1;
+    if (destination) mark_used(destination);
     return 0;
 }
 

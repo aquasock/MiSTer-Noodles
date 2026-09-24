@@ -142,7 +142,7 @@ static void closed(noodles_link_t *device) {
 static void seed_identity(void) {
     memory[4] = 0x4e444c53u;
     memory[5] = NOODLES_PROTOCOL_VERSION;
-    memory[6] = 0x3fe;
+    memory[6] = 0x7fe;
     memory[7] = (800u << 16) | 600u;
     memory[8] = 3200;
     memory[16] = 0;
@@ -393,7 +393,7 @@ int main(void) {
     assert(memory[16] == 0x434c414du && control_active);
     assert(noodles_link_get_info(a, &info) == 0 && info.hardware_verified);
     assert(info.protocol_version == NOODLES_PROTOCOL_VERSION);
-    assert(info.opcode_mask == 0x3fe);
+    assert(info.opcode_mask == 0x7fe);
     assert(noodles_push_command(a, fill) == 0);
     memory[2] = memory[0];
     memory[3] = 1;
@@ -763,6 +763,25 @@ int main(void) {
            memory[0] == before);
     noodles_surface_t *fill_surface = NULL;
     assert(noodles_surface_create(a, 32, 24, &fill_surface) == 0);
+    noodles_surface_fill_t fill_batch[4] = {
+        {{-3, -2, 8, 7}, 0xff102030u},
+        {{798, 598, 8, 8}, 0xff405060u},
+        {{900, 700, 4, 4}, 0xff708090u},
+        {{20, 30, 5, 6}, 0xffa0b0c0u},
+    };
+    slot = memory[0];
+    assert(noodles_surface_fill_batch(a, NULL, fill_batch, 4) == 0);
+    published = &memory[1024 + slot * 8];
+    assert(published[0] == 10 && published[1] == NOODLES_SPRITE_DESCRIPTOR_ADDR &&
+           published[3] == 3);
+    const noodles_fill_descriptor_t *filled =
+        (const noodles_fill_descriptor_t *)descriptor_memory;
+    assert(filled[0].dst_addr == NOODLES_BUFFER_B_ADDR && filled[0].width == 5 &&
+           filled[0].height == 5 && filled[0].color == 0xff102030u);
+    assert(filled[1].dst_addr == NOODLES_BUFFER_B_ADDR + 598 * 3200 + 798 * 4 &&
+           filled[1].width == 2 && filled[1].height == 2);
+    assert(filled[2].dst_addr == NOODLES_BUFFER_B_ADDR + 30 * 3200 + 20 * 4 &&
+           filled[2].width == 5 && filled[2].height == 6);
     noodles_rect_t managed_blend_fill = {28, 20, 10, 10};
     slot = memory[0];
     assert(noodles_surface_blend_fill(fill_surface, &managed_blend_fill, 0x40112233u,

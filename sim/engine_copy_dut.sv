@@ -76,6 +76,8 @@ module engine_copy_dut (
         /* verilator lint_on PINCONNECTEMPTY */
         .blend_busy     (1'b0),
         .blend_done     (1'b0),
+        .fill_batch_start(), .fill_batch_base(), .fill_batch_count(),
+        .fill_batch_busy(1'b0), .fill_batch_done(1'b0),
         /* verilator lint_off PINCONNECTEMPTY */
         .present_start  (),
         /* verilator lint_on PINCONNECTEMPTY */

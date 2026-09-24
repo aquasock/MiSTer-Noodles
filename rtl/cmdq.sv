@@ -2,8 +2,8 @@
 // presented on a simple valid/ready front end, and dispatches it to BLIT
 // (SOLID_FILL), blit_copy (BLIT_COPY / BLIT_COPY_KEY -- both dispatch to
 // the same engine, differing only in whether colorkey transparency is on),
-// blit_blend (BLIT_BLEND / BLEND_FILL -- BLIT-007/BLIT-010), or present (PRESENT, the
-// double-buffer flip -- OUT-004).
+// blit_blend (BLIT_BLEND / BLEND_FILL -- BLIT-007/BLIT-010), fill_batch
+// (FILL_BATCH), or present (PRESENT, the double-buffer flip -- OUT-004).
 //
 // ai/core-reference.md CMDQ-001 defines the command slot layout this module
 // decodes; BLIT-002/BLIT-003/BLIT-006/BLIT-007 define what each BLIT opcode's fields
@@ -60,6 +60,12 @@ module cmdq #(
     input  logic                  batch_busy,
     input  logic                  batch_done,
 
+    output logic                  fill_batch_start,
+    output logic [ADDR_WIDTH-1:0] fill_batch_base,
+    output logic [15:0]           fill_batch_count,
+    input  logic                  fill_batch_busy,
+    input  logic                  fill_batch_done,
+
     output logic                  present_start,
     input  logic                  present_busy,
     input  logic                  present_done,
@@ -98,6 +104,7 @@ module cmdq #(
     localparam logic [7:0] OP_LOAD_SDRAM    = 8'h06;
     localparam logic [7:0] OP_BLIT_BLEND    = 8'h07;
     localparam logic [7:0] OP_BLEND_FILL    = 8'h08;
+    localparam logic [7:0] OP_FILL_BATCH    = 8'h0a;
     localparam logic [31:0] DESCRIPTOR_BASE = 32'h3002_2000;
     localparam logic [31:0] DESCRIPTOR_END  = 32'h3004_2000;
 
@@ -114,17 +121,19 @@ module cmdq #(
     state_t state;
 
     typedef enum logic [2:0] {ENGINE_BLIT, ENGINE_COPY, ENGINE_PRESENT, ENGINE_BATCH, ENGINE_LOAD,
-                              ENGINE_BLEND} engine_t;
+                              ENGINE_BLEND, ENGINE_FILL_BATCH} engine_t;
     engine_t active_engine;
     logic engine_done_seen;
     wire engine_busy = (active_engine == ENGINE_COPY)    ? copy_busy :
                         (active_engine == ENGINE_PRESENT) ? present_busy :
                         (active_engine == ENGINE_BATCH) ? batch_busy :
+                        (active_engine == ENGINE_FILL_BATCH) ? fill_batch_busy :
                         (active_engine == ENGINE_LOAD) ? loader_busy :
                         (active_engine == ENGINE_BLEND) ? blend_busy : blit_busy;
     wire engine_done = (active_engine == ENGINE_COPY)    ? copy_done :
                         (active_engine == ENGINE_PRESENT) ? present_done :
                         (active_engine == ENGINE_BATCH) ? batch_done :
+                       (active_engine == ENGINE_FILL_BATCH) ? fill_batch_done :
                         (active_engine == ENGINE_LOAD) ? loader_done :
                         (active_engine == ENGINE_BLEND) ? blend_done : blit_done;
 
@@ -157,6 +166,9 @@ module cmdq #(
             batch_start    <= 1'b0;
             batch_base     <= '0;
             batch_count    <= '0;
+            fill_batch_start <= 1'b0;
+            fill_batch_base <= '0;
+            fill_batch_count <= '0;
             present_start  <= 1'b0;
             loader_start    <= 1'b0;
             loader_src_addr <= '0;
@@ -168,6 +180,7 @@ module cmdq #(
             blend_start   <= 1'b0;
             present_start <= 1'b0;
             batch_start    <= 1'b0;
+            fill_batch_start <= 1'b0;
             loader_start   <= 1'b0;
 
             unique case (state)
@@ -235,6 +248,15 @@ module cmdq #(
                             batch_count <= c_width;
                             batch_start <= 1'b1;
                             active_engine <= ENGINE_BATCH;
+                            state <= WAIT_DONE;
+                        end else if (op == OP_FILL_BATCH && c_width != 0 && c_width <= 64 &&
+                                     c_dst_addr >= DESCRIPTOR_BASE &&
+                                     c_dst_addr < DESCRIPTOR_END &&
+                                     c_dst_addr[10:0] == 11'd0) begin
+                            fill_batch_base <= c_dst_addr;
+                            fill_batch_count <= c_width;
+                            fill_batch_start <= 1'b1;
+                            active_engine <= ENGINE_FILL_BATCH;
                             state <= WAIT_DONE;
                         end else if (op == OP_LOAD_SDRAM) begin
                             loader_src_addr <= c_src_addr;

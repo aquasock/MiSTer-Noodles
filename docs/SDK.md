@@ -1,12 +1,13 @@
 # Host SDK
 
 `libnoodles.a` is a C99 static library with C++-compatible public headers
-`noodles_link.h` and `noodles_surface.h`. SDK 0.9.0 uses hardware protocol 1.x to identify the live
+`noodles_link.h` and `noodles_surface.h`. SDK 0.10.0 uses hardware protocol 1.x to identify the live
 800x600 core, claim one host session and detect reset before accepting a
 fence as completed. Protocol 1.1 cores add opcode 7, BLIT_BLEND; 1.2 cores add
 flagged batch draws (blend, mirroring and RGBA modulation per draw); 1.3 cores
 add explicit blend modes per draw; 1.4 cores add opcode 8, BLEND_FILL; and
-1.5 cores add a 64-table descriptor ring.
+1.5 cores add a 64-table descriptor ring; and 1.6 cores add opcode 10,
+FILL_BATCH.
 Framebuffer geometry and the 100MHz core clock are unchanged.
 
 Use `noodles_link_open()` for the stage-2B core. The explicit
@@ -58,8 +59,8 @@ little-endian 32-bit words.
 | Address | Owner | Meaning |
 |---|---|---|
 | `0x30020010` | FPGA | Magic `0x4e444c53`. Published last during initialization. |
-| `0x30020014` | FPGA | Protocol version, major in bits 31:16 and minor in 15:0; `0x00010005` with the descriptor ring, `0x00010004` with BLEND_FILL, `0x00010003` with explicit blend modes, `0x00010002` with flagged batch draws, `0x00010001` with BLIT_BLEND only, `0x00010000` before. |
-| `0x30020018` | FPGA | Capability bits: `0x000003fe` adds bit 9 for the descriptor ring; bit N advertises opcode N for bits 1-8. Older cores publish `0x000001fe`, `0x000000fe` or `0x0000007e`. |
+| `0x30020014` | FPGA | Protocol version, major in bits 31:16 and minor in 15:0; `0x00010006` with FILL_BATCH, `0x00010005` with the descriptor ring, `0x00010004` with BLEND_FILL, `0x00010003` with explicit blend modes, `0x00010002` with flagged batch draws, `0x00010001` with BLIT_BLEND only, `0x00010000` before. |
+| `0x30020018` | FPGA | Capability bits: `0x000007fe` adds bit 10 for FILL_BATCH; bit 9 advertises the descriptor ring; bit N advertises opcode N for bits 1-8. Older cores publish `0x000003fe`, `0x000001fe`, `0x000000fe` or `0x0000007e`. |
 | `0x3002001c` | FPGA | Width in bits 31:16, height in bits 15:0. |
 | `0x30020020` | FPGA | Framebuffer pitch in bytes. |
 | `0x30020028/2c` | Host | 64-bit request token, low word then high word. |
@@ -87,7 +88,7 @@ after checking magic, protocol major version 1 (any minor revision),
 required opcode capabilities 1 through 6, 800x600 geometry and 3200-byte
 pitch, then completing the live claim. Unexpected identity fails before the
 SDK publishes commands. Minor revisions only add capabilities (LINK-012);
-optional operations such as BLIT_BLEND and BLEND_FILL check their capability bit on every
+optional operations such as BLIT_BLEND, BLEND_FILL and FILL_BATCH check their capability bit on every
 submission and fail with `ENOTSUP` without publishing when it is absent.
 
 Calls must be serialized by the application. A nonblocking `flock` on
@@ -201,14 +202,16 @@ explicit blend mode without mirror bits and a zero reserved word 7. These checks
 the caller must still own every byte, respect scanout ownership, avoid
 overlapping copies and retain all source data until completion.
 
-Typed sprite-batch submission validates descriptors before uploading them.
+Typed sprite- and fill-batch submission validates descriptors before uploading them.
 On protocol 1.5 it rotates through 64 aligned 2 KiB tables and can queue
 batches up to the 64-slot command ring's one-empty-slot limit. Each table is
 reusable only after its own batch fence completes. On older cores it uses the
 single table at `0x30022000`.
 The raw batch entry point validates the command only; callers manually
 uploading descriptors remain responsible for their contents and must select a
-supported aligned table. Raw memory diagnostics remain explicitly outside the SDK.
+supported aligned table. Sprite and fill batches share the same table pool and
+per-table ownership: a table remains unavailable until whichever batch used it
+has retired. Raw memory diagnostics remain explicitly outside the SDK.
 
 ## Managed surfaces and texture cache
 
@@ -252,6 +255,14 @@ surface and submits the same BLEND_FILL operation. BLEND_FILL is ordered with
 all other commands and reads only the destination; it requires protocol 1.4
 and `NOODLES_CAP_BLEND_FILL`. The raw `noodles_push_blend_fill()` variant
 accepts an already validated physical rectangle.
+
+`noodles_surface_fill_batch()` clips up to 64 opaque rectangles to a managed
+surface or the current back buffer, omits fully clipped rectangles and submits
+the remaining descriptors as one ordered FILL_BATCH. Each descriptor is eight
+32-bit words: destination address, pitch, width, height, colour, then three
+zero reserved words. `noodles_push_fill_batch()` accepts the corresponding
+validated physical descriptors. Both require protocol 1.6 and
+`NOODLES_CAP_FILL_BATCH`; the application must use scalar fills on older cores.
 
 `noodles_surface_blend()` and `noodles_surface_blend_to_back_buffer()` clip
 exactly like the copy calls, then submit BLIT_BLEND (BLIT-007): each source
@@ -310,13 +321,15 @@ stable shared-library ABI promise in this static-only pre-1.0 SDK.
 
 No SDL code, runtime resolution switch or automatic core reload is included.
 Managed surfaces and the texture cache are host-SDK facilities that work
-over protocol 1.0 through 1.5; SDK 0.4 added BLIT_BLEND for protocol 1.1
+over protocol 1.0 through 1.6; SDK 0.4 added BLIT_BLEND for protocol 1.1
 cores, SDK 0.5 flagged batch draws for protocol 1.2 cores, SDK 0.6 added
 explicit blend modes for protocol 1.3 cores, and SDK 0.7 added synchronized
 CPU transfers and fill for the current back buffer. SDK 0.8 adds constant
 source blended fills for protocol 1.4 cores. SDK 0.9 adds per-table ownership
 and descriptor-ring selection for protocol 1.5 while retaining the fixed-table
 path on older cores.
+SDK 0.10 adds ordered opaque fill descriptors for protocol 1.6 and shares the
+existing descriptor-ring ownership between sprite and fill batches.
 
 ## Stage-2A hardware execution
 

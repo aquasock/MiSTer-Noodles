@@ -36,10 +36,11 @@ For the current consumer-facing baseline, start with
 [docs/INTEGRATION.md](docs/INTEGRATION.md): memory reservations, command
 layouts, pixel format, ownership and limitations for consumers. It describes
 the core interface; the validated SDL2 renderer lives in MiSTer-GemRB.
-Current source is protocol 1.5 at 800x600 and 100MHz. It adds a bounded
-descriptor-table ring and is timing-qualified and hardware-accepted with seed
-13. The protocol 1.4 seed-13 image and older accepted 640x480 image remain
-recovery fallbacks.
+Current source is the protocol 1.6 fill-batch candidate at 800x600 and 100MHz.
+It reuses the bounded descriptor-table ring to submit up to 64 ordered opaque
+fills with one command. Protocol 1.5 seed 13 remains the hardware-accepted
+image while the candidate is qualified; protocol 1.4 and the older accepted
+640x480 image remain recovery fallbacks.
 
 ## Host-side API
 
@@ -60,14 +61,18 @@ close drains, disarms and frees the handle; failure does not cancel FPGA work.
 `noodles_link_open_legacy()` remains only for preserved pre-2B core images.
 See [docs/SDK.md](docs/SDK.md) for installation, lifecycle, errors and recovery.
 
-On protocol 1.5, `noodles_push_sprite_batch()` rotates through 64 protected
+On protocol 1.5 and newer, `noodles_push_sprite_batch()` rotates through 64 protected
 descriptor tables, allowing batches to queue up to the command-ring limit.
 It returns `-1` with `errno == EAGAIN` when every table or the command ring is
 busy, without modifying descriptors or publishing a command. SDK 0.9 retains
 the single protected table when attached to protocol 1.4 and older cores. Raw
-batch commands acquire ownership of their selected table, and overlapping
+sprite and fill batch commands acquire ownership of their selected table, and overlapping
 `noodles_link_upload()` calls are blocked until that table's fence completes.
 Direct memory writes bypass this protection.
+
+Protocol 1.6 and SDK 0.10 add `noodles_push_fill_batch()` and
+`noodles_surface_fill_batch()`. A batch contains up to 64 clipped opaque
+rectangles, executes strictly in descriptor order and retires as one fence.
 
 ## Build
 

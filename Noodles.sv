@@ -96,10 +96,12 @@ assign AUDIO_MIX = 0;
 // currently back, not just a single fixed address) -- should stay OFF; if
 // it ever lights, something reintroduced dst_addr corruption between
 // link_ring and CMDQ.
+wire blit_any_start;
+wire [31:0] blit_any_dst_addr;
 reg dst_addr_wrong_ever;
 always @(posedge clk_sys or posedge reset)
 	if (reset) dst_addr_wrong_ever <= 1'b0;
-	else if (blit_start && blit_dst_addr != BUFFER_A_ADDR && blit_dst_addr != BUFFER_B_ADDR)
+	else if (blit_any_start && blit_any_dst_addr != BUFFER_A_ADDR && blit_any_dst_addr != BUFFER_B_ADDR)
 		dst_addr_wrong_ever <= 1'b1;
 
 assign LED_DISK = dst_addr_wrong_ever;
@@ -131,7 +133,7 @@ always @(posedge clk_sys or posedge reset)
 reg blit_start_ever;
 always @(posedge clk_sys or posedge reset)
 	if (reset) blit_start_ever <= 1'b0;
-	else if (blit_start) blit_start_ever <= 1'b1;
+	else if (blit_any_start) blit_start_ever <= 1'b1;
 
 // MISTER_FB scan-out (OUT-002) + double buffering (OUT-004): two fixed
 // 800x600, 32bpp (FB_FORMAT[2:0]=3'b110) surfaces (BUFFER_A_ADDR/
@@ -180,6 +182,14 @@ wire        batch_rd64_en, batch_rd64_ready, batch_rd64_valid;
 wire [7:0]  batch_rd64_len;
 wire        batch_wr64_en, batch_wr64_ready;
 wire [31:0] batch_base;
+wire        fill_batch_start, fill_batch_busy, fill_batch_done;
+wire [15:0] fill_batch_count;
+wire [31:0] fill_batch_base;
+wire [31:0] fill_batch_rd_addr, fill_batch_rd_data;
+wire        fill_batch_rd_en, fill_batch_rd_ready, fill_batch_rd_valid, fill_batch_rd_active;
+wire        fb_fill_start;
+wire [31:0] fb_fill_dst_addr, fb_fill_color;
+wire [15:0] fb_fill_dst_pitch, fb_fill_width, fb_fill_height;
 // BLIT_BLEND (BLIT-007) reuses CMDQ's copy_* geometry registers.
 wire        blend_start, blend_busy, blend_done;
 wire [7:0]  blend_mod;
@@ -296,7 +306,8 @@ present #(
 // and a following PRESENT can never retire.
 // A blend launched by sprite_batch is one descriptor of a batch, not a
 // command of its own; only CMDQ-launched BLIT_BLENDs advance the fence.
-wire cmd_done_pulse = blit_done || copy_done || batch_done || present_done || loader_done ||
+wire cmd_done_pulse = (blit_done && !fill_batch_busy) || copy_done || batch_done ||
+                      fill_batch_done || present_done || loader_done ||
                       (blend_done && !batch_busy);
 
 wire [31:0] fence_wr_addr, fence_wr_data;
@@ -355,6 +366,11 @@ cmdq cmdq
 	.batch_count    (batch_count),
 	.batch_busy     (batch_busy),
 	.batch_done     (batch_done),
+	.fill_batch_start(fill_batch_start),
+	.fill_batch_base(fill_batch_base),
+	.fill_batch_count(fill_batch_count),
+	.fill_batch_busy(fill_batch_busy),
+	.fill_batch_done(fill_batch_done),
 	.present_start  (present_start),
 	.present_busy  (present_busy),
 	.present_done  (present_done),
@@ -370,12 +386,12 @@ blit blit
 (
 	.clk      (clk_sys),
 	.reset    (reset),
-	.start    (blit_start),
-	.dst_addr (blit_dst_addr),
-	.dst_pitch(blit_dst_pitch),
-	.width    (blit_width),
-	.height   (blit_height),
-	.color    (blit_color),
+	.start    (blit_any_start),
+	.dst_addr (blit_any_dst_addr),
+	.dst_pitch(fill_batch_busy ? fb_fill_dst_pitch : blit_dst_pitch),
+	.width    (fill_batch_busy ? fb_fill_width : blit_width),
+	.height   (fill_batch_busy ? fb_fill_height : blit_height),
+	.color    (fill_batch_busy ? fb_fill_color : blit_color),
 	.busy     (blit_busy),
 	.done     (blit_done),
 	.wr_addr  (engine_wr_addr),
@@ -386,6 +402,23 @@ blit blit
 	.wr64_data(engine_wr64_data),
 	.wr64_en  (engine_wr64_en),
 	.wr64_ready(engine_wr64_ready)
+);
+
+assign blit_any_start = blit_start || fb_fill_start;
+assign blit_any_dst_addr = fill_batch_busy ? fb_fill_dst_addr : blit_dst_addr;
+
+fill_batch fill_batch
+(
+	.clk(clk_sys), .reset(reset), .start(fill_batch_start),
+	.descriptor_base(fill_batch_base), .count(fill_batch_count),
+	.busy(fill_batch_busy), .done(fill_batch_done),
+	.rd_addr(fill_batch_rd_addr), .rd_en(fill_batch_rd_en),
+	.rd_active(fill_batch_rd_active), .rd_ready(fill_batch_rd_ready),
+	.rd_data(fill_batch_rd_data), .rd_valid(fill_batch_rd_valid),
+	.fill_start(fb_fill_start), .fill_dst_addr(fb_fill_dst_addr),
+	.fill_dst_pitch(fb_fill_dst_pitch), .fill_width(fb_fill_width),
+	.fill_height(fb_fill_height), .fill_color(fb_fill_color),
+	.fill_done(blit_done)
 );
 
 blit_copy blit_copy
@@ -546,13 +579,16 @@ wire [63:0] adapter_wr64_data = wr_sel_blend ? blend_wr64_data :
 wire        rd_sel_control = control_rd_active;
 wire        rd_sel_link = !rd_sel_control && link_rd_active;
 wire        rd_sel_batch = !rd_sel_control && !rd_sel_link && batch_rd_active;
+wire        rd_sel_fill_batch = !rd_sel_control && !rd_sel_link && !rd_sel_batch &&
+                                fill_batch_rd_active;
 // Sprite reads remain on the hardware-proven DDR3 burst path. SDR-008
 // removes the SDRAM CDC overhead without changing this routing choice;
 // the optional SDRAM path still performs four 16-bit reads per pair.
 wire        rd_sel_batch64 = rd_sel_batch && batch_rd64_en;
 // blit_blend holds busy until every requested beat has returned, so busy
 // spans all of its REQ+WAIT windows (DDR-005).
-wire        rd_sel_blend = !rd_sel_control && !rd_sel_link && !rd_sel_batch && blend_busy;
+wire        rd_sel_blend = !rd_sel_control && !rd_sel_link && !rd_sel_batch &&
+                           !rd_sel_fill_batch && blend_busy;
 wire        rd_sel_blend64 = rd_sel_blend && blend_rd64_en;
 // SDR-003 (step 5a): sdram_loader's fill side is a rd64-only client (it
 // never uses the 32-bit rd/rd_addr path at all), given lowest priority
@@ -566,12 +602,13 @@ wire        rd_sel_blend64 = rd_sel_blend && blend_rd64_en;
 // rd64_valid, and if the mux fell through then, adapter_rd64_valid/data
 // would be silently misrouted or dropped for that response.
 wire        rd_sel_loader64 = !rd_sel_control && !rd_sel_link && !rd_sel_batch &&
-                              !rd_sel_blend && loader_rd64_active;
+                              !rd_sel_fill_batch && !rd_sel_blend && loader_rd64_active;
 wire        rd_sel_copy = !rd_sel_control && !rd_sel_link && !rd_sel_batch &&
-                          !rd_sel_blend && !rd_sel_loader64;
+                          !rd_sel_fill_batch && !rd_sel_blend && !rd_sel_loader64;
 wire [31:0] adapter_rd_addr = rd_sel_control ? control_rd_addr :
                               rd_sel_link ? link_rd_addr :
-                              rd_sel_batch ? batch_rd_addr : copy_rd_addr;
+                              rd_sel_batch ? batch_rd_addr :
+                              rd_sel_fill_batch ? fill_batch_rd_addr : copy_rd_addr;
 wire [31:0] adapter_rd64_addr = rd_sel_batch64 ? batch_rd64_addr :
                                 rd_sel_blend64 ? blend_rd64_addr :
                                 rd_sel_loader64 ? loader_rd64_addr : 32'b0;
@@ -580,7 +617,8 @@ wire [7:0]  adapter_rd64_len = rd_sel_batch64 ? batch_rd64_len :
                                rd_sel_loader64 ? loader_rd64_len : 8'd1;
 wire        adapter_rd_en   = rd_sel_control ? control_rd_en :
                               rd_sel_link ? link_rd_en :
-                              (rd_sel_batch ? batch_rd_en : copy_rd_en);
+                              rd_sel_batch ? batch_rd_en :
+                              rd_sel_fill_batch ? fill_batch_rd_en : copy_rd_en;
 wire        adapter_rd64_en = rd_sel_batch64 || rd_sel_blend64 || rd_sel_loader64;
 wire        adapter_rd_ready, adapter_rd_valid;
 wire [31:0] adapter_rd_data;
@@ -589,6 +627,7 @@ wire [63:0] adapter_rd64_data;
 assign link_rd_ready = rd_sel_link ? adapter_rd_ready : 1'b0;
 assign control_rd_ready = rd_sel_control ? adapter_rd_ready : 1'b0;
 assign batch_rd_ready = rd_sel_batch ? adapter_rd_ready : 1'b0;
+assign fill_batch_rd_ready = rd_sel_fill_batch ? adapter_rd_ready : 1'b0;
 assign batch_rd64_ready = rd_sel_batch64 ? adapter_rd64_ready : 1'b0;
 assign loader_rd64_ready = rd_sel_loader64 ? adapter_rd64_ready : 1'b0;
 assign blend_rd64_ready = rd_sel_blend64 ? adapter_rd64_ready : 1'b0;
@@ -599,6 +638,8 @@ assign link_rd_data  = adapter_rd_data;
 assign link_rd_valid = rd_sel_link ? adapter_rd_valid : 1'b0;
 assign batch_rd_data = adapter_rd_data;
 assign batch_rd_valid = adapter_rd_valid;
+assign fill_batch_rd_data = adapter_rd_data;
+assign fill_batch_rd_valid = rd_sel_fill_batch ? adapter_rd_valid : 1'b0;
 assign batch_rd64_data = adapter_rd64_data;
 assign batch_rd64_valid = rd_sel_batch ? adapter_rd64_valid : 1'b0;
 assign loader_rd64_data = adapter_rd64_data;

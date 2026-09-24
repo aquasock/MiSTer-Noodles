@@ -16,8 +16,8 @@ quartus_sta -t tools/report_timing.tcl
 quartus_sta -t tools/report_multicorner.tcl  # required post-fit timing gate
 ```
 
-`Noodles.qsf` pins the fitter settings used by both the accepted protocol 1.4
-seed-13 build and the timing-qualified protocol 1.5 candidate (see below).
+`Noodles.qsf` pins the fitter settings used by the accepted protocol 1.4 and
+protocol 1.5 seed-13 builds (see below).
 The Quartus project is named `Noodles`, so a full build writes
 `output_files/Noodles.rbf`.
 
@@ -64,10 +64,11 @@ and the recorded build date. Matching settings alone is not proof of
 reproducibility; compare the resulting RBF hash against
 [QUALIFICATION.md](QUALIFICATION.md).
 
-The current accepted source is protocol 1.5 with SDK 0.9 and the descriptor
-ring. Its seed-13 and seed-7 builds both pass all four timing corners; seed 13
-is the pinned hardware-accepted image. Use `SOURCE_DATE_EPOCH=1790121600` and
-compare against the protocol 1.5 seed-13 hash in
+The current source is the protocol 1.6 and SDK 0.10 fill-batch candidate.
+Protocol 1.5 with SDK 0.9 and the descriptor ring remains the accepted image.
+Its seed-13 and seed-7 builds both pass all four timing corners; seed 13 is the
+pinned hardware-accepted image. Use `SOURCE_DATE_EPOCH=1790121600` and compare
+accepted reproductions against the protocol 1.5 seed-13 hash in
 [QUALIFICATION.md](QUALIFICATION.md).
 
 ```sh
@@ -189,7 +190,7 @@ ssh root@<host> 'echo load_core /media/fat/pet/Noodles.rbf > /dev/MiSTer_cmd'
 ## Verification benches
 
 `make sim` runs the Verilator testbenches under `sim/` against every RTL
-engine (CMDQ/BLIT/LINK/DDRAM adapter/PRESENT/SPRITE_BATCH) with no Quartus
+engine (CMDQ/BLIT/LINK/DDRAM adapter/PRESENT/SPRITE_BATCH/FILL_BATCH) with no Quartus
 or hardware required; it is the fast, iterate-on-RTL check. It does not
 replace a full Quartus build's timing pass, and neither replaces hardware
 acceptance of a new bitstream.

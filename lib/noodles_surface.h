@@ -46,6 +46,11 @@ typedef struct {
 } noodles_surface_draw_t;
 
 typedef struct {
+    noodles_rect_t rect;
+    uint32_t color;
+} noodles_surface_fill_t;
+
+typedef struct {
     uint64_t key;
     noodles_rect_t source_rect;
     int32_t dst_x, dst_y;
@@ -81,6 +86,10 @@ int noodles_surface_read(noodles_surface_t *surface, const noodles_rect_t *rect,
 
 int noodles_surface_fill(noodles_surface_t *destination, const noodles_rect_t *rect,
                          uint32_t color);
+/* Up to 64 clipped opaque fills as one FILL_BATCH, into destination or,
+ * when it is NULL, the current back buffer. */
+int noodles_surface_fill_batch(noodles_link_t *link, noodles_surface_t *destination,
+                               const noodles_surface_fill_t *fills, size_t count);
 int noodles_surface_blend_fill(noodles_surface_t *destination, const noodles_rect_t *rect,
                                uint32_t color, uint32_t blend_mode);
 int noodles_surface_blit(noodles_surface_t *destination, int32_t dst_x, int32_t dst_y,

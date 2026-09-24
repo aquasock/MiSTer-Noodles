@@ -8,14 +8,15 @@
 extern "C" {
 #endif
 
-#define NOODLES_SDK_VERSION "0.9.0"
+#define NOODLES_SDK_VERSION "0.10.0"
 /* Newest protocol this SDK knows. Verified open accepts any 1.x core;
  * optional operations are gated by capability bits and minor revision
  * (LINK-016). */
-#define NOODLES_PROTOCOL_VERSION 0x00010005u
+#define NOODLES_PROTOCOL_VERSION 0x00010006u
 #define NOODLES_CAP_BLIT_BLEND (1u << 7)
 #define NOODLES_CAP_BLEND_FILL (1u << 8)
 #define NOODLES_CAP_DESCRIPTOR_RING (1u << 9)
+#define NOODLES_CAP_FILL_BATCH (1u << 10)
 
 /* Sprite descriptor flags (BLIT-006, BLIT-008). BLEND/MIRROR_X/MIRROR_Y make
  * a flagged draw: its colorkey field is then an RGBA modulation (R in bits
@@ -111,6 +112,10 @@ typedef struct {
 } noodles_sprite_descriptor_t;
 
 typedef struct {
+    uint32_t dst_addr, dst_pitch, width, height, color, reserved[3];
+} noodles_fill_descriptor_t;
+
+typedef struct {
     uint32_t width, height, pitch;
     uint32_t opcode_mask;
     uint32_t protocol_version;
@@ -172,6 +177,10 @@ int noodles_push_blend_fill(noodles_link_t *link, uint32_t dst_addr, uint16_t ds
                             uint32_t blend_mode);
 int noodles_push_sprite_batch(noodles_link_t *link,
                               const noodles_sprite_descriptor_t *descriptors, uint16_t count);
+/* FILL_BATCH: up to 64 ordered opaque fills using one owned descriptor
+ * table. Reserved words must be zero. ENOTSUP without protocol 1.6. */
+int noodles_push_fill_batch(noodles_link_t *link,
+                            const noodles_fill_descriptor_t *descriptors, uint16_t count);
 
 /* Board-SDRAM loader only: production sprites still read DDR3. */
 int noodles_push_load_sdram(noodles_link_t *link, uint32_t sdram_dst_addr,

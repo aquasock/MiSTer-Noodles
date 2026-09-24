@@ -68,6 +68,7 @@ LINK_CONTROL_SIM  := $(SIM_DIR)/link_control/Vlink_control_dut
 PRESENT_SIM       := $(SIM_DIR)/present/Vpresent_dut
 BATCH_CMDQ_SIM    := $(SIM_DIR)/cmdq_batch/Vcmdq_batch_dut
 SPRITE_BATCH_SIM  := $(SIM_DIR)/sprite_batch/Vengine_sprite_batch_dut
+FILL_BATCH_SIM    := $(SIM_DIR)/fill_batch/Vengine_fill_batch_dut
 SDRAM_ADAPTER_SIM := $(SIM_DIR)/sdram_adapter/Vsdram_adapter_dut
 SDRAM_LOADER_SIM := $(SIM_DIR)/sdram_loader/Vsdram_loader_dut
 SPRITE_BATCH_SDRAM_SIM := $(SIM_DIR)/sprite_batch_sdram/Vengine_sprite_batch_sdram_dut
@@ -132,7 +133,7 @@ $(HOSTLINKTEST): sim/test_noodles_link.c lib/noodles_link.c lib/noodles_surface.
 	$(HOSTCC) $(CPPFLAGS) $(CFLAGS) -o $@ sim/test_noodles_link.c lib/noodles_link.c lib/noodles_surface.c \
 		-Wl,--wrap=mmap -Wl,--wrap=munmap
 
-sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(DDRAM_INGRESS_SIM) $(BLIT_COPY_SIM) $(BLIT_COPY64_SIM) $(BLIT_COPY64_PIPELINE_SIM) $(LINK_RING_SIM) $(LINK_FENCE_SIM) $(LINK_CONTROL_SIM) $(PRESENT_SIM) $(BATCH_CMDQ_SIM) $(SPRITE_BATCH_SIM) $(SDRAM_ADAPTER_SIM) $(SDRAM_LOADER_SIM) $(SPRITE_BATCH_SDRAM_SIM) $(BLEND_PX_SIM) $(BLIT_BLEND_SIM)
+sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(DDRAM_INGRESS_SIM) $(BLIT_COPY_SIM) $(BLIT_COPY64_SIM) $(BLIT_COPY64_PIPELINE_SIM) $(LINK_RING_SIM) $(LINK_FENCE_SIM) $(LINK_CONTROL_SIM) $(PRESENT_SIM) $(BATCH_CMDQ_SIM) $(SPRITE_BATCH_SIM) $(FILL_BATCH_SIM) $(SDRAM_ADAPTER_SIM) $(SDRAM_LOADER_SIM) $(SPRITE_BATCH_SDRAM_SIM) $(BLEND_PX_SIM) $(BLIT_BLEND_SIM)
 	$(SOLID_FILL_SIM)
 	$(DDRAM_ADAPTER_SIM)
 	$(DDRAM_INGRESS_SIM)
@@ -145,6 +146,7 @@ sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(DDRAM_INGRESS_SIM) $(BLIT_COPY_SIM
 	$(PRESENT_SIM)
 	$(BATCH_CMDQ_SIM)
 	$(SPRITE_BATCH_SIM)
+	$(FILL_BATCH_SIM)
 	$(SDRAM_ADAPTER_SIM)
 	$(SDRAM_LOADER_SIM)
 	$(SPRITE_BATCH_SDRAM_SIM)
@@ -210,6 +212,12 @@ $(SPRITE_BATCH_SIM): rtl/sprite_batch.sv rtl/blit_copy64.sv $(BLEND_RTL) rtl/ddr
 	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module engine_sprite_batch_dut \
 		--Wall --Wno-fatal -Wno-DECLFILENAME -CFLAGS -std=c++17 \
 		rtl/sprite_batch.sv rtl/blit_copy64.sv $(BLEND_RTL) rtl/ddram_adapter.sv sim/engine_sprite_batch_dut.sv sim/tb_sprite_batch.cpp -o $(notdir $@)
+
+$(FILL_BATCH_SIM): rtl/fill_batch.sv rtl/blit.sv rtl/ddram_adapter.sv sim/engine_fill_batch_dut.sv sim/tb_fill_batch.cpp
+	@mkdir -p $(dir $@)
+	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module engine_fill_batch_dut \
+		--Wall --Wno-fatal -Wno-DECLFILENAME -CFLAGS -std=c++17 \
+		rtl/fill_batch.sv rtl/blit.sv rtl/ddram_adapter.sv sim/engine_fill_batch_dut.sv sim/tb_fill_batch.cpp -o $(notdir $@)
 
 $(LINK_RING_SIM): rtl/link_ring.sv rtl/ddram_adapter.sv sim/link_ring_dut.sv sim/tb_link_ring.cpp
 	@mkdir -p $(dir $@)

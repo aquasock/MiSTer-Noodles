@@ -31,6 +31,7 @@
 #define NOODLES_OP_LOAD_SDRAM 6u
 #define NOODLES_OP_BLIT_BLEND 7u
 #define NOODLES_OP_BLEND_FILL 8u
+#define NOODLES_OP_FILL_BATCH 10u
 #define NOODLES_FENCE_MASK 0x7fffffffu
 // Wait-loop sleep backoff. The minimum covers link_control's 1024-cycle poll
 // period plus a DDR3 round trip, so a liveness ping is normally answered by
@@ -486,6 +487,7 @@ static int valid_command(const noodles_link_t *link, const uint32_t *c, int allo
     case NOODLES_OP_PRESENT:
         return !(c[1] | c[2] | c[3] | c[4] | c[5] | c[6] | c[7]);
     case NOODLES_OP_SPRITE_BATCH:
+    case NOODLES_OP_FILL_BATCH:
         return descriptor_table_index(link, c[1], NULL) && c[3] >= 1 &&
             c[3] <= NOODLES_SPRITE_DESCRIPTOR_MAX && !(c[2] | c[4] | c[5] | c[6] | c[7]);
     case NOODLES_OP_LOAD_SDRAM: {
@@ -530,6 +532,16 @@ static int check_descriptors(const noodles_link_t *link, const noodles_sprite_de
               rect_end(d->src_addr, d->src_pitch, d->width, d->height) <= d->dst_addr))
             return EINVAL;
         if ((link->protocol & 0xffffu) < (explicit_mode ? 3u : 2u)) return ENOTSUP;
+    }
+    return 0;
+}
+
+static int check_fill_descriptors(const noodles_fill_descriptor_t *d, unsigned count,
+                                  int allow_managed) {
+    for (unsigned i = 0; i < count; ++i, ++d) {
+        if (d->reserved[0] || d->reserved[1] || d->reserved[2] ||
+            !valid_rect(d->dst_addr, d->dst_pitch, d->width, d->height, allow_managed))
+            return EINVAL;
     }
     return 0;
 }
@@ -582,7 +594,8 @@ static int push_command(noodles_link_t *link, const uint32_t command[8], int all
     }
     if (command[0] < 32 && !(link->capabilities & (1u << command[0])))
         return fail(ENOTSUP);
-    int is_batch = (command[0] & 0xffu) == NOODLES_OP_SPRITE_BATCH;
+    uint32_t op = command[0] & 0xffu;
+    int is_batch = op == NOODLES_OP_SPRITE_BATCH || op == NOODLES_OP_FILL_BATCH;
     unsigned table_index = 0;
     if (is_batch) {
         (void)descriptor_table_index(link, command[1], &table_index);
@@ -705,6 +718,37 @@ int noodles_link_push_sprite_descriptors_managed(
         NOODLES_OP_SPRITE_BATCH, table_address, 0, count, 0, 0, 0, 0,
     };
     return push_command(link, command, 1);
+}
+
+static int push_fill_descriptors(noodles_link_t *link,
+                                 const noodles_fill_descriptor_t *descriptors,
+                                 uint16_t count, int allow_managed) {
+    if (submission_ready(link) != 0) return -1;
+    if (!descriptors || count == 0 || count > NOODLES_SPRITE_DESCRIPTOR_MAX)
+        return fail(EINVAL);
+    if (!(link->capabilities & NOODLES_CAP_FILL_BATCH)) return fail(ENOTSUP);
+    int invalid = check_fill_descriptors(descriptors, count, allow_managed);
+    if (invalid) return fail(invalid);
+    if (!ring_has_space(link)) return -1;
+    unsigned table_index;
+    if (!find_descriptor_table(link, &table_index)) return -1;
+    uint32_t table_address = descriptor_table_address(table_index);
+    if (noodles_link_upload(link, table_address, descriptors,
+                            (size_t)count * sizeof(*descriptors)) != 0) return -1;
+    const uint32_t command[8] = {
+        NOODLES_OP_FILL_BATCH, table_address, 0, count, 0, 0, 0, 0,
+    };
+    return push_command(link, command, allow_managed);
+}
+
+int noodles_push_fill_batch(noodles_link_t *link,
+                            const noodles_fill_descriptor_t *descriptors, uint16_t count) {
+    return push_fill_descriptors(link, descriptors, count, 0);
+}
+
+int noodles_link_push_fill_descriptors_managed(
+    noodles_link_t *link, const noodles_fill_descriptor_t *descriptors, uint16_t count) {
+    return push_fill_descriptors(link, descriptors, count, 1);
 }
 
 int noodles_push_load_sdram(noodles_link_t *link, uint32_t sdram_dst_addr,

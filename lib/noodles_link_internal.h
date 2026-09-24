@@ -38,5 +38,7 @@ int noodles_link_check(noodles_link_t *link);
 int noodles_link_push_command_managed(noodles_link_t *link, const uint32_t command[8]);
 int noodles_link_push_sprite_descriptors_managed(
     noodles_link_t *link, const noodles_sprite_descriptor_t *descriptors, uint16_t count);
+int noodles_link_push_fill_descriptors_managed(
+    noodles_link_t *link, const noodles_fill_descriptor_t *descriptors, uint16_t count);
 void noodles_surface_link_cleanup(noodles_link_t *link);
 #endif
