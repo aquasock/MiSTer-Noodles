@@ -310,3 +310,54 @@ Scope double-buffered or multi-slot sprite descriptors as the next performance c
 - [x] Passed
 
 ---
+
+## 8 COMMIT Unreleased ??? 2026-09-24T09:49:02-07:00
+
+#### Coming From:
+
+Unreleased 042b62c
+
+#### Purpose:
+
+Remove the single sprite-descriptor-table submission bottleneck while preserving ordered execution and bounded host ownership.
+
+#### Outcome:
+
+The planned protocol 1.5 and SDK 0.9 change will add a capability-gated ring of 64 aligned 2 KiB descriptor tables, pass opcode 5 word 1 through CMDQ as the selected table base, and make `sprite_batch` fetch from that latched base. The SDK will choose free tables, track completion fences independently for typed and raw batch submissions, protect overlapping raw uploads, reserve the complete descriptor pool, and retain the existing single-table behavior when attached to protocol 1.4 hardware. Simulation will cover address decode, non-default table fetches, simultaneous in-flight ownership, wraparound, compatibility and non-destructive retry behavior.
+
+#### Next Steps:
+
+Implement and run the complete RTL, host, installed-consumer and sanitizer regressions, then perform the user-required isolated seed-13 fit and four-corner timing gate before publishing the RTL source. After the exact revision is reproduced and accepted on hardware, rebuild MiSTer-GemRB against SDK 0.9 and compare AR4000 batch stalls, drains, draw time and frame rate with the protocol 1.4 baseline.
+
+#### Files Modified:
+
+- Noodles.sv
+- README.md
+- docs/BUILD.md
+- docs/INTEGRATION.md
+- docs/QUALIFICATION.md
+- docs/SDK.md
+- lib/noodles.pc.in
+- lib/noodles_link.c
+- lib/noodles_link.h
+- lib/noodles_link_internal.h
+- rtl/cmdq.sv
+- rtl/link_control.sv
+- rtl/sprite_batch.sv
+- sim/cmdq_batch_dut.sv
+- sim/engine_sprite_batch_dut.sv
+- sim/engine_sprite_batch_sdram_dut.sv
+- sim/tb_cmdq_batch.cpp
+- sim/tb_link_control.cpp
+- sim/tb_sprite_batch.cpp
+- sim/tb_sprite_batch_sdram.cpp
+- sim/test_noodles_link.c
+- sim/test_noodles_sdk.c
+- sim/test_sdk_install.sh
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
