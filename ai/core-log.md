@@ -2687,3 +2687,32 @@ Keep the SVGA image classified as diagnostic rather than hardware-accepted or ti
 - [ ] Passed
 
 ---
+
+## 82 COMMIT Unreleased ??? 2026-09-23T19:06:02-07:00
+
+#### Coming From:
+
+Unreleased 37d21c9
+
+#### Purpose:
+
+Compare three additional fitter seeds for 800x600 timing closure without changing the 100MHz RTL or constraints.
+
+#### Outcome:
+
+The user approved three more seeds after the SVGA seed5 build passed the default corner but failed slow -40C setup at -0.137ns. The selected seeds are 4, 6 and 7, each using source 37d21c9 with only its SEED assignment overridden in an isolated build copy. The existing SVGA diagnostic remains loaded and the accepted 640x480 fallback remains untouched.
+
+#### Next Steps:
+
+Publish this proposal, run at most three concurrent builds with a twenty-minute timeout each and the same pinned date, thread count and packing settings, then apply detailed timing and the four-corner gate to every completed fit. Record all corners and hashes, select by passing every timing category rather than default setup alone, and retain the source-plus-seed provenance. Do not deploy or mark hardware acceptance as part of this seed comparison.
+
+#### Files Modified:
+
+None.
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
