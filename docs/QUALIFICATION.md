@@ -8,14 +8,32 @@ from. The build procedure itself is in [BUILD.md](BUILD.md).
 
 | # | Date | Build | Seed | RBF SHA-256 | Hardware status |
 |---|---|---|---:|---|---|
-| 6 | 2026-09-24 | **Current:** protocol 1.5 descriptor ring, 800x600 at 100MHz, four-corner timing pass | 13 | `b79037fc…dd5e56` | Exact pixels, audio, multi-batch stress and MiSTer-GemRB accepted |
+| 7 | 2026-09-24 | **Candidate:** protocol 1.6 fill batches, 800x600 at 100MHz | — | — | RTL/SDK regressions pass; timing and hardware pending |
+| 6 | 2026-09-24 | **Accepted:** protocol 1.5 descriptor ring, 800x600 at 100MHz, four-corner timing pass | 13 | `b79037fc…dd5e56` | Exact pixels, audio, multi-batch stress and MiSTer-GemRB accepted |
 | 5 | 2026-09-24 | Previous protocol 1.4, 800x600 at 100MHz, four-corner timing pass | 13 | `39c2efa8…7e008f` | Exact pixels, HDMI audio and MiSTer-GemRB accepted |
 | 4 | 2026-09-23 | Previous protocol 1.0 800x600 build, four-corner timing pass | 7 | `a020e304…43a47a` | User visually accepted; independent reproduction waived |
 | 3 | 2026-09-23 | 800x600 candidate, source `37d21c9`; cold-corner setup failure | 5 | `65ca7861…eb5587` | Diagnostic hardware run only; not qualified |
 | 2 | 2026-09-23 | Recovery fallback: 640x480, shared 100MHz clock, registered write ingress and slot enables | 5 | `b76fb924…247b8d` | Accepted; clean-commit reproduction verified |
 | 1 | 2026-09-22 | Historical: SPRITE_BATCH engine, 64-bit DDRAM path, PRESENT retirement-acknowledgement fix | 1 | `25f9d3a1…edba93` | Accepted -- see below |
 
-## Current protocol 1.5 descriptor-ring build (6)
+## Protocol 1.6 fill-batch candidate (7)
+
+Source `d1702b440022b0b83b72e05c72447827e5a02ef9` publishes protocol
+`0x00010006`, capability mask `0x000007fe` and SDK 0.10. Opcode 10 selects
+one of the existing 64 descriptor tables and executes up to 64 opaque fills
+in list order through the established fill engine, retiring the batch as one
+command. Sprite and fill batches share per-table fence ownership.
+
+The complete RTL suite, native host tests, installed native/C++/ARM consumer
+tests, ASan/UBSan runs and the ARMv7 static build passed before the fits. New
+coverage verifies opcode decode and retirement, all 64 descriptors with exact
+pixels and bus stalls, shared sprite/fill table ownership, reserved-word and
+capability rejection, clipping, and a batch containing fully clipped entries.
+The fill engine test completed 64 descriptors with 320 descriptor reads and
+252 pixel writes in 2,429 cycles. Timing, RBF identity and hardware validation
+remain pending.
+
+## Accepted protocol 1.5 descriptor-ring build (6)
 
 Source `513f2182b3b0c156c0bd8644e06678cdef0b5f14` publishes protocol
 `0x00010005`, capability mask `0x000003fe` and SDK 0.9. Opcode 5 can select

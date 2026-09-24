@@ -360,7 +360,7 @@ Repeat AR4000 once with statistics disabled, then capture a spell-heavy interval
 
 ---
 
-## 9 COMMIT Unreleased ??? 2026-09-24T13:44:40-07:00
+## 9 COMMIT Unreleased d1702b4 2026-09-24T13:44:40-07:00
 
 #### Coming From:
 
@@ -372,22 +372,22 @@ Replace the measured per-rectangle solid-fill submission bottleneck with ordered
 
 #### Outcome:
 
-Protocol 1.6 and SDK 0.10 will add a capability-gated `FILL_BATCH` operation that reuses the protocol-1.5 descriptor-table ring and fence ownership, sequences up to 64 validated opaque fills through the existing fill engine, and retains every earlier scalar operation for older consumers. The SDL consumer will buffer consecutive opaque fills while flushing at draw, blend, synchronization, target and presentation boundaries so command order remains exact.
+Source `d1702b4` publishes protocol 1.6 and SDK 0.10 with a capability-gated `FILL_BATCH` operation that reuses the protocol-1.5 descriptor-table ring and fence ownership, sequences up to 64 validated opaque fills through the existing fill engine, and retains every earlier scalar operation for older consumers. The complete RTL suite, native host tests, installed native/C++/ARM consumer tests, ASan/UBSan and ARMv7 static builds pass; coverage includes exact pixels for all 64 descriptors, bus stalls, shared sprite/fill ownership, clipping and invalid-input rejection. Quartus timing, hardware diagnostics and the SDL consumer remain pending.
 
 #### Next Steps:
 
-Implement and exhaustively simulate command decode, table selection, descriptor execution, ownership, clipping, ring pressure and mixed fill-draw ordering; run host, sanitizer, installed-SDK and consumer diagnostics; then perform exactly two Quartus fits using seeds 13 and 7, deploy the stronger passing image, repeat exact-pixel and HDMI-audio hardware checks, and compare the same GemRB combat workload against its measured 11.5-11.9ms per-frame fill-submission baseline.
+Pin MiSTer-GemRB to source `d1702b4`, buffer consecutive opaque fills while preserving every ordering boundary, and pass its exact-pixel diagnostics. Then perform exactly two Quartus fits using seeds 13 and 7, deploy the stronger passing image, repeat exact-pixel and HDMI-audio hardware checks, and compare the same GemRB combat workload against its measured 11.5-11.9ms per-frame fill-submission baseline.
 
 #### Files Modified:
 
 - Makefile
-- Noodles.qsf
 - Noodles.sv
 - README.md
 - docs/BUILD.md
 - docs/INTEGRATION.md
 - docs/QUALIFICATION.md
 - docs/SDK.md
+- files.qip
 - lib/noodles.pc.in
 - lib/noodles_link.c
 - lib/noodles_link.h
@@ -399,8 +399,12 @@ Implement and exhaustively simulate command decode, table selection, descriptor 
 - rtl/link_control.sv
 - sim/cmdq_batch_dut.sv
 - sim/engine_fill_batch_dut.sv
+- sim/engine_copy_dut.sv
+- sim/engine_ddram_dut.sv
+- sim/engine_dut.sv
 - sim/tb_cmdq_batch.cpp
 - sim/tb_fill_batch.cpp
+- sim/tb_link_control.cpp
 - sim/test_noodles_link.c
 - sim/test_noodles_sdk.c
 - sim/test_sdk_install.sh
