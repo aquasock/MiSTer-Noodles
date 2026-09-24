@@ -230,7 +230,7 @@ Use SDK 0.7 as the baseline for direct display-target integrations. The GemRB wo
 
 ---
 
-## 6 COMMIT Unreleased ??? 2026-09-24T08:29:17-07:00
+## 6 COMMIT Unreleased 2dea6a1 2026-09-24T08:29:17-07:00
 
 #### Coming From:
 
@@ -242,15 +242,16 @@ Accelerate ordered solid-colour blended rectangles and qualify Linux ALSA audio 
 
 #### Outcome:
 
-The planned protocol 1.4 operation will blend a constant RGBA source over a clipped destination rectangle with an explicit SDL-compatible blend mode, reusing the existing destination reader, blend lanes and ordered command queue while omitting source-memory reads. SDK 0.8 will expose raw, managed-surface and current-back-buffer helpers with capability gating and validation. The RBF already synthesizes the MiSTer ALSA reader and mixer, and a paced 48 kHz stereo tone sent through `/dev/MrAudio` was consumed completely and heard over HDMI, so the new image will retain that path and repeat the audio test rather than changing the framework's audio implementation.
+Source `2dea6a1` publishes protocol 1.4 and SDK 0.8 with opcode 8 `BLEND_FILL`, which clips and blends a constant RGBA source through the existing explicit SDL-compatible modes, reads only the destination and preserves command ordering. Raw, managed-surface and current-back-buffer helpers validate the operation and gate it on capability bit 8; the final correction initializes constant-source modulation to full intensity. Simulation passed 5000 randomized rectangles with stalls and alignment variation, a destination-read-count check, 89063424 blend vectors, the complete RTL suite, host and installed-consumer tests and ASan/UBSan. The required isolated seed-13 fit and four-corner gate passed before publication. Three clean builds from the exact source then gave slow -40C setup of -0.064ns for seed 5, -0.009ns for seed 7 and +0.250ns for seed 13; seed 13 passed every corner with worst hold +0.108ns, used 14687 ALMs, 18983 registers, 367668 memory bits and 60 DSP blocks, and reproduced the isolated RBF byte for byte with SHA256 `39c2efa8b08164eb3daad2d5b62ea6961152727b1f92886f5c4a329d527e008f`. On hardware it reported protocol `0x00010004` and capability mask `0x1fe`; 10 existing blend cases covering 24671 pixels, seven blended-fill cases covering 10607 pixels and 576 ordered batched draws covering 270574 pixels were bit-exact with clipping and surrounding pixels preserved. A paced 384000-byte 48 kHz stereo tone reached `/dev/MrAudio` completely and the user heard it over HDMI. MiSTer-GemRB source `7eb7efd` then passed its exact-pixel SDL diagnostic with hash `64d5728e`, its SDL audio tone drained, the user heard menu music, and the Throne of Bhaal AR4000 run reached combat and the game-over video without a renderer fault. Hardware blended fills replaced all measured CPU blended fills and readbacks, halving comparable command-queue time from 45.6-47.7ms to 24.1-26.5ms per frame; settled combat reached 13.93fps and the game-over video 19.8fps.
 
 #### Next Steps:
 
-Implement and exhaustively test the solid-source mode and opcode decode, extend SDK validation and exact-pixel tests, run the complete host and RTL suites, then perform the required isolated local fit and four-corner timing gate before publishing any RTL commit. Build the pinned seed only after the source is published, deploy it, verify protocol and exact pixels, repeat the HDMI tone test and measure the same GemRB AR4000 workload.
+Open a separate approved cycle to pin seed 13 in `Noodles.qsf`, refresh the older seed-7 qualification, build and integration documentation, and reproduce the pinned revision before treating it as the default distributable image. After that, reduce the remaining sprite-batch drains with bounded descriptor buffering and use the GemRB workload to prioritize scaling and additional 2D primitives shared by VCMI, OpenRCT2, OpenTTD and Augustus.
 
 #### Files Modified:
 
 - Noodles.sv
+- lib/noodles.pc.in
 - rtl/blit_blend.sv
 - rtl/cmdq.sv
 - rtl/link_control.sv
@@ -260,14 +261,19 @@ Implement and exhaustively test the solid-source mode and opcode decode, extend 
 - lib/noodles_surface.h
 - sim/test_noodles_link.c
 - sim/test_noodles_sdk.c
+- sim/test_sdk_install.sh
+- sim/cmdq_batch_dut.sv
+- sim/engine_blend_dut.sv
+- sim/engine_sprite_batch_dut.sv
 - sim/tb_blit_blend.cpp
+- sim/tb_cmdq_batch.cpp
+- sim/tb_link_control.cpp
 - docs/INTEGRATION.md
 - docs/SDK.md
-- README.md
 
 #### Status:
 
-- [ ] Built
-- [ ] Passed
+- [x] Built
+- [x] Passed
 
 ---
