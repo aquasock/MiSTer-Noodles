@@ -229,3 +229,45 @@ Use SDK 0.7 as the baseline for direct display-target integrations. The GemRB wo
 - [x] Passed
 
 ---
+
+## 6 COMMIT Unreleased ??? 2026-09-24T08:29:17-07:00
+
+#### Coming From:
+
+Unreleased 0df688d
+
+#### Purpose:
+
+Accelerate ordered solid-colour blended rectangles and qualify Linux ALSA audio in the same new RBF cycle.
+
+#### Outcome:
+
+The planned protocol 1.4 operation will blend a constant RGBA source over a clipped destination rectangle with an explicit SDL-compatible blend mode, reusing the existing destination reader, blend lanes and ordered command queue while omitting source-memory reads. SDK 0.8 will expose raw, managed-surface and current-back-buffer helpers with capability gating and validation. The RBF already synthesizes the MiSTer ALSA reader and mixer, and a paced 48 kHz stereo tone sent through `/dev/MrAudio` was consumed completely and heard over HDMI, so the new image will retain that path and repeat the audio test rather than changing the framework's audio implementation.
+
+#### Next Steps:
+
+Implement and exhaustively test the solid-source mode and opcode decode, extend SDK validation and exact-pixel tests, run the complete host and RTL suites, then perform the required isolated local fit and four-corner timing gate before publishing any RTL commit. Build the pinned seed only after the source is published, deploy it, verify protocol and exact pixels, repeat the HDMI tone test and measure the same GemRB AR4000 workload.
+
+#### Files Modified:
+
+- Noodles.sv
+- rtl/blit_blend.sv
+- rtl/cmdq.sv
+- rtl/link_control.sv
+- lib/noodles_link.c
+- lib/noodles_link.h
+- lib/noodles_surface.c
+- lib/noodles_surface.h
+- sim/test_noodles_link.c
+- sim/test_noodles_sdk.c
+- sim/tb_blit_blend.cpp
+- docs/INTEGRATION.md
+- docs/SDK.md
+- README.md
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
