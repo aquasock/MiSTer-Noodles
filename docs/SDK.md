@@ -163,3 +163,25 @@ they print the legacy attachment assumption instead of claiming detection.
 
 No SDL code, runtime resolution switch, capability negotiation, texture
 allocator, automatic recovery or new FPGA drawing operations are included.
+
+## Stage-2A hardware execution
+
+Source `775405d` was exercised on the accepted SVGA seed7 core without
+reloading or rebuilding the FPGA. The independently installed ARM consumer
+ran twice in succession, reporting the unverified 800x600/3200-byte-pitch
+contract and completing fill/present/close both times. The migrated stress
+tool completed 227 frames in 15 seconds (15.1fps) with 256 sprites, four
+batches and 128x128 source art. Short three-second clear/present and
+present-only runs reported 60.5fps and 60.3fps respectively. Every command
+exited successfully, and the session marker was clean afterward.
+
+FTP readback verified these separately named binaries under `/media/fat/pet`:
+
+| Binary | SHA256 |
+|---|---|
+| `sdk-smoke-2a` (installed ARM consumer) | `c05b8886bd177d7ef89d641dbfbdbe4f183f26f56f0b2fedd96d4fd0d79fec67` |
+| `stress-demo-sdk` | `16e94b09f79dcca427a314758f6556f9219822f106e371412c94f9671e995b72` |
+
+These are host execution results, not a new visual acceptance or exhaustive
+pixel comparison. Timeout, crash-recovery and competing-process cases are
+covered by the mocked host regression; no reset was induced on the device.
