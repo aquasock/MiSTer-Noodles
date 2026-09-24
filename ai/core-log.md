@@ -142,7 +142,7 @@ Close the remaining slow -40C setup paths in `blend_walk` request formation, `bl
 
 ---
 
-## 4 COMMIT Unreleased ??? 2026-09-23T23:28:23-07:00
+## 4 COMMIT Unreleased 36a2986 2026-09-23T23:28:23-07:00
 
 #### Coming From:
 
@@ -154,11 +154,11 @@ Close the remaining slow-corner setup paths and add a factor-based blend-mode un
 
 #### Outcome:
 
-Planned, not yet implemented. The timing work splits `blend_walk` request formation into registered prepare and commit steps, registers `blit_copy64`'s per-entry destination address arithmetic and registers `link_control`'s read request. A new reference record will add descriptor flag bit 4, selecting a blend mode encoded in flag bits 31:8: SDL 2.32.10's software ADD, MOD and MUL, bit-exact including MUL's single rounding over a two-product sum, computed exactly as (x * 131587) >> 25 for x up to 130050, and composed modes with SDL's ten blend factors and five operations for colour and alpha, which SDL's software renderer lacks. For composed modes the project defines its own exact 8-bit arithmetic: each term is floor(value * factor / 255), the operation combines the terms and the result clamps to 0 to 255, while minimum and maximum compare raw values and ignore the factors. This covers GemRB's additive, modulate, multiply, glow and wall-occlusion stencil modes. The blend stage of each pixel lane becomes one general two-product, operation and clamp unit reusing the existing multipliers, published as protocol 1.3, with SDK 0.6 carrying modes in SDL's own factor and operation numbering.
+Reference records BLIT-009 and LINK-014, superseding LINK-013, add descriptor flag bit 4 selecting an explicit blend mode in flag bits 31:8 with SDL 2.32.10's blend factor and operation numbering and a single-rounding bit, published as protocol 1.3. SDL's software BLEND, NONE, ADD, MOD and MUL are exact presets, confirmed against SDL's literal code on 83.9M checks; composed modes, which SDL's software renderer lacks, use the project-defined 8-bit arithmetic of truncating per-term products, the operation and a 0 to 255 clamp. Each blend lane is now one modulation, factor, two-product, operation and clamp unit with 7-cycle latency, and single rounding needs no divider because D(Ps + Pd) equals D(Ps) + D(Pd) plus one when the two remainders reach 255; the lane matched the C model on 89.1M vectors covering every factor and operation combination. Timing work gave `blend_walk` registered burst preparation, `blit_copy64` running source and destination addresses with a precomputed row end, cycle-identical in its tests, and `link_control` a registered read request. SDK 0.6 adds the mode constants, SDL presets including GemRB's wall-occlusion stencil mode, validation and protocol 1.3 gating. Following the user's new rule, a local seed-13 fit and four-corner gate passed before publishing, with worst setup +0.150ns. Commit `e580544` omitted `Noodles.sv`, which `36a2986` added immediately; the published RTL then matched the checked tree. Clean builds of `36a2986` passed at every corner for seed 7 (worst setup +0.168ns, RBF SHA256 `18effcd119329a578569ccf62cf2cd9bc56469a79cfaf7dae2dd2747eaa81185`, 14,663 ALMs, 60 of 112 DSP blocks) and seed 13, whose RBF was byte-identical to the local build, while seed 5 failed at -0.292ns on a `sprite_batch` descriptor-state to `blit_copy64` row-counter path. Seed 7, the QSF's pinned seed, was deployed as `Noodles_modes_seed7.rbf` with hash-verified `-modes` tools and reported protocol 0x00010003. Hardware readback was bit-exact for 10 single-command cases and 576 batched draws, 298 of them flagged with random explicit modes; blending measured 66.18 Mpixel/s, `blit-bench` 75.72, 77.56 and 78.00 Mpixel/s, the 256-sprite workload 15.1fps and the tile cache 60.2fps. Host commit `ebb7c0c` let the demo's wall-occlusion scene use one mode, which ran at about 31fps for BLEND, ADD and MUL each; the rate reflects per-arrow batches waiting on the single descriptor table. The user judged all three modes functionally correct and asked about faint squares under MUL, which are SDL-exact: the demo sprite keeps colour in its transparent pixels, SDL's MUL brightens the destination there, and the stencil zeroes only alpha.
 
 #### Next Steps:
 
-Verify built-in modes exhaustively per channel and composed modes over exhaustive factor and operation tables plus random compositions, extend the batch tests, pass all simulation and host regressions, run a local fit and four-corner gate before publishing, then build three seeds, deploy, check hardware readback and benchmarks, and obtain user visual acceptance of a demo showing additive glow and stencil occlusion.
+The timing-qualified seed-7 blend-mode image is loaded on the MiSTer at 10.10.0.22, with the accepted `Noodles_2b_fix_seed13.rbf` and earlier diagnostics preserved beside it; the user has not yet decided whether the demo sprite should use black transparent pixels to show MUL without squares. Before publishing any RTL change, run one local fit and four-corner gate on an isolated copy of the working tree, as the user requires. Open follow-ups are the seed-5 path from `sprite_batch` descriptor fetch into `blit_copy64`'s row counter, double-buffering the SDK descriptor table so consecutive batches do not wait on each other, and the remaining GemRB needs: blended rectangle fill, lines, points and polygons, scaled copy for zoom, the SDL2 render driver and core audio. No release has been cut; README and CHANGELOG updates belong to the Releasing workflow.
 
 #### Files Modified:
 
@@ -169,22 +169,28 @@ Verify built-in modes exhaustively per channel and composed modes over exhaustiv
 - rtl/blit_copy64.sv
 - rtl/link_control.sv
 - rtl/sprite_batch.sv
+- Makefile
 - sim/blend_ref.h
+- sim/engine_blend_dut.sv
+- sim/engine_sprite_batch_dut.sv
+- sim/engine_sprite_batch_sdram_dut.sv
 - sim/tb_blend_px.cpp
 - sim/tb_blit_blend.cpp
+- sim/tb_link_control.cpp
 - sim/tb_sprite_batch.cpp
+- sim/test_noodles_sdk.c
+- sim/test_sdk_install.sh
+- lib/noodles.pc.in
 - lib/noodles_link.c
 - lib/noodles_link.h
 - lib/noodles_surface.c
-- lib/noodles_surface.h
-- sim/test_noodles_sdk.c
 - tools/blend_demo.c
 - docs/INTEGRATION.md
 - docs/SDK.md
 
 #### Status:
 
-- [ ] Built
-- [ ] Passed
+- [x] Built
+- [x] Passed
 
 ---
