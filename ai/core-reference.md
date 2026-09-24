@@ -103,7 +103,8 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 | Why doesn't the engine have a third (noise-fill) op? | BLIT component records | BLIT-005 |
 | How do I composite a sprite over a background without a bounding box? | BLIT component records | BLIT-006 |
 | How does alpha blending work, and what exact arithmetic does it use? | BLIT component records | BLIT-007 |
-| Which protocol version and capability bits does the core publish? | LINK component records | LINK-012 |
+| Which protocol version and capability bits does the core publish? | LINK component records | LINK-013 |
+| How do I batch blended, mirrored or tinted sprites? | BLIT component records | BLIT-008 |
 | What's the real host-side API for pushing commands, and does it tell me when a draw finished? | LINK component records | LINK-004 |
 | How does the host know a specific command has actually finished, not just been dispatched? | LINK component records | LINK-005 |
 | How does real image/asset data (not a SOLID_FILL rect) get into a surface? | LINK component records | LINK-006 |
@@ -145,7 +146,9 @@ BLIT-004: "SOLID_FILL's color field is packed R | (G<<8) | (B<<16) -- R in the L
 BLIT-005: "BLIT-001's milestone met with 2 ops (SOLID_FILL, BLIT_COPY) -- the Menu-static noise-fill op dropped after abandoning the menu-integration concept, not deferred"
 BLIT-006: "BLIT_COPY_KEY (opcode 3): colorkey transparency for sprite compositing -- skips source pixels matching a caller-chosen key, same blit_copy.sv engine as plain BLIT_COPY"
 BLIT-007: "BLIT_BLEND (opcode 7): straight-alpha source-over with 8-bit alpha modulation in word 5, bit-exact to SDL 2.32.10's generic truncating /255 blend path"
-LINK-012: "Protocol 1.1 (0x00010001) adds capability bit 7 for BLIT_BLEND; minor revisions are additive; supersedes LINK-011's fixed version/mask values only"
+LINK-012: "SUPERSEDED by LINK-013 -- protocol 1.1 (0x00010001) added capability bit 7 for BLIT_BLEND; minor revisions are additive"
+BLIT-008: "SPRITE_BATCH descriptor flags: bit 1 blend, bit 2 mirror-x, bit 3 mirror-y; flagged descriptors carry RGBA modulation in word 4 with SDL 2.32.10 generic-path arithmetic"
+LINK-013: "Protocol 1.2 (0x00010002) enables BLIT-008 descriptor flags; capability mask unchanged"
 LINK-002: "64-slot ring buffer at phys 0x30020000 (header: write_ptr +0, read_ptr +8) / 0x30021000 (slots), reusing CMDQ-001's 32-byte slot format"
 LINK-003: "link_ring.sv polls write_ptr only while CMDQ is idle (cmd_ready), fetches via 8 sequential reads, dispatches to CMDQ, writes back read_ptr"
 LINK-004: "lib/noodles_link.{h,c} is the real host-side API (open/close, noodles_rgb, push_command/solid_fill/blit_copy) -- fire-and-forget, no completion signal by deliberate choice"
@@ -625,11 +628,30 @@ OUT-005: "OUT-004's single-fresh-vblank-edge PRESENT margin is not reliably suff
   kind: INTERFACE
   component_id: LINK
   title: "Protocol 1.1 adds the BLIT_BLEND capability"
-  status: DECIDED
+  status: SUPERSEDED
   decided_date: 2026-09-23
   decision: "A core implementing BLIT-007 publishes protocol 0x00010001 and opcode capability mask 0x000000fe, where bit N advertises opcode N and bit 7 is BLIT_BLEND. Every other LINK-011 control word, address, claim, challenge and disarm rule is unchanged. Minor protocol revisions are additive: a host accepting protocol major 1 requires minor at least 0, requires capability bits 1 through 6, and enables optional operations only when their capability bit is set."
   consequence: "The SDK attaches to protocol 1.0 and 1.1 cores alike and fails a blend request on a core without capability bit 7 with ENOTSUP before publishing anything. A future major version, not a minor one, is needed for any incompatible control-block change."
   supersedes: "LINK-011"
+
+- record_id: BLIT-008
+  kind: INTERFACE
+  component_id: BLIT
+  title: "SPRITE_BATCH descriptor draw flags: blend, mirror and RGBA modulation"
+  status: DECIDED
+  decided_date: 2026-09-23
+  decision: "Descriptor word 7 (flags) bit 0 is colour keying on the copy path (BLIT-006), bit 1 is straight-alpha blending, bit 2 mirrors horizontally and bit 3 mirrors vertically; bits 31:4 are zero. A descriptor with any of bits 1-3 set is a flagged draw: bit 0 must then be zero and word 4 is an RGBA modulation M with R in bits 7:0, G 15:8, B 23:16 and A 31:24. For destination pixel (x, y) of a width x height flagged draw the source pixel is (mirror-x ? width-1-x : x, mirror-y ? height-1-y : y) of the source rectangle. With D(x) = floor(x / 255): c = D(srcC * MC) for R, G, B and a = D(srcA * MA). Without bit 1 the destination becomes (a, c) for every pixel, SDL 2.32.10's generic SDL_BLENDMODE_NONE with colour and alpha modulation. With bit 1 it becomes outC = D(c * a) + D((255 - a) * dstC) and outA = a + D((255 - a) * dstA), the SDL_COPY_BLEND path of BLIT-007 with colour modulation first. Descriptors execute in list order and each observes every earlier descriptor's completed writes; source and destination rectangles of one descriptor must not overlap."
+  consequence: "A BLIT_BLEND command equals a flagged draw with bit 1 and M = (255, 255, 255, m). Modulation 0xffffffff leaves pixels unmodified, so plain mirrored copies and unmodulated blends need no special cases. Unflagged descriptors keep their existing copy and colour-key behaviour. Additive, modulate, multiply and custom blend modes, destination scaling and blending into the colour-key path remain outside this record."
+
+- record_id: LINK-013
+  kind: INTERFACE
+  component_id: LINK
+  title: "Protocol 1.2 adds BLIT-008 descriptor flags"
+  status: DECIDED
+  decided_date: 2026-09-23
+  decision: "A core implementing BLIT-008 publishes protocol 0x00010002 with the unchanged capability mask 0x000000fe. Descriptor flag bits 1-3 are defined only on protocol 1.2 and later; every other LINK-012 rule is unchanged."
+  consequence: "Hosts gate flagged descriptors on protocol minor at least 2 and fail them with ENOTSUP otherwise, without publishing. Protocol 1.0 and 1.1 cores remain attachable for their existing operations."
+  supersedes: "LINK-012"
 
 ```yaml
 - record_id: "<COMPONENT>-<NNN>"
