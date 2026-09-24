@@ -9,14 +9,27 @@ int main(int argc, char **argv) {
     dut.blend_busy = 0; dut.blend_done = 0;
     for (int i = 0; i < 3; ++i) { dut.clk = 0; dut.eval(); dut.clk = 1; dut.eval(); }
     dut.reset = 0;
-    dut.cmd_data[0] = 5; dut.cmd_data[3] = 64; dut.cmd_valid = 1;
+    dut.cmd_data[0] = 5; dut.cmd_data[1] = 0x3002a000; dut.cmd_data[3] = 64;
+    dut.cmd_valid = 1;
     if (!dut.cmd_ready) return std::fprintf(stderr, "FAIL: batch cmd not ready\n"), 1;
     dut.clk = 0; dut.eval(); dut.clk = 1; dut.eval(); dut.cmd_valid = 0;
-    if (!dut.batch_start || dut.batch_count != 64)
-        return std::fprintf(stderr, "FAIL: batch decode start/count\n"), 1;
+    if (!dut.batch_start || dut.batch_base != 0x3002a000 || dut.batch_count != 64)
+        return std::fprintf(stderr, "FAIL: batch decode start/base/count\n"), 1;
     dut.batch_done = 1; dut.clk = 0; dut.eval(); dut.clk = 1; dut.eval();
     dut.batch_done = 0;
     if (!dut.cmd_ready) return std::fprintf(stderr, "FAIL: batch controller did not retire\n"), 1;
+
+    // Misaligned and out-of-pool bases are consumed as invalid raw commands
+    // without launching the batch engine.
+    const uint32_t invalid_bases[] = {0x30022004, 0x30021800, 0x30042000};
+    for (uint32_t base : invalid_bases) {
+        for (int i = 0; i < 8; ++i) dut.cmd_data[i] = 0;
+        dut.cmd_data[0] = 5; dut.cmd_data[1] = base; dut.cmd_data[3] = 1;
+        dut.cmd_valid = 1;
+        dut.clk = 0; dut.eval(); dut.clk = 1; dut.eval(); dut.cmd_valid = 0;
+        if (dut.batch_start)
+            return std::fprintf(stderr, "FAIL: invalid batch base 0x%08x launched\n", base), 1;
+    }
 
     // BLIT_BLEND (BLIT-007): copy geometry plus word 5 [7:0] modulation.
     for (int i = 0; i < 8; ++i) dut.cmd_data[i] = 0;

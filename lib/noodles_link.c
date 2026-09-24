@@ -19,6 +19,9 @@
 #define NOODLES_RING_SLOTS 64u
 #define NOODLES_SLOT_WORDS 8u
 #define NOODLES_MAP_SPAN 0x2000u  // header/control block and all 64 command slots
+#define NOODLES_DESCRIPTOR_POOL_END                                                   \
+    (NOODLES_SPRITE_DESCRIPTOR_ADDR +                                                \
+     NOODLES_SPRITE_DESCRIPTOR_TABLES * NOODLES_SPRITE_DESCRIPTOR_TABLE_BYTES)
 
 #define NOODLES_OP_SOLID_FILL 1u
 #define NOODLES_OP_BLIT_COPY 2u
@@ -419,8 +422,29 @@ static int overlaps_managed_arena(uint32_t address, uint64_t bytes) {
 static int valid_span(uint32_t address, uint64_t bytes, int allow_managed) {
     uint64_t end = (uint64_t)address + bytes;
     return bytes && address >= 0x30000000u && end <= 0x40000000ull &&
-        !(address < 0x30022800u && end > 0x30020000u) &&
+        !(address < NOODLES_DESCRIPTOR_POOL_END && end > 0x30020000u) &&
         (allow_managed || !overlaps_managed_arena(address, bytes));
+}
+
+static unsigned descriptor_table_count(const noodles_link_t *link) {
+    return (link->capabilities & NOODLES_CAP_DESCRIPTOR_RING) ?
+        NOODLES_SPRITE_DESCRIPTOR_TABLES : 1u;
+}
+
+static int descriptor_table_index(const noodles_link_t *link, uint32_t address,
+                                  unsigned *index) {
+    if (address < NOODLES_SPRITE_DESCRIPTOR_ADDR) return 0;
+    uint32_t offset = address - NOODLES_SPRITE_DESCRIPTOR_ADDR;
+    if (offset % NOODLES_SPRITE_DESCRIPTOR_TABLE_BYTES) return 0;
+    unsigned candidate = offset / NOODLES_SPRITE_DESCRIPTOR_TABLE_BYTES;
+    if (candidate >= descriptor_table_count(link)) return 0;
+    if (index) *index = candidate;
+    return 1;
+}
+
+static uint32_t descriptor_table_address(unsigned index) {
+    return NOODLES_SPRITE_DESCRIPTOR_ADDR +
+        index * NOODLES_SPRITE_DESCRIPTOR_TABLE_BYTES;
 }
 
 static int valid_rect(uint32_t address, uint32_t pitch, uint32_t width, uint32_t height,
@@ -438,7 +462,7 @@ static uint64_t rect_end(uint32_t address, uint32_t pitch, uint32_t width, uint3
 
 static int valid_mode(uint32_t f);
 
-static int valid_command(const uint32_t *c, int allow_managed) {
+static int valid_command(const noodles_link_t *link, const uint32_t *c, int allow_managed) {
     if (!c) return 0;
     switch (c[0]) {
     case NOODLES_OP_SOLID_FILL:
@@ -462,7 +486,7 @@ static int valid_command(const uint32_t *c, int allow_managed) {
     case NOODLES_OP_PRESENT:
         return !(c[1] | c[2] | c[3] | c[4] | c[5] | c[6] | c[7]);
     case NOODLES_OP_SPRITE_BATCH:
-        return c[1] == NOODLES_SPRITE_DESCRIPTOR_ADDR && c[3] >= 1 &&
+        return descriptor_table_index(link, c[1], NULL) && c[3] >= 1 &&
             c[3] <= NOODLES_SPRITE_DESCRIPTOR_MAX && !(c[2] | c[4] | c[5] | c[6] | c[7]);
     case NOODLES_OP_LOAD_SDRAM: {
         uint64_t length = ((uint64_t)c[5] + 1023) & ~1023ull;
@@ -510,21 +534,36 @@ static int check_descriptors(const noodles_link_t *link, const noodles_sprite_de
     return 0;
 }
 
-static int descriptors_available(noodles_link_t *link) {
-    if (link->batch_pending) {
+static int descriptor_available(noodles_link_t *link, unsigned index) {
+    uint64_t mask = UINT64_C(1) << index;
+    if (link->batch_pending & mask) {
         int complete;
         if (link->verified) {
-            if (noodles_link_poll(link, link->batch_fence, &complete) != 0) return 0;
+            if (noodles_link_poll(link, link->batch_fence[index], &complete) != 0) return 0;
         } else {
-            complete = noodles_link_fence_reached(link, link->batch_fence);
+            complete = noodles_link_fence_reached(link, link->batch_fence[index]);
         }
         if (!complete) {
             errno = EAGAIN;
             return 0;
         }
-        link->batch_pending = 0;
+        link->batch_pending &= ~mask;
     }
     return 1;
+}
+
+static int find_descriptor_table(noodles_link_t *link, unsigned *index) {
+    unsigned count = descriptor_table_count(link);
+    for (unsigned n = 0; n < count; ++n) {
+        unsigned candidate = (link->next_descriptor_table + n) % count;
+        if (descriptor_available(link, candidate)) {
+            *index = candidate;
+            return 1;
+        }
+        if (errno != EAGAIN) return 0;
+    }
+    errno = EAGAIN;
+    return 0;
 }
 
 static int ring_has_space(const noodles_link_t *link) {
@@ -537,17 +576,19 @@ static int ring_has_space(const noodles_link_t *link) {
 
 static int push_command(noodles_link_t *link, const uint32_t command[8], int allow_managed) {
     if (submission_ready(link) != 0) return -1;
-    if (!valid_command(command, allow_managed)) {
+    if (!valid_command(link, command, allow_managed)) {
         errno = EINVAL;
         return -1;
     }
     if (command[0] < 32 && !(link->capabilities & (1u << command[0])))
         return fail(ENOTSUP);
     int is_batch = (command[0] & 0xffu) == NOODLES_OP_SPRITE_BATCH;
-    // Reap completed ownership on every push, including long runs of non-batch work.
-    int available = descriptors_available(link);
-    if (!available && errno != EAGAIN) return -1;
-    if ((is_batch && !available) || !ring_has_space(link)) return -1;
+    unsigned table_index = 0;
+    if (is_batch) {
+        (void)descriptor_table_index(link, command[1], &table_index);
+        if (!descriptor_available(link, table_index)) return -1;
+    }
+    if (!ring_has_space(link)) return -1;
     uint32_t next_write_ptr = (link->write_ptr + 1) % NOODLES_RING_SLOTS;
 
     volatile uint32_t *slot = link->slots + link->write_ptr * NOODLES_SLOT_WORDS;
@@ -558,8 +599,11 @@ static int push_command(noodles_link_t *link, const uint32_t command[8], int all
     link->write_ptr = next_write_ptr;
     link->submitted += 1;
     if (is_batch) {
-        link->batch_fence = (link->done_baseline + link->submitted) & NOODLES_FENCE_MASK;
-        link->batch_pending = 1;
+        link->batch_fence[table_index] =
+            (link->done_baseline + link->submitted) & NOODLES_FENCE_MASK;
+        link->batch_pending |= UINT64_C(1) << table_index;
+        link->next_descriptor_table =
+            (table_index + 1) % descriptor_table_count(link);
     }
     if (command[0] == NOODLES_OP_PRESENT) {
         link->present_fence = noodles_link_last_fence(link);
@@ -630,11 +674,14 @@ int noodles_push_sprite_batch(noodles_link_t *link,
     }
     int invalid = check_descriptors(link, descriptors, count, 0);
     if (invalid) return fail(invalid);
-    if (!descriptors_available(link) || !ring_has_space(link)) return -1;
-    if (noodles_link_upload(link, NOODLES_SPRITE_DESCRIPTOR_ADDR, descriptors,
+    if (!ring_has_space(link)) return -1;
+    unsigned table_index;
+    if (!find_descriptor_table(link, &table_index)) return -1;
+    uint32_t table_address = descriptor_table_address(table_index);
+    if (noodles_link_upload(link, table_address, descriptors,
                              (size_t)count * sizeof(*descriptors)) != 0) return -1;
     const uint32_t command[8] = {
-        NOODLES_OP_SPRITE_BATCH, NOODLES_SPRITE_DESCRIPTOR_ADDR, 0, count, 0, 0, 0, 0,
+        NOODLES_OP_SPRITE_BATCH, table_address, 0, count, 0, 0, 0, 0,
     };
     return push_command(link, command, 0);
 }
@@ -648,11 +695,14 @@ int noodles_link_push_sprite_descriptors_managed(
     }
     int invalid = check_descriptors(link, descriptors, count, 1);
     if (invalid) return fail(invalid);
-    if (!descriptors_available(link) || !ring_has_space(link)) return -1;
-    if (noodles_link_upload(link, NOODLES_SPRITE_DESCRIPTOR_ADDR, descriptors,
+    if (!ring_has_space(link)) return -1;
+    unsigned table_index;
+    if (!find_descriptor_table(link, &table_index)) return -1;
+    uint32_t table_address = descriptor_table_address(table_index);
+    if (noodles_link_upload(link, table_address, descriptors,
                              (size_t)count * sizeof(*descriptors)) != 0) return -1;
     const uint32_t command[8] = {
-        NOODLES_OP_SPRITE_BATCH, NOODLES_SPRITE_DESCRIPTOR_ADDR, 0, count, 0, 0, 0, 0,
+        NOODLES_OP_SPRITE_BATCH, table_address, 0, count, 0, 0, 0, 0,
     };
     return push_command(link, command, 1);
 }
@@ -696,16 +746,24 @@ uint32_t noodles_link_back_buffer(const noodles_link_t *link) {
 int noodles_link_upload(noodles_link_t *link, uint32_t dst_addr, const void *data,
                          size_t size_bytes) {
     if (submission_ready(link) != 0) return -1;
-    const uint32_t descriptor_end = NOODLES_SPRITE_DESCRIPTOR_ADDR +
-        NOODLES_SPRITE_DESCRIPTOR_MAX * sizeof(noodles_sprite_descriptor_t);
-    if (size_bytes && dst_addr < descriptor_end &&
-        (dst_addr >= NOODLES_SPRITE_DESCRIPTOR_ADDR ||
-         size_bytes > NOODLES_SPRITE_DESCRIPTOR_ADDR - dst_addr) &&
-        !descriptors_available(link)) return -1;
+    if (!data || !size_bytes || size_bytes > UINT32_MAX) return fail(EINVAL);
     uint64_t end = (uint64_t)dst_addr + size_bytes;
-    int descriptor_upload = dst_addr >= NOODLES_SPRITE_DESCRIPTOR_ADDR && end <= descriptor_end;
-    if (!data || !size_bytes || size_bytes > UINT32_MAX ||
-        (!descriptor_upload && !valid_span(dst_addr, size_bytes, 0))) return fail(EINVAL);
+    uint64_t descriptor_end = (uint64_t)NOODLES_SPRITE_DESCRIPTOR_ADDR +
+        descriptor_table_count(link) * NOODLES_SPRITE_DESCRIPTOR_TABLE_BYTES;
+    int descriptor_upload = dst_addr >= NOODLES_SPRITE_DESCRIPTOR_ADDR &&
+        end <= descriptor_end;
+    uint64_t touch_start = dst_addr > NOODLES_SPRITE_DESCRIPTOR_ADDR ?
+        dst_addr : NOODLES_SPRITE_DESCRIPTOR_ADDR;
+    uint64_t touch_end = end < descriptor_end ? end : descriptor_end;
+    if (touch_start < touch_end) {
+        unsigned first = (unsigned)((touch_start - NOODLES_SPRITE_DESCRIPTOR_ADDR) /
+                                    NOODLES_SPRITE_DESCRIPTOR_TABLE_BYTES);
+        unsigned last = (unsigned)((touch_end - 1 - NOODLES_SPRITE_DESCRIPTOR_ADDR) /
+                                   NOODLES_SPRITE_DESCRIPTOR_TABLE_BYTES);
+        for (unsigned index = first; index <= last; ++index)
+            if (!descriptor_available(link, index)) return -1;
+    }
+    if (!descriptor_upload && !valid_span(dst_addr, size_bytes, 0)) return fail(EINVAL);
     long page = sysconf(_SC_PAGESIZE);
     if (page <= 0 || (page & (page - 1))) return fail(EIO);
     uint32_t aligned_addr = dst_addr & ~(uint32_t)(page - 1);

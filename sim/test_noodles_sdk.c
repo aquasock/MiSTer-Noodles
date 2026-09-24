@@ -16,7 +16,8 @@
 #include <unistd.h>
 
 static uint32_t memory[2048];
-static unsigned char descriptor_memory[4096];
+static unsigned char descriptor_memory[NOODLES_SPRITE_DESCRIPTOR_TABLE_BYTES *
+                                       NOODLES_SPRITE_DESCRIPTOR_TABLES];
 static unsigned char surface_memory[2 * 1024 * 1024];
 static unsigned char back_buffer_memory[2][2 * 1024 * 1024];
 static char lock_path[256];
@@ -53,10 +54,10 @@ void *__wrap_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t 
         assert(length == sizeof(memory));
         return memory;
     }
-    if (offset == 0x30022000) {
-        assert(length == sizeof(descriptor_memory));
-        return descriptor_memory;
-    }
+    if (offset >= NOODLES_SPRITE_DESCRIPTOR_ADDR &&
+        (uint64_t)offset + length <=
+            (uint64_t)NOODLES_SPRITE_DESCRIPTOR_ADDR + sizeof(descriptor_memory))
+        return descriptor_memory + (offset - NOODLES_SPRITE_DESCRIPTOR_ADDR);
     if (offset >= NOODLES_BUFFER_A_ADDR &&
         (uint64_t)offset + length <= NOODLES_BUFFER_A_ADDR + sizeof(back_buffer_memory[0]))
         return back_buffer_memory[0] + (offset - NOODLES_BUFFER_A_ADDR);
@@ -71,7 +72,8 @@ void *__wrap_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t 
 
 int __wrap_munmap(void *addr, size_t size) {
     assert((addr == memory && size == sizeof(memory)) ||
-           (addr == descriptor_memory && size == sizeof(descriptor_memory)) ||
+           ((unsigned char *)addr >= descriptor_memory &&
+            (unsigned char *)addr + size <= descriptor_memory + sizeof(descriptor_memory)) ||
            ((unsigned char *)addr >= back_buffer_memory[0] &&
             (unsigned char *)addr + size <= back_buffer_memory[0] + sizeof(back_buffer_memory[0])) ||
            ((unsigned char *)addr >= back_buffer_memory[1] &&
@@ -140,7 +142,7 @@ static void closed(noodles_link_t *device) {
 static void seed_identity(void) {
     memory[4] = 0x4e444c53u;
     memory[5] = NOODLES_PROTOCOL_VERSION;
-    memory[6] = 0x1fe;
+    memory[6] = 0x3fe;
     memory[7] = (800u << 16) | 600u;
     memory[8] = 3200;
     memory[16] = 0;
@@ -391,7 +393,7 @@ int main(void) {
     assert(memory[16] == 0x434c414du && control_active);
     assert(noodles_link_get_info(a, &info) == 0 && info.hardware_verified);
     assert(info.protocol_version == NOODLES_PROTOCOL_VERSION);
-    assert(info.opcode_mask == 0x1fe);
+    assert(info.opcode_mask == 0x3fe);
     assert(noodles_push_command(a, fill) == 0);
     memory[2] = memory[0];
     memory[3] = 1;
@@ -406,6 +408,31 @@ int main(void) {
     assert(sleeps == sleeps_after_confirmation && memory[12] == confirmed_sequence);
     closed(a);
     assert(!control_active && memory[16] == 0);
+
+    /* Protocol 1.5 typed batches upload into distinct tables and publish
+     * each selected base without waiting for the preceding batch. */
+    memory[0] = memory[2] = memory[3] = 0;
+    seed_identity();
+    memset(descriptor_memory, 0, sizeof(descriptor_memory));
+    a = open_verified();
+    noodles_sprite_descriptor_t queued = {
+        NOODLES_BUFFER_B_ADDR, 3200, 1, 1, 0x11111111u, 0x31400000u, 4, 0};
+    assert(noodles_push_sprite_batch(a, &queued, 1) == 0);
+    queued.colorkey = 0x22222222u;
+    assert(noodles_push_sprite_batch(a, &queued, 1) == 0);
+    assert(memory[1024 + 1] == NOODLES_SPRITE_DESCRIPTOR_ADDR);
+    assert(memory[1024 + 8 + 1] == NOODLES_SPRITE_DESCRIPTOR_ADDR +
+                                         NOODLES_SPRITE_DESCRIPTOR_TABLE_BYTES);
+    const noodles_sprite_descriptor_t *table0 =
+        (const noodles_sprite_descriptor_t *)descriptor_memory;
+    const noodles_sprite_descriptor_t *table1 =
+        (const noodles_sprite_descriptor_t *)(descriptor_memory +
+                                               NOODLES_SPRITE_DESCRIPTOR_TABLE_BYTES);
+    assert(table0[0].colorkey == 0x11111111u && table1[0].colorkey == 0x22222222u);
+    memory[2] = memory[0];
+    memory[3] = 2;
+    assert(noodles_link_drain(a, 10) == 0);
+    closed(a);
 
     /* Protocol 1.0 cores remain attachable; BLIT_BLEND is refused without
      * publishing anything when capability bit 7 is absent (LINK-012). */

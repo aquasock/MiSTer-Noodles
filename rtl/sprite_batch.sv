@@ -1,8 +1,9 @@
-// Fixed-DDRAM sprite descriptor sequencer.  This first version is a generic
+// DDRAM sprite descriptor sequencer.  This is a generic
 // sequential executor, not a parallel or pipelined multi-sprite compositor:
 // it reduces command-ring traffic but still runs one existing copy at a time.
-// The 64 descriptors occupy exactly 2 KiB at 0x30022000, immediately after
-// the 0x30021000-0x300218ff command-slot region.
+// Each command selects one aligned 2 KiB table from the protocol's bounded
+// descriptor pool. CMDQ captures the base before start and keeps it stable
+// for the entire batch.
 // Each 32-byte descriptor contains
 // dst, dst_pitch, width, height, key, src, src_pitch, and flags (bit 0 enables
 // the colorkey).  Descriptors are fetched one word at a time, then handed to
@@ -25,11 +26,11 @@
 // colour key.
 module sprite_batch #(
     parameter int ADDR_WIDTH = 32,
-    parameter int DATA_WIDTH = 32,
-    parameter logic [ADDR_WIDTH-1:0] DESCRIPTOR_BASE = 32'h3002_2000
+    parameter int DATA_WIDTH = 32
 ) (
     input logic clk, input logic reset,
     input logic start,
+    input logic [ADDR_WIDTH-1:0] descriptor_base,
     input logic [15:0] count,
     output logic busy, output logic done,
     output logic [ADDR_WIDTH-1:0] rd_addr, output logic rd_en,
@@ -93,7 +94,7 @@ module sprite_batch #(
     );
 
     assign rd_addr = (state == DESC_WAIT || state == DESC_REQ)
-                   ? (DESCRIPTOR_BASE + (index * 32) + (word_index * 4))
+                   ? (descriptor_base + (index * 32) + (word_index * 4))
                    : '0;
     assign rd_en = (state == DESC_REQ);
     assign rd64_addr = (state == COPY) ? copy_rd_addr : '0;

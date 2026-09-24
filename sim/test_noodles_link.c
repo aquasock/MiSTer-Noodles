@@ -79,7 +79,7 @@ int main(void) {
     reset(100);
     assert(noodles_push_command(&link, fill) == 0);
     assert(noodles_push_sprite_batch(&link, descriptors, 64) == 0);
-    assert(maps == 1 && link.batch_pending && link.batch_fence == 102);
+    assert(maps == 1 && link.batch_pending && link.batch_fence[0] == 102);
     assert(memcmp(memory, descriptors, sizeof(descriptors)) == 0);
     assert(header[0] == 2 && slots[8] == 5 && slots[11] == 64);
     for (unsigned i = 0; i < NOODLES_SPRITE_DESCRIPTOR_MAX; ++i)
@@ -90,7 +90,7 @@ int main(void) {
     rejected(EAGAIN, 64);
     assert(noodles_push_command(&link, batch) == -1 && errno == EAGAIN);
     assert(noodles_push_command(&link, fill) == 0);  // unrelated work may pipeline
-    assert(link.batch_fence == 102);
+    assert(link.batch_fence[0] == 102);
 
     int before_maps = maps;
     assert(noodles_link_upload(&link, NOODLES_SPRITE_DESCRIPTOR_ADDR, descriptors, 32) == -1);
@@ -102,7 +102,7 @@ int main(void) {
 
     header[3] = 0x80000066u;
     assert(noodles_push_sprite_batch(&link, descriptors, 1) == 0);
-    assert(link.batch_fence == 104 && link.batch_pending);
+    assert(link.batch_fence[0] == 104 && link.batch_pending);
     assert(memcmp(memory, descriptors, sizeof(*descriptors)) == 0);
     header[3] = 104;
     assert(noodles_push_command(&link, fill) == 0);
@@ -122,12 +122,12 @@ int main(void) {
     assert(!link.batch_pending && link.submitted == 0 && header[0] == 0 && slots[0] == 0);
     fail_map = 0;
     assert(noodles_push_sprite_batch(&link, descriptors, 1) == 0);
-    assert(link.batch_fence == 1);
+    assert(link.batch_fence[0] == 1);
 
     reset(0);
     link.submitted = 0xffffffffu;
     assert(noodles_push_sprite_batch(&link, descriptors, 1) == 0);
-    assert(link.submitted == 0 && link.batch_fence == 0);
+    assert(link.submitted == 0 && link.batch_fence[0] == 0);
     header[3] = 0x7fffffffu;
     rejected(EAGAIN, 1);
     header[3] = 0;
@@ -136,14 +136,14 @@ int main(void) {
     reset(0xfffffffeu);
     assert(noodles_push_command(&link, fill) == 0);
     assert(noodles_push_sprite_batch(&link, descriptors, 1) == 0);
-    assert(link.batch_fence == 0);
+    assert(link.batch_fence[0] == 0);
     header[3] = 0xffffffffu;
     rejected(EAGAIN, 1);
     assert(!noodles_link_fence_reached(&link, 0x80000000u));
     header[3] = 0x80000000u;
     assert(noodles_link_fence_reached(&link, 0x80000000u));
     assert(noodles_push_sprite_batch(&link, descriptors, 1) == 0);
-    assert(link.batch_fence == 1);
+    assert(link.batch_fence[0] == 1);
 
     reset(17);
     assert(noodles_push_command(&link, batch) == 0);
@@ -156,7 +156,8 @@ int main(void) {
     assert(noodles_push_sprite_batch(&link, descriptors, 1) == 0);
     assert(noodles_link_upload(&link, NOODLES_SPRITE_DESCRIPTOR_ADDR - 32, descriptors, 32) == -1);
     assert(errno == EINVAL);
-    assert(noodles_link_upload(&link, NOODLES_SPRITE_DESCRIPTOR_ADDR + 2048, descriptors, 32) == 0);
+    assert(noodles_link_upload(&link, NOODLES_SPRITE_DESCRIPTOR_ADDR + 2048, descriptors, 32) == -1);
+    assert(errno == EINVAL);
     assert(link.batch_pending);  // adjacent uploads do not release ownership
 
     reset(123);
@@ -164,11 +165,56 @@ int main(void) {
         assert(noodles_push_sprite_batch(&link, descriptors, 64) == 0);
         rejected(EAGAIN, 64);
         header[2] = header[0];
-        header[3] = link.batch_fence;
+        header[3] = link.batch_fence[0];
     }
     assert(link.write_ptr == 0 && link.submitted == 256);
-    // A completed owner must not stay latched through a long non-batch stream.
-    assert(noodles_push_command(&link, fill) == 0 && !link.batch_pending);
+    // Ownership is reaped when its table is next accessed; unrelated work
+    // does not scan all descriptor fences.
+    assert(noodles_push_command(&link, fill) == 0 && link.batch_pending);
+    assert(noodles_link_upload(&link, NOODLES_SPRITE_DESCRIPTOR_ADDR, descriptors, 32) == 0);
+    assert(!link.batch_pending);
+
+    // Protocol 1.5 rotates through all 64 tables. The command ring admits
+    // 63 queued commands plus the dispatched command, so all tables can be
+    // owned without overwriting any descriptor bytes.
+    reset(500);
+    link.capabilities = 0x3feu;
+    for (unsigned i = 0; i < 63; ++i) {
+        assert(noodles_push_sprite_batch(&link, descriptors, 1) == 0);
+        assert(slots[i * 8 + 1] == NOODLES_SPRITE_DESCRIPTOR_ADDR +
+                                      i * NOODLES_SPRITE_DESCRIPTOR_TABLE_BYTES);
+    }
+    rejected(EAGAIN, 1);  // command ring full before any memory write
+    header[2] = 1;         // table 0 batch accepted but not completed
+    assert(noodles_push_sprite_batch(&link, descriptors, 1) == 0);
+    assert(slots[63 * 8 + 1] == NOODLES_SPRITE_DESCRIPTOR_ADDR +
+                                   63 * NOODLES_SPRITE_DESCRIPTOR_TABLE_BYTES);
+    assert(link.batch_pending == UINT64_MAX);
+    header[2] = 2;
+    rejected(EAGAIN, 1);  // every table still owned
+    header[3] = 501;       // the oldest table is now complete
+    assert(noodles_push_sprite_batch(&link, descriptors, 1) == 0);
+    assert(slots[1] == NOODLES_SPRITE_DESCRIPTOR_ADDR);
+    assert(link.batch_fence[0] == 565);
+
+    // Raw batches claim only their selected table, and uploads to other
+    // tables remain legal while it is in flight.
+    reset(10);
+    link.capabilities = 0x3feu;
+    uint32_t raw_ring_batch[8] = {
+        5, NOODLES_SPRITE_DESCRIPTOR_ADDR + 7 * NOODLES_SPRITE_DESCRIPTOR_TABLE_BYTES,
+        0, 1, 0, 0, 0, 0};
+    assert(noodles_push_command(&link, raw_ring_batch) == 0);
+    assert(link.batch_pending == (UINT64_C(1) << 7) && link.batch_fence[7] == 11);
+    assert(noodles_link_upload(&link, NOODLES_SPRITE_DESCRIPTOR_ADDR +
+                                      8 * NOODLES_SPRITE_DESCRIPTOR_TABLE_BYTES,
+                               descriptors, 32) == 0);
+    assert(noodles_link_upload(&link, raw_ring_batch[1], descriptors, 32) == -1 &&
+           errno == EAGAIN);
+    header[3] = 11;
+    assert(noodles_link_upload(&link, raw_ring_batch[1], descriptors, 32) == 0);
+    raw_ring_batch[1] += 4;
+    assert(noodles_push_command(&link, raw_ring_batch) == -1 && errno == EINVAL);
     reset(0);
     descriptors[0].flags = 2;       /* BLIT-008 draw flag: needs protocol 1.2 */
     rejected(ENOTSUP, 1);

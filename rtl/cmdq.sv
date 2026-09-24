@@ -55,6 +55,7 @@ module cmdq #(
     input  logic                  blend_done,
 
     output logic                  batch_start,
+    output logic [ADDR_WIDTH-1:0] batch_base,
     output logic [15:0]           batch_count,
     input  logic                  batch_busy,
     input  logic                  batch_done,
@@ -97,6 +98,8 @@ module cmdq #(
     localparam logic [7:0] OP_LOAD_SDRAM    = 8'h06;
     localparam logic [7:0] OP_BLIT_BLEND    = 8'h07;
     localparam logic [7:0] OP_BLEND_FILL    = 8'h08;
+    localparam logic [31:0] DESCRIPTOR_BASE = 32'h3002_2000;
+    localparam logic [31:0] DESCRIPTOR_END  = 32'h3004_2000;
 
     wire [7:0]  op          = cmd_data[7:0];
     wire [31:0] c_dst_addr  = cmd_data[63:32];
@@ -152,6 +155,7 @@ module cmdq #(
             blend_mode_en  <= 1'b0;
             blend_mode     <= '0;
             batch_start    <= 1'b0;
+            batch_base     <= '0;
             batch_count    <= '0;
             present_start  <= 1'b0;
             loader_start    <= 1'b0;
@@ -221,9 +225,13 @@ module cmdq #(
                             present_start <= 1'b1;
                             active_engine <= ENGINE_PRESENT;
                             state         <= WAIT_DONE;
-                        end else if (op == OP_SPRITE_BATCH && c_width != 0 && c_width <= 64) begin
-                            // The descriptor address is deliberately fixed
-                            // in sprite_batch; width is the descriptor count.
+                        end else if (op == OP_SPRITE_BATCH && c_width != 0 && c_width <= 64 &&
+                                     c_dst_addr >= DESCRIPTOR_BASE &&
+                                     c_dst_addr < DESCRIPTOR_END &&
+                                     c_dst_addr[10:0] == 11'd0) begin
+                            // Protocol 1.5 selects one aligned 2 KiB table
+                            // from the bounded 64-table descriptor pool.
+                            batch_base <= c_dst_addr;
                             batch_count <= c_width;
                             batch_start <= 1'b1;
                             active_engine <= ENGINE_BATCH;

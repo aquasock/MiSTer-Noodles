@@ -30,7 +30,7 @@ namespace {
 
 constexpr uint64_t kFillPattern = 0xEEEEEEEEEEEEEEEEull;
 constexpr int kReadLatency = 3;
-constexpr uint32_t kDescriptorBase = 0x3002'2000u;
+constexpr uint32_t kDescriptorBase = 0x3003'2000u;
 
 // Same behavioral Avalon-MM DDR3 memory as tb_sprite_batch.cpp/
 // tb_blit_copy64.cpp -- backs descriptor fetch and destination writes only
@@ -173,6 +173,7 @@ int main(int argc, char **argv) {
     dut.clk = 0;
     dut.reset = 1;
     dut.start = 0;
+    dut.descriptor_base = kDescriptorBase;
     dut.mock_busy = 0;
     dut.mock_delay = 2;
     for (int i = 0; i < 8; ++i) tb.Tick(mem);

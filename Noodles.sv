@@ -179,6 +179,7 @@ wire [63:0] batch_rd64_data, batch_wr64_data;
 wire        batch_rd64_en, batch_rd64_ready, batch_rd64_valid;
 wire [7:0]  batch_rd64_len;
 wire        batch_wr64_en, batch_wr64_ready;
+wire [31:0] batch_base;
 // BLIT_BLEND (BLIT-007) reuses CMDQ's copy_* geometry registers.
 wire        blend_start, blend_busy, blend_done;
 wire [7:0]  blend_mod;
@@ -350,6 +351,7 @@ cmdq cmdq
 	.blend_busy    (blend_busy),
 	.blend_done    (blend_done),
 	.batch_start    (batch_start),
+	.batch_base     (batch_base),
 	.batch_count    (batch_count),
 	.batch_busy     (batch_busy),
 	.batch_done     (batch_done),
@@ -414,7 +416,8 @@ blit_copy blit_copy
 
 sprite_batch sprite_batch
 (
-	.clk(clk_sys), .reset(reset), .start(batch_start), .count(batch_count),
+	.clk(clk_sys), .reset(reset), .start(batch_start), .descriptor_base(batch_base),
+	.count(batch_count),
 	.busy(batch_busy), .done(batch_done),
 	.rd_addr(batch_rd_addr), .rd_en(batch_rd_en), .rd_active(batch_rd_active),
 	.rd_ready(batch_rd_ready), .rd_data(batch_rd_data), .rd_valid(batch_rd_valid),

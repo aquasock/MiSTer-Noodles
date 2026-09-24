@@ -36,9 +36,9 @@ For the current consumer-facing baseline, start with
 [docs/INTEGRATION.md](docs/INTEGRATION.md): memory reservations, command
 layouts, pixel format, ownership and limitations for consumers. It describes
 the core interface; the validated SDL2 renderer lives in MiSTer-GemRB.
-The standard configuration is protocol 1.4 at 800x600 and 100MHz, using the
-timing-qualified and hardware-accepted seed-13 image. The older accepted
-640x480 image remains a recovery fallback.
+Current source is protocol 1.5 at 800x600 and 100MHz. It adds a bounded
+descriptor-table ring to the timing-qualified, hardware-accepted protocol 1.4
+seed-13 baseline. The older accepted 640x480 image remains a recovery fallback.
 
 ## Host-side API
 
@@ -59,12 +59,13 @@ close drains, disarms and frees the handle; failure does not cancel FPGA work.
 `noodles_link_open_legacy()` remains only for preserved pre-2B core images.
 See [docs/SDK.md](docs/SDK.md) for installation, lifecycle, errors and recovery.
 
-`noodles_push_sprite_batch()` protects the fixed descriptor table until the
-previous batch completes. It returns `-1` with `errno == EAGAIN` when the table
-is busy or the ring is full, without modifying descriptors or publishing a
-command. Retry later; other failures should be reported rather than retried.
-Raw batch commands also acquire ownership, and overlapping
-`noodles_link_upload()` calls are blocked while the table is owned.
+On protocol 1.5, `noodles_push_sprite_batch()` rotates through 64 protected
+descriptor tables, allowing batches to queue up to the command-ring limit.
+It returns `-1` with `errno == EAGAIN` when every table or the command ring is
+busy, without modifying descriptors or publishing a command. SDK 0.9 retains
+the single protected table when attached to protocol 1.4 and older cores. Raw
+batch commands acquire ownership of their selected table, and overlapping
+`noodles_link_upload()` calls are blocked until that table's fence completes.
 Direct memory writes bypass this protection.
 
 ## Build

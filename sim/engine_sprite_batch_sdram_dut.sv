@@ -6,6 +6,7 @@ module engine_sprite_batch_sdram_dut (
     input  logic          reset,
 
     input  logic          start,
+    input  logic [31:0]   descriptor_base,
     input  logic [15:0]   count,
     output logic          busy,
     output logic          done,
@@ -44,7 +45,8 @@ module engine_sprite_batch_sdram_dut (
     logic        adapter_idle;
 
     sprite_batch sprite_batch_i (
-        .clk(clk), .reset(reset), .start(start), .count(count),
+        .clk(clk), .reset(reset), .start(start), .descriptor_base(descriptor_base),
+        .count(count),
         .busy(busy), .done(done),
         .rd_addr(batch_rd_addr), .rd_en(batch_rd_en), .rd_active(batch_rd_active),
         .rd_ready(batch_rd_ready), .rd_data(batch_rd_data), .rd_valid(batch_rd_valid),

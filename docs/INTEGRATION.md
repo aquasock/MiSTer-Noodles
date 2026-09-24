@@ -4,7 +4,7 @@ This is the consumer-facing description of the 100MHz core, not
 a new GPU ABI or an SDL implementation. Architecture decisions remain in
 [ai/core-reference.md](../ai/core-reference.md); later records override
 earlier bring-up assumptions. Relevant records include CMDQ-001, BLIT-003/004/006/007/008/009/010,
-SURF-003/004/006, LINK-002/005/008/011/012/013/014/015 and SDR-008.
+SURF-003/004/006, LINK-002/005/008/011/012/013/014/015/016 and SDR-008.
 
 ## Standard configuration: 800x600
 
@@ -21,7 +21,7 @@ pins that setting in the default QSF and reproduces the accepted RBF byte for
 byte. See [QUALIFICATION.md](QUALIFICATION.md) for provenance and results.
 
 Build the host library/tools from the same source as the loaded core.
-Geometry remains compile-time in FPGA logic, but protocol 1.4 reports and
+Geometry remains compile-time in FPGA logic, but protocol 1.5 reports and
 verifies the fixed 800x600 values at attachment. The fallback 640x480 image
 has no protocol block and must use its preserved legacy tools.
 
@@ -61,7 +61,7 @@ Current fixed uses (end addresses are exclusive):
 | `[0x30020000, 0x30020010)` | Shared ring header; fields described below. |
 | `[0x30020010, 0x30020044)` | Live identity/session control block; fields described below. |
 | `[0x30021000, 0x30021800)` | 64 command slots, 32 bytes each. |
-| `[0x30022000, 0x30022800)` | 64 sprite descriptors, 32 bytes each. |
+| `[0x30022000, 0x30042000)` | Protocol 1.5 descriptor pool: 64 aligned tables of 64 descriptors, 32 bytes per descriptor and 2 KiB per table. Protocol 1.4 and older use only the first table. |
 | `[0x31000000, 0x311d4c00)` | 800x600 buffer A pixels; within its fixed 2MiB slot beginning at `0x31000000`. |
 | `[0x31200000, 0x313d4c00)` | 800x600 buffer B pixels; within its fixed 2MiB slot beginning at `0x31200000`. |
 | `0x31400000` and tool-specific addresses | Demo scratch/assets, not an allocator or a promise of available capacity. |
@@ -118,7 +118,7 @@ limits, not a promise that every representable rectangle is safe.
 | 2 | BLIT_COPY | Words 1-4 and 6-7; word 5 zero. No scale or blend. |
 | 3 | BLIT_COPY_KEY | As COPY, with full-pixel key in word 5; matching pixels leave destination untouched. |
 | 4 | PRESENT | Words 1-7 zero; flips the two fixed buffers at vblank and waits for scanout retirement. |
-| 5 | SPRITE_BATCH | Word 3 is descriptor count, 1-64. Library writes word 1 as `0x30022000`; hardware always fetches from that fixed base, not a relocatable list pointer. Other words zero. |
+| 5 | SPRITE_BATCH | Word 1 selects a 2 KiB-aligned table in `[0x30022000, 0x30042000)` and word 3 is descriptor count, 1-64. Other words zero. Protocol 1.4 and older require word 1 `0x30022000`. |
 | 6 | LOAD_SDRAM | Word 1 is board-SDRAM destination, word 5 byte length, word 6 DDR3 source; others zero. Destination aligned to 1024 bytes; loader copies complete pages, so source/destination backing storage must cover the rounded-up length. |
 | 7 | BLIT_BLEND | As COPY, with alpha modulation in word 5 bits 7:0 and bits 31:8 zero. Straight-alpha source-over per BLIT-007; source and destination must not overlap. Protocol 1.1 cores only (capability bit 7). |
 | 8 | BLEND_FILL | Words 1-4 describe the destination; word 5 is one constant straight-RGBA source colour; word 6 is a validated explicit blend mode; word 7 is zero. Reads the destination but no source surface. Protocol 1.4 cores only (capability bit 8). |
@@ -172,8 +172,8 @@ The stage-2B control block is:
 | Byte offset from `0x30020000` | Writer | Meaning |
 |---|---|---|
 | `+0x10` | FPGA | Magic `0x4e444c53`, published last. |
-| `+0x14` | FPGA | Protocol version `0x00010004` (1.4, LINK-015); `0x00010003`, `0x00010002`, `0x00010001` or `0x00010000` on older stage-2B images. |
-| `+0x18` | FPGA | Opcode capability mask `0x000001fe` (bits 8 and 7 are BLEND_FILL and BLIT_BLEND); `0x000000fe` or `0x0000007e` on older images. |
+| `+0x14` | FPGA | Protocol version `0x00010005` (1.5, LINK-016); `0x00010004`, `0x00010003`, `0x00010002`, `0x00010001` or `0x00010000` on older stage-2B images. |
+| `+0x18` | FPGA | Capability mask `0x000003fe`; bit 9 advertises the descriptor ring, while bits 8 and 7 advertise BLEND_FILL and BLIT_BLEND. Older images publish `0x000001fe`, `0x000000fe` or `0x0000007e`. |
 | `+0x1c` | FPGA | Width in bits 31:16, height in bits 15:0. |
 | `+0x20` | FPGA | Pitch in bytes. |
 | `+0x28/+0x2c` | Host | Request token low/high. |
@@ -203,11 +203,13 @@ requires a target distance less than 2^30 completions. Do not compare raw
 counts with `>=`, or use the ring read pointer to authorize asset reuse.
 
 Keep all raw source pixels alive and unchanged until their last consumer
-completes. Wait before CPU access to unfinished raw GPU destinations. The
-fixed descriptor table has library-managed ownership:
-`noodles_push_sprite_batch()` returns `-1/EAGAIN` before any descriptor
-write when that table is busy or the ring is full. Raw opcode-5 submissions
-also claim it; overlapping library uploads are blocked until completion.
+completes. Wait before CPU access to unfinished raw GPU destinations. SDK 0.9
+tracks an independent completion fence for every descriptor table:
+`noodles_push_sprite_batch()` selects a free table and returns `-1/EAGAIN`
+before any descriptor write when all supported tables or the command ring are
+busy. Raw opcode-5 submissions claim their selected table; overlapping library
+uploads are blocked until its completion. On older cores the supported pool is
+one table, preserving the existing ownership rule.
 Direct `/dev/mem` writes bypass this protection. Managed surfaces add general
 allocation and lifetime tracking inside `[0x32000000, 0x40000000)`: their
 source and destination fences are recorded on successful submission,
@@ -242,7 +244,8 @@ This repository does not ship an SDL renderer or scaling API; MiSTer-GemRB
 has validated an external SDL2 renderer against this interface. Source-over
 blending is available as BLIT_BLEND; batched draws add RGBA tint, mirroring,
 SDL's standard modes and composed factor modes. Protocol 1.4 adds ordered
-constant-source blended rectangles through BLEND_FILL. The render target is
+constant-source blended rectangles through BLEND_FILL, and protocol 1.5 adds
+the descriptor ring without changing draw results. The render target is
 800x600. The existing RBF's MiSTer ALSA reader and HDMI output consumed and
 played a paced 48kHz stereo test tone; the protocol-1.4 image still requires
 the same hardware audio check. The planned first consumer is GemRB v0.9.5

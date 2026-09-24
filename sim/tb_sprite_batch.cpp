@@ -2,9 +2,9 @@
 // CMDQ's SPRITE_BATCH opcode dispatches to) driven straight through
 // ddram_adapter's real DDRAM_* pins, against the same burst-aware
 // behavioral Avalon-MM memory model tb_blit_copy64.cpp already validated.
-// Descriptors are seeded directly in DRAM at sprite_batch's fixed
-// DESCRIPTOR_BASE (0x3002_2000), matching how noodles_link_upload() lands
-// the host's descriptor array in production. This is the first simulation
+// Descriptors are seeded directly in a non-default table in the bounded
+// descriptor pool, proving the command-selected base reaches the fetcher.
+// This is the first simulation
 // coverage of sprite_batch's own DESC_REQ/DESC_WAIT/LAUNCH/COPY loop
 // running more than one descriptor back to back -- reproducing (or ruling
 // out) the "present failed"/ring-stuck hang stress-demo's sprites-batch
@@ -28,7 +28,7 @@ namespace {
 
 constexpr uint64_t kFillPattern = 0xEEEEEEEEEEEEEEEEull;
 constexpr int kReadLatency = 3;
-constexpr uint32_t kDescriptorBase = 0x3002'2000u;
+constexpr uint32_t kDescriptorBase = 0x3002'a000u;
 
 // Same behavioral Avalon-MM memory as tb_blit_copy64.cpp: word-addressed (8
 // bytes/word), honors DDRAM_BURSTCNT by streaming that many consecutive
@@ -152,6 +152,7 @@ int main(int argc, char **argv) {
 
     dut.reset = 1;
     dut.start = 0;
+    dut.descriptor_base = kDescriptorBase;
     for (int i = 0; i < 4; ++i) tb.Tick(mem);
     dut.reset = 0;
     tb.Tick(mem);

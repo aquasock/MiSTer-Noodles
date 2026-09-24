@@ -8,13 +8,14 @@
 extern "C" {
 #endif
 
-#define NOODLES_SDK_VERSION "0.8.0"
+#define NOODLES_SDK_VERSION "0.9.0"
 /* Newest protocol this SDK knows. Verified open accepts any 1.x core;
  * optional operations are gated by capability bits and minor revision
- * (LINK-013). */
-#define NOODLES_PROTOCOL_VERSION 0x00010004u
+ * (LINK-016). */
+#define NOODLES_PROTOCOL_VERSION 0x00010005u
 #define NOODLES_CAP_BLIT_BLEND (1u << 7)
 #define NOODLES_CAP_BLEND_FILL (1u << 8)
+#define NOODLES_CAP_DESCRIPTOR_RING (1u << 9)
 
 /* Sprite descriptor flags (BLIT-006, BLIT-008). BLEND/MIRROR_X/MIRROR_Y make
  * a flagged draw: its colorkey field is then an RGBA modulation (R in bits
@@ -96,6 +97,8 @@ enum {
 #define NOODLES_BUFFER_HEIGHT 600u
 #define NOODLES_SPRITE_DESCRIPTOR_ADDR 0x30022000u
 #define NOODLES_SPRITE_DESCRIPTOR_MAX 64u
+#define NOODLES_SPRITE_DESCRIPTOR_TABLE_BYTES 0x800u
+#define NOODLES_SPRITE_DESCRIPTOR_TABLES 64u
 #define NOODLES_SDRAM_WINDOW_BYTES 0x08000000u
 #define NOODLES_SDRAM_PAGE_BYTES 1024u
 #define NOODLES_DEFAULT_TIMEOUT_MS 2000u
@@ -180,8 +183,8 @@ int noodles_push_load_sdram(noodles_link_t *link, uint32_t sdram_dst_addr,
 int noodles_push_present(noodles_link_t *link, noodles_fence_t *fence);
 int noodles_present_and_wait(noodles_link_t *link);
 
-/* Upload excludes control memory except the fixed descriptor table, which is
- * ownership-protected, and excludes the managed-surface arena. */
+/* Upload excludes control memory except descriptor tables supported by the
+ * attached core, which are ownership-protected, and excludes the managed arena. */
 int noodles_link_upload(noodles_link_t *link, uint32_t dst_addr, const void *data, size_t size_bytes);
 
 #ifdef __cplusplus
