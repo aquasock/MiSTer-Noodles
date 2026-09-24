@@ -7,6 +7,22 @@
 // dst, dst_pitch, width, height, key, src, src_pitch, and flags (bit 0 enables
 // the colorkey).  Descriptors are fetched one word at a time, then handed to
 // the existing blit_copy engine; only one copy is ever active.
+//
+// BLIT-008: a descriptor with any of flag bits 1-3 (blend, mirror-x,
+// mirror-y) is a flagged draw handed to the external blit_blend engine,
+// with word 4 as its RGBA modulation. blit_blend reads the destination, and
+// ddram_adapter lets reads pass queued writes, so the sequencer waits for
+// the adapter to go idle before a flagged draw and before the draw that
+// follows one; each descriptor then observes every earlier one's writes.
+// Unflagged runs keep their original back-to-back copy behaviour.
+//
+// blit_copy64 only moves whole, 8-byte-aligned source pixel pairs: an odd
+// width leaves each row's last pixel uncopied (and hangs from the second
+// row on), and a source row that is not 8-byte aligned is read from the
+// wrong address. Unflagged descriptors outside its safe case -- even width,
+// 8-byte-aligned source address and pitch -- therefore also run on
+// blit_blend, as plain stores with identity modulation and the descriptor's
+// colour key.
 module sprite_batch #(
     parameter int ADDR_WIDTH = 32,
     parameter int DATA_WIDTH = 32,
@@ -25,13 +41,29 @@ module sprite_batch #(
     output logic [ADDR_WIDTH-1:0] wr_addr, output logic [DATA_WIDTH-1:0] wr_data,
     output logic wr_en, input logic wr_ready,
     output logic [ADDR_WIDTH-1:0] wr64_addr, output logic [63:0] wr64_data,
-    output logic wr64_en, input logic wr64_ready
+    output logic wr64_en, input logic wr64_ready,
+    input logic memory_idle,
+    // Flagged draws: fields are stable from blend_start until blend_done.
+    output logic blend_start,
+    output logic [ADDR_WIDTH-1:0] blend_dst_addr, output logic [15:0] blend_dst_pitch,
+    output logic [ADDR_WIDTH-1:0] blend_src_addr, output logic [15:0] blend_src_pitch,
+    output logic [15:0] blend_width, output logic [15:0] blend_height,
+    output logic [31:0] blend_mod,
+    output logic blend_enable, output logic blend_mirror_x, output logic blend_mirror_y,
+    output logic blend_key_enable, output logic [31:0] blend_key_value,
+    input logic blend_done
 );
     // LAUNCH is deliberately separate from DESC_WAIT.  The final descriptor
     // word is captured with a nonblocking assignment; starting blit_copy in
     // that same clock would let it sample the previous descriptor's fields.
-    typedef enum logic [2:0] {IDLE, DESC_REQ, DESC_WAIT, LAUNCH, COPY, FINISH} state_t;
+    typedef enum logic [3:0] {IDLE, DESC_REQ, DESC_WAIT, LAUNCH, DRAIN, COPY, BLEND,
+                              FINISH} state_t;
     state_t state;
+    logic prev_flagged;
+    wire draw_flags = desc[7][3:1] != 3'b000;
+    wire copy64_safe = !desc[2][0] && desc[5][2:0] == 3'b000 && desc[6][2:0] == 3'b000;
+    // Runs on blit_blend: a flagged draw, or a copy blit_copy64 cannot do.
+    wire flagged = draw_flags || !copy64_safe;
     logic [15:0] index, word_index, count_r;
     logic [31:0] desc[0:7];
     logic copy_start, copy_busy, copy_done;
@@ -77,17 +109,33 @@ module sprite_batch #(
     assign copy_wr64_ready = (state == COPY) ? wr64_ready : 1'b0;
     assign wr64_en = (state == COPY) ? copy_wr64_en : 1'b0;
 
+    assign blend_dst_addr = desc[0];
+    assign blend_dst_pitch = desc[1][15:0];
+    assign blend_width = desc[2][15:0];
+    assign blend_height = desc[3][15:0];
+    assign blend_mod = draw_flags ? desc[4] : 32'hffff_ffff;
+    assign blend_src_addr = desc[5];
+    assign blend_src_pitch = desc[6][15:0];
+    assign blend_enable = desc[7][1];
+    assign blend_mirror_x = desc[7][2];
+    assign blend_mirror_y = desc[7][3];
+    assign blend_key_enable = !draw_flags && desc[7][0];
+    assign blend_key_value = desc[4];
+
     always_ff @(posedge clk or posedge reset) begin
         if (reset) begin
             state <= IDLE; busy <= 1'b0; done <= 1'b0;
             index <= '0; word_index <= '0; count_r <= '0; copy_start <= 1'b0;
+            blend_start <= 1'b0; prev_flagged <= 1'b0;
             for (int i = 0; i < 8; i++) desc[i] <= '0;
         end else begin
             done <= 1'b0;
             copy_start <= 1'b0;
+            blend_start <= 1'b0;
             case (state)
                 IDLE: if (start && count != 0 && count <= 64) begin
                     busy <= 1'b1; index <= 0; word_index <= 0; count_r <= count;
+                    prev_flagged <= 1'b0;
                     state <= DESC_REQ;
                 end
                 DESC_REQ: if (rd_ready) state <= DESC_WAIT;
@@ -102,10 +150,24 @@ module sprite_batch #(
                 end
                 LAUNCH: begin
                     // All eight descriptor words are now stable.
-                    copy_start <= 1'b1;
-                    state <= COPY;
+                    if (flagged || prev_flagged) begin
+                        state <= DRAIN;
+                    end else begin
+                        copy_start <= 1'b1;
+                        state <= COPY;
+                    end
                 end
-                COPY: if (copy_done) begin
+                DRAIN: if (memory_idle) begin
+                    prev_flagged <= flagged;
+                    if (flagged) begin
+                        blend_start <= 1'b1;
+                        state <= BLEND;
+                    end else begin
+                        copy_start <= 1'b1;
+                        state <= COPY;
+                    end
+                end
+                COPY, BLEND: if ((state == COPY) ? copy_done : blend_done) begin
                     if (index + 1 >= count_r) state <= FINISH;
                     else begin
                         index <= index + 1'b1;

@@ -205,11 +205,11 @@ $(BLIT_COPY64_PIPELINE_SIM): rtl/blit_copy64.sv sim/tb_blit_copy64_pipeline.cpp
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
 		rtl/blit_copy64.sv sim/tb_blit_copy64_pipeline.cpp -o $(notdir $@)
 
-$(SPRITE_BATCH_SIM): rtl/sprite_batch.sv rtl/blit_copy64.sv rtl/ddram_adapter.sv sim/engine_sprite_batch_dut.sv sim/tb_sprite_batch.cpp lib/noodles_link.h
+$(SPRITE_BATCH_SIM): rtl/sprite_batch.sv rtl/blit_copy64.sv $(BLEND_RTL) rtl/ddram_adapter.sv sim/engine_sprite_batch_dut.sv sim/tb_sprite_batch.cpp sim/blend_ref.h lib/noodles_link.h
 	@mkdir -p $(dir $@)
 	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module engine_sprite_batch_dut \
-		--Wall --Wno-fatal -Wno-DECLFILENAME \
-		rtl/sprite_batch.sv rtl/blit_copy64.sv rtl/ddram_adapter.sv sim/engine_sprite_batch_dut.sv sim/tb_sprite_batch.cpp -o $(notdir $@)
+		--Wall --Wno-fatal -Wno-DECLFILENAME -CFLAGS -std=c++17 \
+		rtl/sprite_batch.sv rtl/blit_copy64.sv $(BLEND_RTL) rtl/ddram_adapter.sv sim/engine_sprite_batch_dut.sv sim/tb_sprite_batch.cpp -o $(notdir $@)
 
 $(LINK_RING_SIM): rtl/link_ring.sv rtl/ddram_adapter.sv sim/link_ring_dut.sv sim/tb_link_ring.cpp
 	@mkdir -p $(dir $@)

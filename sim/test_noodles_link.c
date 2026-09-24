@@ -170,7 +170,11 @@ int main(void) {
     // A completed owner must not stay latched through a long non-batch stream.
     assert(noodles_push_command(&link, fill) == 0 && !link.batch_pending);
     reset(0);
-    descriptors[0].flags = 2;
+    descriptors[0].flags = 2;       /* BLIT-008 draw flag: needs protocol 1.2 */
+    rejected(ENOTSUP, 1);
+    descriptors[0].flags = 3;       /* colour key cannot combine with draw flags */
+    rejected(EINVAL, 1);
+    descriptors[0].flags = 0x10;    /* undefined flag bit */
     rejected(EINVAL, 1);
     descriptors[0].flags = 0;
     descriptors[0].src_pitch = 3;

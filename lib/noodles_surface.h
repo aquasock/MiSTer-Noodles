@@ -33,6 +33,26 @@ typedef struct {
     int32_t dst_x, dst_y;
 } noodles_texture_blit_t;
 
+/* One batched draw (BLIT-008). flags are NOODLES_DRAW_*; for KEY,
+ * modulation is the colour key, otherwise it is the RGBA modulation
+ * (0xffffffff = none). Mirroring is applied before clipping, so a mirrored
+ * draw hanging off an edge shows the correct part of the source. */
+typedef struct {
+    const noodles_surface_t *source;
+    noodles_rect_t source_rect;
+    int32_t dst_x, dst_y;
+    uint32_t flags;
+    uint32_t modulation;
+} noodles_surface_draw_t;
+
+typedef struct {
+    uint64_t key;
+    noodles_rect_t source_rect;
+    int32_t dst_x, dst_y;
+    uint32_t flags;
+    uint32_t modulation;
+} noodles_texture_draw_t;
+
 int noodles_surface_create(noodles_link_t *link, uint32_t width, uint32_t height,
                            noodles_surface_t **out);
 int noodles_surface_destroy(noodles_surface_t *surface);
@@ -64,6 +84,12 @@ int noodles_surface_batch_to_back_buffer(noodles_link_t *link,
                                          const noodles_surface_blit_t *blits,
                                          size_t count);
 
+/* Up to 64 clipped draws as one SPRITE_BATCH, into destination or, when it
+ * is NULL, the back buffer. Draws run in order and see earlier draws'
+ * results. Flagged draws need a protocol 1.2 core (ENOTSUP otherwise). */
+int noodles_surface_draw_batch(noodles_link_t *link, noodles_surface_t *destination,
+                               const noodles_surface_draw_t *draws, size_t count);
+
 /* Reap completed deferred frees. The count is the number of allocations
  * returned to the arena by this call. */
 int noodles_surface_collect(noodles_link_t *link, size_t *count);
@@ -84,6 +110,9 @@ int noodles_texture_cache_batch_to_back_buffer(noodles_texture_cache_t *cache,
 int noodles_texture_cache_blend_to_back_buffer(noodles_texture_cache_t *cache,
                                                const noodles_texture_blit_t *blit,
                                                uint8_t alpha_mod);
+int noodles_texture_cache_draw_batch_to_back_buffer(noodles_texture_cache_t *cache,
+                                                    const noodles_texture_draw_t *draws,
+                                                    size_t count);
 int noodles_texture_cache_destroy(noodles_texture_cache_t *cache, uint32_t timeout_ms);
 
 #ifdef __cplusplus

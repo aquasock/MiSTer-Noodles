@@ -461,6 +461,158 @@ int main(void) {
     assert(noodles_surface_destroy(blend_surface) == 0);
     closed(a);
 
+    /* BLIT-008 flagged batches need protocol 1.2: a 1.1 core refuses them
+     * without publishing, while unflagged batches still work. */
+    memory[0] = memory[2] = memory[3] = 0;
+    seed_identity();
+    memory[5] = 0x00010001u;
+    memory[6] = 0xfe;
+    a = open_verified();
+    noodles_surface_t *sprite = NULL;
+    assert(noodles_surface_create(a, 64, 64, &sprite) == 0);
+    noodles_surface_draw_t draw = {sprite, {0, 0, 64, 64}, 10, 10,
+                                   NOODLES_DRAW_BLEND | NOODLES_DRAW_MIRROR_X, 0x80ffffffu};
+    before = memory[0];
+    assert(noodles_surface_draw_batch(a, NULL, &draw, 1) == -1 && errno == ENOTSUP);
+    assert(memory[0] == before);
+    draw.flags = 0;
+    assert(noodles_surface_draw_batch(a, NULL, &draw, 1) == 0);
+    assert(noodles_surface_destroy(sprite) == 0);
+    closed(a);
+
+    /* On a 1.2 core, mirroring is applied before clipping: clipping the
+     * destination's left or top edge trims the far side of a mirrored
+     * source instead of its near side. */
+    memory[0] = memory[2] = memory[3] = 0;
+    seed_identity();
+    memory[6] = 0xfe;
+    a = open_verified();
+    assert(noodles_surface_create(a, 64, 64, &sprite) == 0);
+    const noodles_sprite_descriptor_t *drawn =
+        (const noodles_sprite_descriptor_t *)descriptor_memory;
+    uint32_t back = noodles_link_back_buffer(a);
+    uint32_t sprite_base;
+    {
+        noodles_surface_draw_t plain = {sprite, {0, 0, 64, 64}, 0, 0, 0, 0xffffffffu};
+        assert(noodles_surface_draw_batch(a, NULL, &plain, 1) == 0);
+        sprite_base = drawn[0].src_addr;
+        assert(noodles_link_drain(a, 10) == 0);
+    }
+    noodles_surface_draw_t draws[4] = {
+        {sprite, {0, 0, 64, 64}, -10, -5, NOODLES_DRAW_BLEND, 0x80ffffffu},
+        {sprite, {0, 0, 64, 64}, -10, -5, NOODLES_DRAW_MIRROR_X | NOODLES_DRAW_MIRROR_Y,
+         0xffffffffu},
+        {sprite, {-3, 0, 64, 64}, 790, 0, NOODLES_DRAW_MIRROR_X, 0x11223344u},
+        {sprite, {0, 0, 64, 64}, 20, 20, NOODLES_DRAW_KEY, 0x00ff00ffu},
+    };
+    assert(noodles_surface_draw_batch(a, NULL, draws, 4) == 0);
+    assert(drawn[0].width == 54 && drawn[0].height == 59 && drawn[0].dst_addr == back &&
+           drawn[0].src_addr == sprite_base + 5 * 256 + 10 * 4 &&
+           drawn[0].flags == NOODLES_DRAW_BLEND && drawn[0].colorkey == 0x80ffffffu);
+    assert(drawn[1].width == 54 && drawn[1].height == 59 && drawn[1].dst_addr == back &&
+           drawn[1].src_addr == sprite_base);
+    /* Source x = -3 trims 3 pixels; mirrored, that is the destination's right
+     * side, and the screen edge at 800 then trims 51 more from the left. */
+    assert(drawn[2].width == 10 && drawn[2].dst_addr == back + 790 * 4 &&
+           drawn[2].src_addr == sprite_base + 51 * 4 && drawn[2].colorkey == 0x11223344u);
+    assert(drawn[3].flags == NOODLES_DRAW_KEY && drawn[3].colorkey == 0x00ff00ffu);
+    assert(noodles_link_drain(a, 10) == 0);
+
+    /* Property check: every clipped draw shows exactly the pixels of the
+     * unclipped (possibly mirrored) draw that land on screen and come from
+     * inside the source surface. */
+    uint32_t seed = 12345;
+    for (int trial = 0; trial < 400; ++trial) {
+        int32_t v[6];
+        for (int k = 0; k < 6; ++k) {
+            seed = seed * 1103515245u + 12345u;
+            v[k] = (int32_t)((seed >> 8) % 1100u);
+        }
+        noodles_surface_draw_t d = {sprite,
+                                    {v[0] % 160 - 80, v[1] % 160 - 80,
+                                     (uint32_t)(v[2] % 100 + 1), (uint32_t)(v[3] % 100 + 1)},
+                                    v[4] - 150, v[5] % 750 - 150,
+                                    (uint32_t)(trial & 3) << 2, 0xffffffffu};
+        int mirror[2] = {(trial & 1) != 0, (trial & 2) != 0};
+        int64_t rect_pos[2] = {d.source_rect.x, d.source_rect.y};
+        int64_t rect_len[2] = {d.source_rect.width, d.source_rect.height};
+        int64_t dst_pos[2] = {d.dst_x, d.dst_y};
+        int64_t src_limit[2] = {64, 64}, dst_limit[2] = {800, 600};
+        int64_t lo[2], hi[2];   /* valid unclipped offsets, [lo, hi) */
+        for (int ax = 0; ax < 2; ++ax) {
+            lo[ax] = rect_len[ax];
+            hi[ax] = 0;
+            for (int64_t i = 0; i < rect_len[ax]; ++i) {
+                int64_t dc = dst_pos[ax] + i;
+                int64_t sc = rect_pos[ax] + (mirror[ax] ? rect_len[ax] - 1 - i : i);
+                if (dc >= 0 && dc < dst_limit[ax] && sc >= 0 && sc < src_limit[ax]) {
+                    if (i < lo[ax]) lo[ax] = i;
+                    hi[ax] = i + 1;
+                }
+            }
+        }
+        before = memory[0];
+        assert(noodles_surface_draw_batch(a, NULL, &d, 1) == 0);
+        if (hi[0] <= lo[0] || hi[1] <= lo[1]) {
+            assert(memory[0] == before);
+            continue;
+        }
+        assert(memory[0] != before);
+        uint32_t doff = drawn[0].dst_addr - back, soff = drawn[0].src_addr - sprite_base;
+        int64_t got_dst[2] = {(doff % 3200) / 4, doff / 3200};
+        int64_t got_src[2] = {(soff % 256) / 4, soff / 256};
+        int64_t got_len[2] = {drawn[0].width, drawn[0].height};
+        for (int ax = 0; ax < 2; ++ax) {
+            assert(got_len[ax] == hi[ax] - lo[ax]);
+            assert(got_dst[ax] == dst_pos[ax] + lo[ax]);
+            /* Descriptor pixel j shows source got_src + (mirrored ? len-1-j : j),
+             * which must equal the unclipped mapping of offset lo + j. */
+            for (int64_t j = 0; j < got_len[ax]; ++j) {
+                int64_t want = rect_pos[ax] + (mirror[ax] ? rect_len[ax] - 1 - (lo[ax] + j)
+                                                          : lo[ax] + j);
+                int64_t have = got_src[ax] + (mirror[ax] ? got_len[ax] - 1 - j : j);
+                assert(want == have);
+            }
+        }
+        assert(noodles_link_drain(a, 10) == 0);
+    }
+
+    /* Keyed draws cannot also be flagged; a surface cannot draw onto itself;
+     * flagged raw descriptors must not overlap their own destination. */
+    draws[0].flags = NOODLES_DRAW_KEY | NOODLES_DRAW_BLEND;
+    assert(noodles_surface_draw_batch(a, NULL, draws, 1) == -1 && errno == EINVAL);
+    assert(noodles_surface_draw_batch(a, sprite, &draws[1], 1) == -1 && errno == EINVAL);
+    noodles_sprite_descriptor_t overlap = {NOODLES_BUFFER_B_ADDR, 3200, 32, 32, 0xffffffffu,
+                                           NOODLES_BUFFER_B_ADDR + 3200 * 8, 3200,
+                                           NOODLES_DRAW_BLEND};
+    assert(noodles_push_sprite_batch(a, &overlap, 1) == -1 && errno == EINVAL);
+    overlap.src_addr = 0x31400000u;
+    overlap.src_pitch = 128;
+    assert(noodles_push_sprite_batch(a, &overlap, 1) == 0);
+    assert(noodles_link_drain(a, 10) == 0);
+
+    /* Batches into a managed surface and from the texture cache. */
+    noodles_surface_t *target = NULL;
+    assert(noodles_surface_create(a, 128, 128, &target) == 0);
+    draws[1].dst_x = draws[1].dst_y = 100;
+    assert(noodles_surface_draw_batch(a, target, &draws[1], 1) == 0);
+    assert(drawn[0].width == 28 && drawn[0].height == 28 && drawn[0].dst_pitch == 512 &&
+           drawn[0].src_addr == sprite_base + 36 * 256 + 36 * 4);
+    assert(noodles_link_drain(a, 10) == 0);
+    noodles_texture_cache_t *draw_cache = NULL;
+    assert(noodles_texture_cache_create(a, 64, 64, 2, 1, &draw_cache) == 0);
+    assert(noodles_texture_cache_upload(draw_cache, 5, tile_pixels, 256, 10) == 0);
+    noodles_texture_draw_t cached = {5, {0, 0, 64, 64}, 0, 0, NOODLES_DRAW_MIRROR_Y, 0xffffffffu};
+    assert(noodles_texture_cache_draw_batch_to_back_buffer(draw_cache, &cached, 1) == 0);
+    assert(drawn[0].flags == NOODLES_DRAW_MIRROR_Y && drawn[0].height == 64);
+    cached.key = 6;
+    assert(noodles_texture_cache_draw_batch_to_back_buffer(draw_cache, &cached, 1) == -1 &&
+           errno == ENOENT);
+    assert(noodles_texture_cache_destroy(draw_cache, 10) == 0);
+    assert(noodles_surface_destroy(target) == 0);
+    assert(noodles_surface_destroy(sprite) == 0);
+    closed(a);
+
     /* A raw fence that retires after the backoff has grown still gets a
      * minimum-length ping check, including across fence wraparound. */
     memory[0] = memory[2] = 0;

@@ -279,10 +279,38 @@ int noodles_surface_fill(noodles_surface_t *destination, const noodles_rect_t *r
     return 0;
 }
 
-static int clipped_blit(const noodles_surface_t *destination, uint32_t destination_address,
+/* Clips one axis of a draw. Unmirrored, destination offset i shows source
+ * offset i; mirrored, it shows offset length-1-i, so trimming one side of
+ * the source trims the opposite side of the destination. */
+static void clip_axis(int64_t *s, int64_t *d, int64_t *length, int64_t source_limit,
+                      int64_t destination_limit, int mirrored) {
+    if (*s < 0) {                          /* source low side */
+        *length += *s;
+        if (!mirrored) *d -= *s;
+        *s = 0;
+    }
+    if (*s + *length > source_limit) {     /* source high side */
+        int64_t cut = *s + *length - source_limit;
+        *length -= cut;
+        if (mirrored) *d += cut;
+    }
+    if (*d < 0) {                          /* destination low side */
+        *length += *d;
+        if (!mirrored) *s -= *d;
+        *d = 0;
+    }
+    if (*d + *length > destination_limit) { /* destination high side */
+        int64_t cut = *d + *length - destination_limit;
+        *length -= cut;
+        if (mirrored) *s += cut;
+    }
+}
+
+static int clipped_draw(const noodles_surface_t *destination, uint32_t destination_address,
                         uint32_t destination_width, uint32_t destination_height,
                         int32_t dst_x, int32_t dst_y, const noodles_surface_t *source,
-                        const noodles_rect_t *requested, noodles_sprite_descriptor_t *out) {
+                        const noodles_rect_t *requested, uint32_t flags,
+                        noodles_sprite_descriptor_t *out) {
     if (!active_surface(source) || !requested || !requested->width || !requested->height)
         return fail(EINVAL);
     if (destination && (!active_surface(destination) || destination->link != source->link))
@@ -290,24 +318,29 @@ static int clipped_blit(const noodles_surface_t *destination, uint32_t destinati
     int64_t sx = requested->x, sy = requested->y;
     int64_t dx = dst_x, dy = dst_y;
     int64_t width = requested->width, height = requested->height;
-    if (sx < 0) { width += sx; dx -= sx; sx = 0; }
-    if (sy < 0) { height += sy; dy -= sy; sy = 0; }
-    if (sx + width > source->width) width = source->width - sx;
-    if (sy + height > source->height) height = source->height - sy;
-    if (dx < 0) { width += dx; sx -= dx; dx = 0; }
-    if (dy < 0) { height += dy; sy -= dy; dy = 0; }
-    if (dx + width > destination_width) width = destination_width - dx;
-    if (dy + height > destination_height) height = destination_height - dy;
-    if (width <= 0 || height <= 0) return 0;
+    clip_axis(&sx, &dx, &width, source->width, destination_width,
+              (flags & NOODLES_DRAW_MIRROR_X) != 0);
+    if (width <= 0) return 0;
+    clip_axis(&sy, &dy, &height, source->height, destination_height,
+              (flags & NOODLES_DRAW_MIRROR_Y) != 0);
+    if (height <= 0) return 0;
     *out = (noodles_sprite_descriptor_t){
         destination_address + (uint32_t)dy *
             (destination ? destination->pitch : NOODLES_BUFFER_PITCH) + (uint32_t)dx * 4,
         destination ? destination->pitch : NOODLES_BUFFER_PITCH,
         (uint32_t)width, (uint32_t)height, 0,
         source->address + (uint32_t)sy * source->pitch + (uint32_t)sx * 4,
-        source->pitch, 0
+        source->pitch, flags
     };
     return 1;
+}
+
+static int clipped_blit(const noodles_surface_t *destination, uint32_t destination_address,
+                        uint32_t destination_width, uint32_t destination_height,
+                        int32_t dst_x, int32_t dst_y, const noodles_surface_t *source,
+                        const noodles_rect_t *requested, noodles_sprite_descriptor_t *out) {
+    return clipped_draw(destination, destination_address, destination_width, destination_height,
+                        dst_x, dst_y, source, requested, 0, out);
 }
 
 static int push_descriptor(noodles_link_t *link, uint32_t op, uint32_t word5,
@@ -396,6 +429,41 @@ int noodles_surface_batch_to_back_buffer(noodles_link_t *link,
             link, descriptors, (uint16_t)descriptor_count) != 0)
         return -1;
     for (size_t i = 0; i < descriptor_count; ++i) mark_used(used[i]);
+    return 0;
+}
+
+int noodles_surface_draw_batch(noodles_link_t *link, noodles_surface_t *destination,
+                               const noodles_surface_draw_t *draws, size_t count) {
+    if (!link || !draws || !count || count > NOODLES_SPRITE_DESCRIPTOR_MAX ||
+        (destination && (!active_surface(destination) || destination->link != link)))
+        return fail(EINVAL);
+    const uint32_t address = destination ? destination->address : noodles_link_back_buffer(link);
+    const uint32_t width = destination ? destination->width : NOODLES_BUFFER_WIDTH;
+    const uint32_t height = destination ? destination->height : NOODLES_BUFFER_HEIGHT;
+    noodles_sprite_descriptor_t descriptors[NOODLES_SPRITE_DESCRIPTOR_MAX];
+    noodles_surface_t *used[NOODLES_SPRITE_DESCRIPTOR_MAX];
+    size_t descriptor_count = 0;
+    for (size_t i = 0; i < count; ++i) {
+        const noodles_surface_t *source = draws[i].source;
+        const uint32_t flags = draws[i].flags;
+        if (!active_surface(source) || source->link != link || source == destination ||
+            flags > NOODLES_DRAW_FLAGS_MASK ||
+            ((flags & NOODLES_DRAW_KEY) && (flags & ~NOODLES_DRAW_KEY)))
+            return fail(EINVAL);
+        int clipped = clipped_draw(destination, address, width, height, draws[i].dst_x,
+                                   draws[i].dst_y, source, &draws[i].source_rect, flags,
+                                   &descriptors[descriptor_count]);
+        if (clipped < 0) return -1;
+        if (!clipped) continue;
+        descriptors[descriptor_count].colorkey = draws[i].modulation;
+        used[descriptor_count++] = (noodles_surface_t *)source;
+    }
+    if (!descriptor_count) return 0;
+    if (noodles_link_push_sprite_descriptors_managed(
+            link, descriptors, (uint16_t)descriptor_count) != 0)
+        return -1;
+    for (size_t i = 0; i < descriptor_count; ++i) mark_used(used[i]);
+    if (destination) mark_used(destination);
     return 0;
 }
 
@@ -581,6 +649,46 @@ int noodles_texture_cache_blend_to_back_buffer(noodles_texture_cache_t *cache,
     slot->last_fence = noodles_link_last_fence(cache->link);
     slot->used = 1;
     slot->age = ++cache->age;
+    return 0;
+}
+
+int noodles_texture_cache_draw_batch_to_back_buffer(noodles_texture_cache_t *cache,
+                                                    const noodles_texture_draw_t *draws,
+                                                    size_t count) {
+    if (!cache || !draws || !count || count > NOODLES_SPRITE_DESCRIPTOR_MAX)
+        return fail(EINVAL);
+    noodles_sprite_descriptor_t descriptors[NOODLES_SPRITE_DESCRIPTOR_MAX];
+    uint32_t used_slots[NOODLES_SPRITE_DESCRIPTOR_MAX];
+    size_t descriptor_count = 0;
+    for (size_t i = 0; i < count; ++i) {
+        const uint32_t flags = draws[i].flags;
+        if (flags > NOODLES_DRAW_FLAGS_MASK ||
+            ((flags & NOODLES_DRAW_KEY) && (flags & ~NOODLES_DRAW_KEY)))
+            return fail(EINVAL);
+        int index = find_key(cache, draws[i].key);
+        if (index < 0) return fail(ENOENT);
+        noodles_surface_t view;
+        cache_slot_view(cache, (uint32_t)index, &view);
+        int clipped = clipped_draw(NULL, noodles_link_back_buffer(cache->link),
+                                   NOODLES_BUFFER_WIDTH, NOODLES_BUFFER_HEIGHT, draws[i].dst_x,
+                                   draws[i].dst_y, &view, &draws[i].source_rect, flags,
+                                   &descriptors[descriptor_count]);
+        if (clipped < 0) return -1;
+        if (!clipped) continue;
+        descriptors[descriptor_count].colorkey = draws[i].modulation;
+        used_slots[descriptor_count++] = (uint32_t)index;
+    }
+    if (!descriptor_count) return 0;
+    if (noodles_link_push_sprite_descriptors_managed(
+            cache->link, descriptors, (uint16_t)descriptor_count) != 0)
+        return -1;
+    uint32_t fence = noodles_link_last_fence(cache->link);
+    for (size_t i = 0; i < descriptor_count; ++i) {
+        struct texture_slot *slot = &cache->slots[used_slots[i]];
+        slot->last_fence = fence;
+        slot->used = 1;
+        slot->age = ++cache->age;
+    }
     return 0;
 }
 

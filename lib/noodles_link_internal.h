@@ -23,7 +23,7 @@ struct noodles_link {
     volatile uint32_t *header, *slots;
     uint32_t write_ptr, submitted, presents_completed, done_baseline, confirmed_done;
     uint32_t batch_fence, present_fence;
-    uint32_t token_lo, token_hi, ping_seq, capabilities;
+    uint32_t token_lo, token_hi, ping_seq, capabilities, protocol;
     int batch_pending, present_pending, ping_pending, verified, fault;
     int surface_allocator_initialized;
     struct noodles_extent *surface_free;

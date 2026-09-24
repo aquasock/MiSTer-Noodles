@@ -16,7 +16,11 @@
 #include <deque>
 #include <unordered_map>
 
+#include <random>
+#include <vector>
+
 #include "Vengine_sprite_batch_dut.h"
+#include "../sim/blend_ref.h"
 #include "verilated.h"
 #include "../lib/noodles_link.h"
 
@@ -238,5 +242,103 @@ int main(int argc, char **argv) {
 
     std::printf("PASS: sprite_batch %u descriptors of %ux%u, completed in %d cycles, %zu reads, %zu writes\n",
                kCount, kSpriteW, kSpriteH, guard, mem.reads(), mem.writes());
+
+    // BLIT-008: a mixed batch of plain copies, keyed copies and flagged
+    // draws (blend, mirror-x, mirror-y, RGBA modulation), all overlapping on
+    // one canvas, must match a sequential software model: each descriptor
+    // sees every earlier one's completed writes.
+    unsigned mixed_flagged = 0, mixed_total = 0;
+    for (unsigned round = 0; round < 8; ++round) {
+        std::mt19937 rng(0x62617463 + round);
+        auto rnd = [&](uint32_t n) { return uint32_t(rng() % n); };
+        constexpr uint32_t kCanvasW = 96, kCanvasH = 64, kMargin = 2;
+        constexpr uint32_t kCanvasPitch = (kCanvasW + 2 * kMargin + 1) * 4;
+        constexpr uint32_t kCanvas = 0x3130'0000u + kMargin * 4 + kCanvasPitch;
+        constexpr unsigned kMixed = 40;
+        auto read32 = [&](uint32_t addr) {
+            const uint64_t w = mem.Word(addr >> 3);
+            return (addr & 4) ? uint32_t(w >> 32) : uint32_t(w);
+        };
+        // Model covers the canvas plus a margin that must stay untouched.
+        std::unordered_map<uint32_t, uint32_t> model;
+        for (int y = -1; y <= int(kCanvasH); ++y)
+            for (int x = -int(kMargin); x < int(kCanvasW + kMargin); ++x) {
+                const uint32_t a = kCanvas + uint32_t(y * int(kCanvasPitch) + x * 4);
+                const uint32_t v = rng();
+                mem.Seed32(a, v);
+                model[a] = v;
+            }
+        unsigned flagged_count = 0;
+        for (unsigned d = 0; d < kMixed; ++d) {
+            const uint32_t w = 1 + rnd(40), h = 1 + rnd(20);
+            const uint32_t dx = rnd(kCanvasW - w + 1), dy = rnd(kCanvasH - h + 1);
+            const uint32_t spitch = (w + rnd(3)) * 4;
+            const uint32_t src = 0x4010'0000u + d * 0x4000u + rnd(2) * 4;
+            const uint32_t dst = kCanvas + dy * kCanvasPitch + dx * 4;
+            const uint32_t kind = rnd(4);
+            uint32_t flags = 0, word4 = 0;
+            if (kind == 0) {
+                flags = 0;
+            } else if (kind == 1) {
+                flags = 1;
+                word4 = 0x00123456u;
+            } else {
+                flags = (rnd(4) != 0 ? 2u : 0u) | (rnd(2) ? 4u : 0u) | (rnd(2) ? 8u : 0u);
+                if (!flags) flags = 4;
+                word4 = rnd(3) == 0 ? 0xffffffffu : uint32_t(rng());
+                ++flagged_count;
+            }
+            std::vector<uint32_t> pixels(w * h);
+            for (uint32_t y = 0; y < h; ++y)
+                for (uint32_t x = 0; x < w; ++x) {
+                    const uint32_t pick = rnd(5);
+                    uint32_t v = pick == 0 ? 0x00123456u : (pick == 1 ? 0u : rnd(256)) << 24 |
+                                                               (rng() & 0xffffffu);
+                    if (pick == 2) v |= 0xff000000u;
+                    pixels[y * w + x] = v;
+                    mem.Seed32(src + y * spitch + x * 4, v);
+                }
+            for (uint32_t y = 0; y < h; ++y)
+                for (uint32_t x = 0; x < w; ++x) {
+                    const uint32_t a = dst + y * kCanvasPitch + x * 4;
+                    if (flags & 0xe) {
+                        const uint32_t sx = (flags & 4) ? w - 1 - x : x;
+                        const uint32_t sy = (flags & 8) ? h - 1 - y : y;
+                        model[a] = noodles_draw_ref(pixels[sy * w + sx], model[a], word4, flags & 2);
+                    } else if (!(flags & 1) || pixels[y * w + x] != word4) {
+                        model[a] = pixels[y * w + x];
+                    }
+                }
+            SeedDescriptor(mem, d, dst, kCanvasPitch, w, h, word4, src, spitch, flags);
+        }
+        const size_t writes_before = mem.writes();
+        dut.start = 1;
+        dut.count = kMixed;
+        tb.Tick(mem);
+        dut.start = 0;
+        int mixed_cycles = 0;
+        do {
+            tb.Tick(mem);
+            if (++mixed_cycles > 4000000) return Fail("mixed flagged batch hung");
+        } while (!dut.done);
+        for (int i = 0; i < 64; ++i) tb.Tick(mem);
+        unsigned bad = 0;
+        for (const auto &[a, want] : model) {
+            const uint32_t got = read32(a);
+            if (got != want && bad++ < 12)
+                std::fprintf(stderr, "mixed batch at %08x: got %08x want %08x\n", a, got, want);
+        }
+        if (bad) {
+            std::fprintf(stderr, "%u mismatches\n", bad);
+            return Fail("mixed flagged batch produced pixel mismatches");
+        }
+        (void)writes_before;
+        mixed_flagged += flagged_count;
+        mixed_total += kMixed;
+        if (round == 7)
+            std::printf("PASS: sprite_batch 8 mixed batches, %u overlapping descriptors (%u flagged, "
+                        "odd widths and unaligned sources included) match the sequential model\n",
+                        mixed_total, mixed_flagged);
+    }
     return 0;
 }

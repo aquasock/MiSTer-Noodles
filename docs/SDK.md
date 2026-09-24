@@ -1,9 +1,10 @@
 # Host SDK
 
 `libnoodles.a` is a C99 static library with C++-compatible public headers
-`noodles_link.h` and `noodles_surface.h`. SDK 0.4.0 uses hardware protocol 1.x to identify the live
+`noodles_link.h` and `noodles_surface.h`. SDK 0.5.0 uses hardware protocol 1.x to identify the live
 800x600 core, claim one host session and detect reset before accepting a
-fence as completed. Protocol 1.1 cores add opcode 7, BLIT_BLEND; framebuffer
+fence as completed. Protocol 1.1 cores add opcode 7, BLIT_BLEND, and 1.2 cores add flagged
+batch draws (blend, mirroring and RGBA modulation per draw); framebuffer
 geometry and the 100MHz core clock are unchanged.
 
 Use `noodles_link_open()` for the stage-2B core. The explicit
@@ -55,7 +56,7 @@ little-endian 32-bit words.
 | Address | Owner | Meaning |
 |---|---|---|
 | `0x30020010` | FPGA | Magic `0x4e444c53`. Published last during initialization. |
-| `0x30020014` | FPGA | Protocol version, major in bits 31:16 and minor in 15:0; `0x00010001` on cores with BLIT_BLEND, `0x00010000` before it. |
+| `0x30020014` | FPGA | Protocol version, major in bits 31:16 and minor in 15:0; `0x00010002` on cores with flagged batch draws, `0x00010001` with BLIT_BLEND only, `0x00010000` before. |
 | `0x30020018` | FPGA | Capability bits; bit N advertises opcode N: `0x000000fe` with BLIT_BLEND, `0x0000007e` before it. |
 | `0x3002001c` | FPGA | Width in bits 31:16, height in bits 15:0. |
 | `0x30020020` | FPGA | Framebuffer pitch in bytes. |
@@ -234,8 +235,20 @@ truncating arithmetic. Pixels with zero effective alpha leave the
 destination unchanged, and destination alpha is updated as `a + (255-a)dA/255`.
 Upload blended sources with a meaningful high byte; `noodles_rgb()` leaves it
 zero, which is fully transparent. `noodles_texture_cache_blend_to_back_buffer()`
-submits one blended cached cell per call; blending inside `SPRITE_BATCH` is
-not yet available.
+submits one blended cached cell per call.
+
+`noodles_surface_draw_batch()` and `noodles_texture_cache_draw_batch_to_back_buffer()`
+submit up to 64 draws as one `SPRITE_BATCH`, into the back buffer or (for
+surfaces) into another managed surface. Each draw carries `NOODLES_DRAW_*`
+flags and a 32-bit `modulation`: the colour key for `NOODLES_DRAW_KEY`,
+otherwise an RGBA modulation (R in bits 7:0 ... A in 31:24, `0xffffffff` for
+none) applied as SDL's colour and alpha modulation before an optional
+source-over blend (BLIT-008). Mirroring is applied before clipping, so a
+mirrored draw hanging off an edge shows the correct part of its source.
+Draws run in order and see earlier draws' results. Flagged draws need a
+protocol 1.2 core and fail with `ENOTSUP`, publishing nothing, on older
+ones; a keyed draw cannot also be flagged, and a surface cannot draw onto
+itself.
 
 The fixed-cell `noodles_texture_cache` packs same-sized images into one
 managed atlas and addresses them with application-defined 64-bit keys.
@@ -256,7 +269,8 @@ stable shared-library ABI promise in this static-only pre-1.0 SDK.
 
 No SDL code, runtime resolution switch or automatic core reload is included.
 Managed surfaces and the texture cache are host-SDK facilities that work
-over protocol 1.0 and 1.1; SDK 0.4 adds BLIT_BLEND for protocol 1.1 cores.
+over protocol 1.0 through 1.2; SDK 0.4 added BLIT_BLEND for protocol 1.1
+cores and SDK 0.5 flagged batch draws for protocol 1.2 cores.
 
 ## Stage-2A hardware execution
 

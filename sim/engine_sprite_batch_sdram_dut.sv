@@ -54,7 +54,16 @@ module engine_sprite_batch_sdram_dut (
         .wr_addr(batch_wr_addr), .wr_data(batch_wr_data), .wr_en(batch_wr_en),
         .wr_ready(batch_wr_ready),
         .wr64_addr(batch_wr64_addr), .wr64_data(batch_wr64_data),
-        .wr64_en(batch_wr64_en), .wr64_ready(batch_wr64_ready)
+        .wr64_en(batch_wr64_en), .wr64_ready(batch_wr64_ready),
+        // Unflagged descriptors only: the SDRAM path has no blend engine.
+        .memory_idle(1'b1),
+        /* verilator lint_off PINCONNECTEMPTY */
+        .blend_start(), .blend_dst_addr(), .blend_dst_pitch(), .blend_src_addr(),
+        .blend_src_pitch(), .blend_width(), .blend_height(), .blend_mod(),
+        .blend_enable(), .blend_mirror_x(), .blend_mirror_y(),
+        .blend_key_enable(), .blend_key_value(),
+        /* verilator lint_on PINCONNECTEMPTY */
+        .blend_done(1'b0)
     );
 
     // Descriptor fetch + destination write: unchanged from Noodles.sv,

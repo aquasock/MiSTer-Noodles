@@ -1,11 +1,12 @@
-// Verilator testbench for blit_blend (BLIT_BLEND, BLIT-007) through the real
-// ddram_adapter against a burst-honoring Avalon-MM memory model with
-// variable read latency and DDRAM_BUSY stalls.
+// Verilator testbench for blit_blend (BLIT_BLEND BLIT-007 and flagged draws
+// BLIT-008) through the real ddram_adapter against a burst-honoring
+// Avalon-MM memory model with variable read latency and DDRAM_BUSY stalls.
 //
 // Randomized rectangles cover all four source/destination 8-byte alignment
 // combinations, pitches with odd pixel counts (so alignment changes from row
-// to row), widths from 1 pixel upward and modulation values including 0 and
-// 255. Source alpha is biased towards 0 and 255. After each command every
+// to row), widths from 1 pixel upward, RGBA modulation including 0 and 255,
+// blended and plain stores, and both mirror axes. Source alpha is biased
+// towards 0 and 255. After each command every
 // pixel in a margin around the destination must match sim/blend_ref.h
 // inside the rectangle and be unchanged outside it, and the source must be
 // unchanged. Fixed cases then check fully transparent sources perform no
@@ -130,8 +131,13 @@ private:
 struct Rect {
     uint32_t dst, dst_pitch, src, src_pitch;
     uint16_t width, height;
-    uint8_t mod;
+    uint32_t mod;   // RGBA; BLIT_BLEND's 8-bit form is 0x00ffffff | m << 24
+    bool blend = true, mirror_x = false, mirror_y = false;
+    bool key = false;
+    uint32_t key_value = 0;
 };
+
+uint32_t AlphaMod(uint8_t m) { return 0x00ffffffu | (uint32_t(m) << 24); }
 
 uint64_t Run(Testbench &tb, AvalonMemory &mem, const Rect &r) {
     Vengine_blend_dut &dut = tb.dut();
@@ -141,6 +147,8 @@ uint64_t Run(Testbench &tb, AvalonMemory &mem, const Rect &r) {
     dut.src_addr = r.src; dut.src_pitch = r.src_pitch;
     dut.width = r.width; dut.height = r.height;
     dut.mod = r.mod;
+    dut.blend = r.blend; dut.mirror_x = r.mirror_x; dut.mirror_y = r.mirror_y;
+    dut.key_enable = r.key; dut.key_value = r.key_value;
     tb.Tick(mem);
     dut.start = 0;
     uint64_t guard = 0;
@@ -179,7 +187,7 @@ void CheckCase(Testbench &tb, AvalonMemory &mem, const Rect &r, const char *labe
     for (uint32_t y = 0; y < r.height; ++y) {
         for (uint32_t x = 0; x < r.width; ++x) {
             const uint32_t addr = r.src + y * r.src_pitch + x * 4;
-            const uint32_t value = RandomPixel();
+            const uint32_t value = (r.key && Rand(3) == 0) ? r.key_value : RandomPixel();
             mem.Write32(addr, value);
             source[addr] = value;
         }
@@ -187,7 +195,11 @@ void CheckCase(Testbench &tb, AvalonMemory &mem, const Rect &r, const char *labe
     for (uint32_t y = 0; y < r.height; ++y) {
         for (uint32_t x = 0; x < r.width; ++x) {
             const uint32_t d = r.dst + y * r.dst_pitch + x * 4;
-            expect[d] = noodles_blend_ref(source[r.src + y * r.src_pitch + x * 4], expect[d], r.mod);
+            const uint32_t sx = r.mirror_x ? r.width - 1 - x : x;
+            const uint32_t sy = r.mirror_y ? r.height - 1 - y : y;
+            const uint32_t sp = source[r.src + sy * r.src_pitch + sx * 4];
+            if (!(r.key && sp == r.key_value))
+                expect[d] = noodles_draw_ref(sp, expect[d], r.mod, r.blend);
         }
     }
     std::unordered_map<uint32_t, uint32_t> before;
@@ -200,12 +212,13 @@ void CheckCase(Testbench &tb, AvalonMemory &mem, const Rect &r, const char *labe
             const uint32_t got = mem.Read32(addr), want = expect[addr];
             if (got == want) continue;
             if (bad++ == 0)
-                std::fprintf(stderr, "FAIL %s: dst=%08x pitch=%u src=%08x spitch=%u %ux%u mod=%u\n",
-                             label, r.dst, r.dst_pitch, r.src, r.src_pitch, r.width, r.height, r.mod);
+                std::fprintf(stderr, "FAIL %s: dst=%08x pitch=%u src=%08x spitch=%u %ux%u mod=%08x "
+                             "blend=%d mx=%d my=%d\n", label, r.dst, r.dst_pitch, r.src,
+                             r.src_pitch, r.width, r.height, r.mod, r.blend, r.mirror_x, r.mirror_y);
             if (bad <= 24) {
                 uint32_t match = 0xffffffffu;
                 for (const auto &[sa, sv] : source)
-                    if (noodles_blend_ref(sv, before[addr], r.mod) == got) { match = sa; break; }
+                    if (noodles_draw_ref(sv, before[addr], r.mod, r.blend) == got) { match = sa; break; }
                 std::fprintf(stderr, "  x=%d y=%d at %08x got %08x want %08x orig %08x from-src %08x\n",
                              x, y, addr, got, want, before[addr], match);
             }
@@ -239,7 +252,7 @@ int main(int argc, char **argv) {
 
     // Randomized geometry, alignment, latency and bus stalls.
     int cases = 0;
-    for (int i = 0; i < 1500; ++i) {
+    for (int i = 0; i < 4000; ++i) {
         mem.SetLatency(Rand(12), Rand(8));
         tb.SetBusy(Rand(2));
         Rect r;
@@ -250,7 +263,20 @@ int main(int argc, char **argv) {
         r.dst = 0x31000000u + Rand(64) * 4;
         r.src = 0x33000000u + Rand(64) * 4;
         const uint32_t m = Rand(4);
-        r.mod = uint8_t(m == 0 ? 255 : m == 1 ? 0 : Rand(256));
+        r.mod = m == 0 ? 0xffffffffu : m == 1 ? AlphaMod(0) : m == 2 ? AlphaMod(uint8_t(Rand(256)))
+                                                                    : Rand(0xffffffffu);
+        r.blend = Rand(4) != 0;
+        r.mirror_x = Rand(2);
+        r.mirror_y = Rand(2);
+        // sprite_batch's rerouted copies: identity modulation, plain store,
+        // optional colour key.
+        if (Rand(3) == 0) {
+            r.mod = 0xffffffffu;
+            r.blend = false;
+            r.mirror_x = r.mirror_y = false;
+        }
+        r.key = Rand(3) == 0;
+        r.key_value = RandomPixel();
         CheckCase(tb, mem, r, "random");
         ++cases;
     }
@@ -258,14 +284,18 @@ int main(int argc, char **argv) {
     // All four alignment pairings with a two-pixel-wide rectangle.
     for (uint32_t so = 0; so < 2; ++so)
         for (uint32_t d = 0; d < 2; ++d)
-            CheckCase(tb, mem, {0x31100000u + d * 4, 2 * 4 + 4, 0x33100000u + so * 4, 2 * 4, 2, 5, 200},
-                      "alignment");
+            for (int mirror = 0; mirror < 4; ++mirror) {
+                Rect r{0x31100000u + d * 4, 2 * 4 + 4, 0x33100000u + so * 4, 2 * 4, 2, 5, AlphaMod(200)};
+                r.mirror_x = mirror & 1;
+                r.mirror_y = mirror & 2;
+                CheckCase(tb, mem, r, "alignment");
+            }
 
     // Fully transparent source: no DDRAM writes at all.
     tb.SetBusy(false);
     mem.SetLatency(4, 0);
     {
-        Rect r{0x31200000u, 64 * 4, 0x33200000u, 64 * 4, 64, 4, 255};
+        Rect r{0x31200000u, 64 * 4, 0x33200000u, 64 * 4, 64, 4, AlphaMod(255)};
         for (uint32_t y = 0; y < r.height; ++y)
             for (uint32_t x = 0; x < r.width; ++x)
                 mem.Write32(r.src + y * r.src_pitch + x * 4, 0x00abcdefu);
@@ -279,7 +309,7 @@ int main(int argc, char **argv) {
 
     // Modulation zero: also no writes, whatever the source alpha.
     {
-        Rect r{0x31200000u, 64 * 4, 0x33200000u, 64 * 4, 64, 4, 0};
+        Rect r{0x31200000u, 64 * 4, 0x33200000u, 64 * 4, 64, 4, AlphaMod(0)};
         for (uint32_t y = 0; y < r.height; ++y)
             for (uint32_t x = 0; x < r.width; ++x)
                 mem.Write32(r.src + y * r.src_pitch + x * 4, 0xff123456u);
@@ -293,7 +323,7 @@ int main(int argc, char **argv) {
 
     // Opaque source copies exactly, including destination alpha 255.
     {
-        Rect r{0x31300004u, 33 * 4, 0x33300000u, 40 * 4, 31, 3, 255};
+        Rect r{0x31300004u, 33 * 4, 0x33300000u, 40 * 4, 31, 3, AlphaMod(255)};
         for (uint32_t y = 0; y < r.height; ++y)
             for (uint32_t x = 0; x < r.width; ++x) {
                 mem.Write32(r.src + y * r.src_pitch + x * 4, 0xff000000u | (y << 16) | x);
@@ -311,8 +341,8 @@ int main(int argc, char **argv) {
     // Zero-size commands complete without memory traffic.
     {
         const size_t reads = mem.reads(), writes = mem.writes();
-        Run(tb, mem, {0x31000000u, 64, 0x33000000u, 64, 0, 5, 255});
-        Run(tb, mem, {0x31000000u, 64, 0x33000000u, 64, 5, 0, 255});
+        Run(tb, mem, {0x31000000u, 64, 0x33000000u, 64, 0, 5, AlphaMod(255)});
+        Run(tb, mem, {0x31000000u, 64, 0x33000000u, 64, 5, 0, AlphaMod(255)});
         if (mem.reads() != reads || mem.writes() != writes) {
             std::fprintf(stderr, "FAIL: zero-size blend touched memory\n");
             return 1;
@@ -322,7 +352,7 @@ int main(int argc, char **argv) {
     // Throughput sample: 128x16 half-transparent sprite, fixed latency.
     uint64_t cost;
     {
-        Rect r{0x31400000u, 800 * 4, 0x33400000u, 128 * 4, 128, 16, 255};
+        Rect r{0x31400000u, 800 * 4, 0x33400000u, 128 * 4, 128, 16, AlphaMod(255)};
         for (uint32_t y = 0; y < r.height; ++y)
             for (uint32_t x = 0; x < r.width; ++x)
                 mem.Write32(r.src + y * r.src_pitch + x * 4, 0x80406080u);

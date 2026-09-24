@@ -8,11 +8,22 @@
 extern "C" {
 #endif
 
-#define NOODLES_SDK_VERSION "0.4.0"
+#define NOODLES_SDK_VERSION "0.5.0"
 /* Newest protocol this SDK knows. Verified open accepts any 1.x core;
- * optional operations are gated by capability bits (LINK-012). */
-#define NOODLES_PROTOCOL_VERSION 0x00010001u
+ * optional operations are gated by capability bits and minor revision
+ * (LINK-013). */
+#define NOODLES_PROTOCOL_VERSION 0x00010002u
 #define NOODLES_CAP_BLIT_BLEND (1u << 7)
+
+/* Sprite descriptor flags (BLIT-006, BLIT-008). BLEND/MIRROR_X/MIRROR_Y make
+ * a flagged draw: its colorkey field is then an RGBA modulation (R in bits
+ * 7:0 ... A in 31:24, 0xffffffff = unmodulated), it cannot also use KEY,
+ * and it needs a protocol 1.2 core (ENOTSUP otherwise). */
+#define NOODLES_DRAW_KEY 1u
+#define NOODLES_DRAW_BLEND 2u
+#define NOODLES_DRAW_MIRROR_X 4u
+#define NOODLES_DRAW_MIRROR_Y 8u
+#define NOODLES_DRAW_FLAGS_MASK 0xfu
 #define NOODLES_BUFFER_A_ADDR 0x31000000u
 #define NOODLES_BUFFER_B_ADDR 0x31200000u
 #define NOODLES_BUFFER_PITCH 3200u

@@ -1,13 +1,18 @@
 // BLIT_BLEND (BLIT-007) hardware check, throughput bench and visual demo.
 //
-//   blend-demo verify              managed-surface blends of random pixels at
-//                                  every alignment pairing and several alpha
-//                                  modulations, read back and compared with
-//                                  the C reference model pixel for pixel
+//   blend-demo verify              managed-surface BLIT_BLENDs of random pixels
+//                                  at every alignment pairing, then SPRITE_BATCH
+//                                  draws mixing blend, mirroring, RGBA
+//                                  modulation, colour keys, odd widths and
+//                                  unaligned sources, overlapping in one
+//                                  surface; read back and compared with the C
+//                                  reference model pixel for pixel
 //   blend-demo bench [seconds]     64 blended 128x128 sprites per fence wait
-//                                  into the back buffer, no PRESENT
-//   blend-demo show [seconds] [n]  n translucent sprites with varying alpha
-//                                  modulation drifting over colour bars
+//                                  into the back buffer, as 64 BLIT_BLEND
+//                                  commands and then as one flagged batch
+//   blend-demo show [seconds] [n]  n translucent, tinted, partly mirrored
+//                                  sprites in one batch per frame, drifting
+//                                  over colour bars
 #define _POSIX_C_SOURCE 200809L
 #include "noodles_link.h"
 #include "noodles_surface.h"
@@ -141,10 +146,87 @@ static int verify(noodles_link_t *link) {
         }
         pixels += (unsigned long)cases[i].w * (unsigned long)cases[i].h;
     }
-    noodles_surface_destroy(ds);
-    noodles_surface_destroy(ss);
     printf("PASS: %zu hardware blend cases, %lu blended pixels bit-exact, surroundings unchanged\n",
            sizeof(cases) / sizeof(cases[0]), pixels);
+
+    // SPRITE_BATCH draws, in order, overlapping in the destination surface.
+    enum { ROUNDS = 12, DRAWS = 48 };
+    unsigned long batch_pixels = 0;
+    unsigned flagged = 0;
+    for (int round = 0; round < ROUNDS; ++round) {
+        for (size_t p = 0; p < DW * DH; ++p) dst[p] = next_random();
+        const uint32_t key = 0x00ff00ffu;
+        for (size_t p = 0; p < SW * SH; ++p) {
+            uint32_t pick = next_random() % 5;
+            uint32_t alpha = pick == 0 ? 0 : pick == 1 ? 255 : next_random() & 0xff;
+            src[p] = pick == 4 ? key : (alpha << 24) | (next_random() & 0xffffff);
+        }
+        memcpy(expect, dst, sizeof(dst));
+        noodles_surface_draw_t draws[DRAWS];
+        for (int d = 0; d < DRAWS; ++d) {
+            int w = 1 + (int)(next_random() % 60), h = 1 + (int)(next_random() % 30);
+            int sx = (int)(next_random() % (uint32_t)(SW - w + 1));
+            int sy = (int)(next_random() % (uint32_t)(SH - h + 1));
+            int dx = (int)(next_random() % (uint32_t)(DW - w + 1));
+            int dy = (int)(next_random() % (uint32_t)(DH - h + 1));
+            uint32_t kind = next_random() % 4, flags, mod;
+            if (kind == 0) {
+                flags = 0;
+                mod = 0;
+            } else if (kind == 1) {
+                flags = NOODLES_DRAW_KEY;
+                mod = key;
+            } else {
+                flags = next_random() & (NOODLES_DRAW_BLEND | NOODLES_DRAW_MIRROR_X |
+                                         NOODLES_DRAW_MIRROR_Y);
+                if (!flags) flags = NOODLES_DRAW_BLEND;
+                mod = next_random() % 3 ? next_random() : 0xffffffffu;
+                ++flagged;
+            }
+            draws[d] = (noodles_surface_draw_t){ss, {sx, sy, (uint32_t)w, (uint32_t)h}, dx, dy,
+                                                flags, mod};
+            for (int y = 0; y < h; ++y)
+                for (int x = 0; x < w; ++x) {
+                    int fx = (flags & NOODLES_DRAW_MIRROR_X) ? w - 1 - x : x;
+                    int fy = (flags & NOODLES_DRAW_MIRROR_Y) ? h - 1 - y : y;
+                    uint32_t sp = src[(sy + fy) * SW + sx + fx];
+                    uint32_t *e = &expect[(dy + y) * DW + dx + x];
+                    if (flags & ~NOODLES_DRAW_KEY)
+                        *e = noodles_draw_ref(sp, *e, mod, (flags & NOODLES_DRAW_BLEND) != 0);
+                    else if (!(flags & NOODLES_DRAW_KEY) || sp != key)
+                        *e = sp;
+                }
+            batch_pixels += (unsigned long)w * (unsigned long)h;
+        }
+        if (noodles_surface_update(ds, &whole_dst, dst, DW * 4, 2000) != 0 ||
+            noodles_surface_update(ss, &whole_src, src, SW * 4, 2000) != 0) {
+            perror("noodles_surface_update");
+            return -1;
+        }
+        for (int first = 0; first < DRAWS; first += 16) {
+            if (RETRY(noodles_surface_draw_batch(link, ds, draws + first, 16)) != 0) {
+                perror("noodles_surface_draw_batch");
+                return -1;
+            }
+        }
+        if (noodles_surface_read(ds, &whole_dst, got, DW * 4, 2000) != 0) {
+            perror("noodles_surface_read");
+            return -1;
+        }
+        int bad = 0;
+        for (int p = 0; p < DW * DH; ++p)
+            if (got[p] != expect[p] && bad++ < 8)
+                fprintf(stderr, "batch round %d: (%d,%d) got %08x want %08x\n", round, p % DW,
+                        p / DW, got[p], expect[p]);
+        if (bad) {
+            fprintf(stderr, "FAIL: batch round %d: %d pixels\n", round, bad);
+            return -1;
+        }
+    }
+    noodles_surface_destroy(ds);
+    noodles_surface_destroy(ss);
+    printf("PASS: %d batched rounds, %d draws (%u flagged), %lu drawn pixels bit-exact in order\n",
+           ROUNDS, ROUNDS * DRAWS, flagged, batch_pixels);
     return 0;
 }
 
@@ -164,8 +246,28 @@ static int bench(noodles_link_t *link, noodles_surface_t *sprite, double seconds
         draws += 64;
     }
     double elapsed = now_seconds() - start;
-    printf("bench: %ld blends of %dx%d in %.1fs, %.2f Mpixel/s\n", draws, SPRITE, SPRITE,
-           elapsed, (double)draws * SPRITE * SPRITE / elapsed / 1e6);
+    printf("bench: %ld single-command blends of %dx%d in %.1fs, %.2f Mpixel/s\n", draws, SPRITE,
+           SPRITE, elapsed, (double)draws * SPRITE * SPRITE / elapsed / 1e6);
+
+    noodles_surface_draw_t batch[64];
+    for (int i = 0; i < 64; ++i)
+        batch[i] = (noodles_surface_draw_t){sprite, rect, (i % 8) * 84, (i / 8) * 59,
+                                            NOODLES_DRAW_BLEND |
+                                                ((i & 1) ? NOODLES_DRAW_MIRROR_X : 0),
+                                            0xffffffffu};
+    draws = 0;
+    start = now_seconds();
+    while (now_seconds() - start < seconds) {
+        if (RETRY(noodles_surface_draw_batch(link, NULL, batch, 64)) != 0) {
+            perror("draw batch");
+            return -1;
+        }
+        if (tool_wait(link, "batch completion") != 0) return -1;
+        draws += 64;
+    }
+    elapsed = now_seconds() - start;
+    printf("bench: %ld batched blends of %dx%d (half mirrored) in %.1fs, %.2f Mpixel/s\n", draws,
+           SPRITE, SPRITE, elapsed, (double)draws * SPRITE * SPRITE / elapsed / 1e6);
     return 0;
 }
 
@@ -188,15 +290,26 @@ static int show(noodles_link_t *link, noodles_surface_t *sprite, double seconds,
                 return -1;
             }
         }
+        noodles_surface_draw_t draws[MAX_SHOW];
         for (int i = 0; i < count; ++i) {
             double t = frames / 60.0 + i * 0.7;
-            int x = (int)(336 + 330 * sin(t * (0.5 + 0.05 * i)));
-            int y = (int)(236 + 230 * cos(t * (0.4 + 0.03 * i)));
-            uint8_t mod = (uint8_t)(64 + (191 * i) / (count > 1 ? count - 1 : 1));
-            if (RETRY(noodles_surface_blend_to_back_buffer(link, x, y, sprite, &rect, mod)) != 0) {
-                perror("blend");
-                return -1;
-            }
+            // Some sprites wander past the screen edges to exercise clipping.
+            int x = (int)(336 + 380 * sin(t * (0.5 + 0.05 * i)));
+            int y = (int)(236 + 270 * cos(t * (0.4 + 0.03 * i)));
+            uint32_t alpha = 64 + (191u * (uint32_t)i) / (uint32_t)(count > 1 ? count - 1 : 1);
+            // Every other sprite is tinted; mirroring follows horizontal motion.
+            uint32_t tint = (i & 1) ? (((uint32_t)(128 + 127 * sin(t)) & 0xff) |
+                                       (((uint32_t)(128 + 127 * sin(t + 2.1)) & 0xff) << 8) |
+                                       (((uint32_t)(128 + 127 * sin(t + 4.2)) & 0xff) << 16))
+                                    : 0x00ffffffu;
+            uint32_t flags = NOODLES_DRAW_BLEND;
+            if (cos(t * (0.5 + 0.05 * i)) < 0) flags |= NOODLES_DRAW_MIRROR_X;
+            if (i % 4 == 3) flags |= NOODLES_DRAW_MIRROR_Y;
+            draws[i] = (noodles_surface_draw_t){sprite, rect, x, y, flags, (alpha << 24) | tint};
+        }
+        if (RETRY(noodles_surface_draw_batch(link, NULL, draws, (size_t)count)) != 0) {
+            perror("draw batch");
+            return -1;
         }
         if (RETRY(noodles_present_and_wait(link)) != 0) {
             perror("present");
@@ -205,8 +318,8 @@ static int show(noodles_link_t *link, noodles_surface_t *sprite, double seconds,
         ++frames;
     }
     double elapsed = now_seconds() - start;
-    printf("show: %ld frames in %.1fs (%.1f fps), %d translucent %dx%d sprites over colour bars\n",
-           frames, elapsed, frames / elapsed, count, SPRITE, SPRITE);
+    printf("show: %ld frames in %.1fs (%.1f fps), %d translucent tinted/mirrored %dx%d sprites "
+           "in one batch per frame\n", frames, elapsed, frames / elapsed, count, SPRITE, SPRITE);
     return 0;
 }
 

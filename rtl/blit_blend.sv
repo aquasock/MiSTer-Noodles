@@ -1,6 +1,11 @@
-// BLIT_BLEND (opcode 7, BLIT-007): straight-alpha source-over blend of a
-// source rectangle onto a destination rectangle, with 8-bit alpha
-// modulation, over the burst-capable 64-bit DDRAM read port.
+// Flagged-draw engine: BLIT_BLEND (opcode 7, BLIT-007) and flagged
+// SPRITE_BATCH descriptors (BLIT-008). Applies RGBA modulation, then stores
+// or straight-alpha blends a source rectangle onto a destination rectangle,
+// optionally mirrored on either axis, over the burst-capable 64-bit DDRAM
+// read port. sprite_batch also sends it unflagged copies that blit_copy64
+// cannot perform (odd widths, sources not 8-byte aligned) as plain stores
+// with identity modulation, including colour-keyed ones: a source pixel
+// equal to key_value then leaves its destination pixel unchanged.
 //
 // Structure:
 //   - Two blend_walk request walkers issue source and destination read
@@ -9,10 +14,14 @@
 //     rd64_valid has no backpressure. Requests are registered before they
 //     reach the adapter, and each accepted request pushes a tag recording
 //     which stream it feeds, its start address and its edge-lane validity.
-//   - Source beats unpack their in-rectangle pixels into a pixel FIFO, which
-//     realigns source pixels to destination lanes whatever the two
-//     rectangles' 8-byte alignments are. Destination beats enter a word FIFO
-//     with their address and lane validity.
+//   - Source bursts reserve exactly as many pixel FIFO slots as they carry
+//     in-rectangle pixels. Their beats write those slots in order, or in
+//     reverse order for horizontal mirroring (the walker then visits bursts
+//     from the row's end); a burst's pixels become readable once its last
+//     beat lands. Vertical mirroring walks source rows upwards from the
+//     last. The FIFO thereby realigns source pixels to destination lanes
+//     whatever the two rectangles' 8-byte alignments are. Destination beats
+//     enter a word FIFO with their address and lane validity.
 //   - Each destination word takes one or two pixels from the pixel FIFO and
 //     passes through two blend_px lanes. A word with both lanes inside the
 //     rectangle is written as a full 64-bit word; a row-edge word with one
@@ -22,10 +31,9 @@
 //     result equals what was read is not written at all.
 //   - Launches are credit-limited by the output FIFO, so the fixed-latency
 //     pipeline never stalls.
-// Source and destination rectangles must not overlap (BLIT-007). Reads
-// may pass queued writes inside ddram_adapter; distinct words make that
-// harmless within a command, and CMDQ waits for adapter idle between
-// commands.
+// Source and destination rectangles must not overlap. Reads may pass queued
+// writes inside ddram_adapter; distinct words make that harmless within a
+// command, and callers wait for adapter idle between draws.
 
 module blit_blend #(
     parameter int BURST = 8,
@@ -43,7 +51,12 @@ module blit_blend #(
     input  logic [15:0] src_pitch,
     input  logic [15:0] width,
     input  logic [15:0] height,
-    input  logic [7:0]  mod,
+    input  logic [31:0] mod,
+    input  logic        blend,
+    input  logic        mirror_x,
+    input  logic        mirror_y,
+    input  logic        key_enable,
+    input  logic [31:0] key_value,
     output logic        busy,
     output logic        done,
 
@@ -72,10 +85,14 @@ module blit_blend #(
     localparam int LATENCY = 5;  // blend_px
 
     // ---------------------------------------------------------------
-    // Command capture. Walkers start one cycle after the fields settle.
-    logic [31:0] dst_r, src_r;
+    // Command capture. The mirrored source base needs a multiply, so the
+    // walkers start three cycles after the command is accepted.
+    logic [31:0] dst_r, src_r, src_base_r, mod_r;
+    logic [31:0] src_span_r;
     logic [15:0] dst_pitch_r, src_pitch_r, width_r, height_r;
-    logic [7:0]  mod_r;
+    logic        blend_r, mirror_x_r, mirror_y_r, key_enable_r;
+    logic [31:0] key_r;
+    logic [1:0]  prep;
     logic        walk_start;
 
     // ---------------------------------------------------------------
@@ -83,32 +100,36 @@ module blit_blend #(
     logic        s_valid, d_valid, s_finished, d_finished;
     logic [31:0] s_addr, d_addr;
     logic [16:0] s_left, d_left;
-    logic        s_lo, d_lo, s_end_hi, d_end_hi;
+    logic        s_lo, d_lo, s_hi, d_hi;
     logic        s_form, d_form;
 
     wire [4:0] s_len = (s_left < 17'(BURST)) ? s_left[4:0] : 5'(BURST);
     wire [4:0] d_len = (d_left < 17'(BURST)) ? d_left[4:0] : 5'(BURST);
+    // In-rectangle pixels carried by the source burst being formed.
+    wire [5:0] s_px = {s_len, 1'b0} - {5'd0, !s_lo} - {5'd0, !s_hi};
 
     blend_walk src_walk (
         .clk(clk), .reset(reset), .start(walk_start),
-        .base(src_r), .pitch(src_pitch_r), .width(width_r), .height(height_r),
+        .base(src_base_r), .pitch(src_pitch_r), .pitch_neg(mirror_y_r), .reverse(mirror_x_r),
+        .width(width_r), .height(height_r),
         .step(s_form), .step_len(s_len),
-        .valid(s_valid), .addr(s_addr), .left(s_left),
-        .lo_valid(s_lo), .end_hi_valid(s_end_hi), .finished(s_finished)
+        .valid(s_valid), .burst_addr(s_addr), .left(s_left),
+        .burst_lo(s_lo), .burst_hi(s_hi), .finished(s_finished)
     );
 
     blend_walk dst_walk (
         .clk(clk), .reset(reset), .start(walk_start),
-        .base(dst_r), .pitch(dst_pitch_r), .width(width_r), .height(height_r),
+        .base(dst_r), .pitch(dst_pitch_r), .pitch_neg(1'b0), .reverse(1'b0),
+        .width(width_r), .height(height_r),
         .step(d_form), .step_len(d_len),
-        .valid(d_valid), .addr(d_addr), .left(d_left),
-        .lo_valid(d_lo), .end_hi_valid(d_end_hi), .finished(d_finished)
+        .valid(d_valid), .burst_addr(d_addr), .left(d_left),
+        .burst_lo(d_lo), .burst_hi(d_hi), .finished(d_finished)
     );
 
     // ---------------------------------------------------------------
-    // Reservations. px_res counts pixel FIFO entries plus two per source
-    // word still outstanding; dst_res counts destination FIFO entries plus
-    // outstanding destination words; out_res counts pipeline occupants
+    // Reservations. px_res counts pixel FIFO slots in use or reserved by
+    // outstanding source bursts; dst_res counts destination FIFO entries
+    // plus outstanding destination words; out_res counts pipeline occupants
     // plus output FIFO entries.
     logic [PX_W:0]  px_res;
     logic [DST_W:0] dst_res;
@@ -118,10 +139,12 @@ module blit_blend #(
     // Registered request.
     logic        req_valid, req_is_dst, req_lo, req_hi;
     logic [4:0]  req_len;
+    logic [5:0]  req_px;
+    logic [PX_W-1:0] req_px_base;
     logic [31:0] req_addr;
     logic        prefer_dst;
 
-    wire s_ok = s_valid && ({1'b0, px_res} + {1'b0, s_len, 1'b0} <= (PX_W+2)'(PX_DEPTH));
+    wire s_ok = s_valid && ({1'b0, px_res} + (PX_W+2)'(s_px) <= (PX_W+2)'(PX_DEPTH));
     wire d_ok = d_valid && ({1'b0, dst_res} + (DST_W+2)'(d_len) <= (DST_W+2)'(DST_DEPTH));
     wire can_form = busy && !req_valid && (tag_count < (TAG_W+1)'(TAG_DEPTH));
     assign d_form = can_form && d_ok && (!s_ok || prefer_dst);
@@ -136,9 +159,12 @@ module blit_blend #(
     // Tag FIFO: one entry per accepted burst, in adapter response order.
     logic [TAG_DEPTH-1:0] tag_is_dst, tag_lo, tag_hi;
     logic [4:0]  tag_len  [0:TAG_DEPTH-1];
+    logic [5:0]  tag_px   [0:TAG_DEPTH-1];
+    logic [PX_W-1:0] tag_px_base [0:TAG_DEPTH-1];
     logic [28:0] tag_word [0:TAG_DEPTH-1];
     logic [TAG_W-1:0] tag_head, tag_tail;
     logic [4:0]  beat;
+    logic [5:0]  burst_px;   // pixels already placed from the current burst
 
     wire h_is_dst = tag_is_dst[tag_head];
     wire h_last   = (beat + 5'd1 == tag_len[tag_head]);
@@ -148,12 +174,21 @@ module blit_blend #(
     wire dst_beat = rd64_valid && h_is_dst;
 
     // ---------------------------------------------------------------
-    // Pixel FIFO: up to two pushes and two pops per cycle.
+    // Pixel FIFO: slots are allocated per burst at formation; beats fill
+    // them in place (reversed when mirroring) and a burst is published when
+    // complete. Up to two pops per cycle.
     logic [31:0] px_mem [0:PX_DEPTH-1];
     logic [PX_W-1:0] px_wp, px_rp;
     logic [PX_W:0]   px_count;
 
     wire [1:0] push_n = {1'b0, src_beat && beat_lo} + {1'b0, src_beat && beat_hi};
+    wire [5:0] slot_lo_k = burst_px;
+    wire [5:0] slot_hi_k = burst_px + {5'd0, beat_lo};
+    wire [5:0] h_px = tag_px[tag_head];
+    wire [PX_W-1:0] slot_lo = tag_px_base[tag_head] +
+        PX_W'(mirror_x_r ? h_px - 6'd1 - slot_lo_k : slot_lo_k);
+    wire [PX_W-1:0] slot_hi = tag_px_base[tag_head] +
+        PX_W'(mirror_x_r ? h_px - 6'd1 - slot_hi_k : slot_hi_k);
     wire [31:0] px0 = px_mem[px_rp];
     wire [31:0] px1 = px_mem[px_rp + 1'b1];
 
@@ -175,22 +210,26 @@ module blit_blend #(
     wire [31:0] lane_src_hi = head_lo ? px1 : px0;
 
     // ---------------------------------------------------------------
-    // Blend lanes and sideband.
+    // Pixel lanes and sideband.
     logic        lo_out_valid;
     logic [31:0] lo_out, hi_out;
     logic [63:0] sb_dst  [0:LATENCY-1];
     logic [28:0] sb_word [0:LATENCY-1];
     logic [LATENCY-1:0] sb_lo, sb_hi;
+    // Colour-keyed lanes keep their destination value like out-of-rectangle
+    // lanes; the key is compared with the unmodulated source pixel.
+    wire key_lo = key_enable_r && lane_src_lo == key_r;
+    wire key_hi = key_enable_r && lane_src_hi == key_r;
 
     blend_px lane_lo (
         .clk(clk), .reset(reset), .in_valid(launch),
-        .src(lane_src_lo), .dst(dw_mem[dw_rp][31:0]), .mod(mod_r),
+        .src(lane_src_lo), .dst(dw_mem[dw_rp][31:0]), .mod(mod_r), .blend(blend_r),
         .out_valid(lo_out_valid), .out(lo_out)
     );
 
     blend_px lane_hi (
         .clk(clk), .reset(reset), .in_valid(launch),
-        .src(lane_src_hi), .dst(dw_mem[dw_rp][63:32]), .mod(mod_r),
+        .src(lane_src_hi), .dst(dw_mem[dw_rp][63:32]), .mod(mod_r), .blend(blend_r),
         /* verilator lint_off PINCONNECTEMPTY */
         .out_valid(),
         /* verilator lint_on PINCONNECTEMPTY */
@@ -220,8 +259,8 @@ module blit_blend #(
     assign wr_data = of_hi[of_rp] ? of_data[of_rp][63:32] : of_data[of_rp][31:0];
     wire wr_fire = (wr64_en && wr64_ready) || (wr_en && wr_ready);
 
-    wire finished = busy && !walk_start && s_finished && d_finished && !req_valid &&
-                    (tag_count == 0) && (dw_count == 0) && (out_res == 0);
+    wire finished = busy && prep == 2'd0 && !walk_start && s_finished && d_finished &&
+                    !req_valid && (tag_count == 0) && (dw_count == 0) && (out_res == 0);
 
     // ---------------------------------------------------------------
     always_ff @(posedge clk) begin
@@ -230,12 +269,14 @@ module blit_blend #(
             tag_lo[tag_tail] <= req_lo;
             tag_hi[tag_tail] <= req_hi;
             tag_len[tag_tail] <= req_len;
+            tag_px[tag_tail] <= req_px;
+            tag_px_base[tag_tail] <= req_px_base;
             tag_word[tag_tail] <= req_addr[31:3];
         end
         if (src_beat && beat_lo)
-            px_mem[px_wp] <= rd64_data[31:0];
+            px_mem[slot_lo] <= rd64_data[31:0];
         if (src_beat && beat_hi)
-            px_mem[px_wp + PX_W'(beat_lo)] <= rd64_data[63:32];
+            px_mem[slot_hi] <= rd64_data[63:32];
         if (dst_beat) begin
             dw_mem[dw_wp] <= rd64_data;
             dw_word[dw_wp] <= tag_word[tag_head] + {24'd0, beat};
@@ -244,8 +285,8 @@ module blit_blend #(
         end
         sb_dst[0] <= dw_mem[dw_rp];
         sb_word[0] <= dw_word[dw_rp];
-        sb_lo[0] <= head_lo;
-        sb_hi[0] <= head_hi;
+        sb_lo[0] <= head_lo && !key_lo;
+        sb_hi[0] <= head_hi && !key_hi;
         for (int i = 1; i < LATENCY; i++) begin
             sb_dst[i] <= sb_dst[i-1];
             sb_word[i] <= sb_word[i-1];
@@ -253,28 +294,34 @@ module blit_blend #(
             sb_hi[i] <= sb_hi[i-1];
         end
         if (result_write) begin
+            // A word with only one written lane (row edge or colour key)
+            // stores just that lane, never the other lane's stale read.
             of_data[of_wp] <= result;
             of_word[of_wp] <= sb_word[LATENCY-1];
             of_full[of_wp] <= sb_lo[LATENCY-1] && sb_hi[LATENCY-1];
             of_hi[of_wp] <= !sb_lo[LATENCY-1];
         end
+        // Mirrored source base: src + (height - 1) * pitch, over two cycles.
+        src_span_r <= {16'd0, height_r - 16'd1} * {16'd0, src_pitch_r};
     end
 
     always_ff @(posedge clk or posedge reset) begin
         if (reset) begin
             busy <= 1'b0;
             done <= 1'b0;
+            prep <= '0;
             walk_start <= 1'b0;
-            dst_r <= '0; src_r <= '0;
+            dst_r <= '0; src_r <= '0; src_base_r <= '0; mod_r <= '0;
             dst_pitch_r <= '0; src_pitch_r <= '0;
             width_r <= '0; height_r <= '0;
-            mod_r <= '0;
+            blend_r <= 1'b0; mirror_x_r <= 1'b0; mirror_y_r <= 1'b0;
+            key_enable_r <= 1'b0; key_r <= '0;
             req_valid <= 1'b0;
             req_is_dst <= 1'b0; req_lo <= 1'b0; req_hi <= 1'b0;
-            req_len <= '0; req_addr <= '0;
+            req_len <= '0; req_px <= '0; req_px_base <= '0; req_addr <= '0;
             prefer_dst <= 1'b1;
             px_res <= '0; dst_res <= '0; out_res <= '0;
-            tag_count <= '0; tag_head <= '0; tag_tail <= '0; beat <= '0;
+            tag_count <= '0; tag_head <= '0; tag_tail <= '0; beat <= '0; burst_px <= '0;
             px_wp <= '0; px_rp <= '0; px_count <= '0;
             dw_wp <= '0; dw_rp <= '0; dw_count <= '0;
             of_wp <= '0; of_rp <= '0; of_count <= '0;
@@ -283,12 +330,21 @@ module blit_blend #(
             walk_start <= 1'b0;
             if (start && !busy) begin
                 busy <= 1'b1;
-                walk_start <= 1'b1;
+                prep <= 2'd3;
                 dst_r <= dst_addr; src_r <= src_addr;
                 dst_pitch_r <= dst_pitch; src_pitch_r <= src_pitch;
                 width_r <= width; height_r <= height;
                 mod_r <= mod;
+                blend_r <= blend; mirror_x_r <= mirror_x; mirror_y_r <= mirror_y;
+                key_enable_r <= key_enable; key_r <= key_value;
                 prefer_dst <= 1'b1;
+            end else if (prep != 2'd0) begin
+                // prep 3: span multiply settles; 2: base add; 1: start walkers.
+                prep <= prep - 2'd1;
+                if (prep == 2'd2)
+                    src_base_r <= mirror_y_r ? src_r + src_span_r : src_r;
+                if (prep == 2'd1)
+                    walk_start <= 1'b1;
             end else if (finished) begin
                 busy <= 1'b0;
                 done <= 1'b1;
@@ -300,9 +356,9 @@ module blit_blend #(
                 req_addr <= d_form ? d_addr : s_addr;
                 req_len <= d_form ? d_len : s_len;
                 req_lo <= d_form ? d_lo : s_lo;
-                // Only a burst that ends its row can have an unused high lane.
-                req_hi <= d_form ? (d_left != 17'(d_len) || d_end_hi)
-                                 : (s_left != 17'(s_len) || s_end_hi);
+                req_hi <= d_form ? d_hi : s_hi;
+                req_px <= s_px;
+                req_px_base <= px_wp;
                 prefer_dst <= !d_form;
             end else if (req_fire) begin
                 req_valid <= 1'b0;
@@ -312,19 +368,21 @@ module blit_blend #(
             if (rd64_valid) begin
                 if (h_last) begin
                     beat <= '0;
+                    burst_px <= '0;
                     tag_head <= tag_head + 1'b1;
                 end else begin
                     beat <= beat + 5'd1;
+                    burst_px <= burst_px + 6'(push_n);
                 end
             end
             tag_count <= tag_count + (req_fire ? (TAG_W+1)'(1) : '0)
                                    - ((rd64_valid && h_last) ? (TAG_W+1)'(1) : '0);
 
-            px_wp <= px_wp + PX_W'(push_n);
+            if (s_form) px_wp <= px_wp + PX_W'(s_px);
             if (launch) px_rp <= px_rp + PX_W'(pop_n);
-            px_count <= px_count + (PX_W+1)'(push_n) - (launch ? (PX_W+1)'(pop_n) : '0);
-            px_res <= px_res + (s_form ? (PX_W+1)'({s_len, 1'b0}) : '0)
-                             - (src_beat ? (PX_W+1)'(2'd2 - push_n) : '0)
+            px_count <= px_count + ((src_beat && h_last) ? (PX_W+1)'(h_px) : '0)
+                                 - (launch ? (PX_W+1)'(pop_n) : '0);
+            px_res <= px_res + (s_form ? (PX_W+1)'(s_px) : '0)
                              - (launch ? (PX_W+1)'(pop_n) : '0);
 
             if (dst_beat) dw_wp <= dw_wp + 1'b1;

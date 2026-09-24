@@ -214,6 +214,7 @@ static int open_common(noodles_link_t **out, int verified, int ack_reload) {
             goto failed;
         }
         link->capabilities = link->header[NOODLES_CONTROL_CAPABILITIES_WORD];
+        link->protocol = link->header[NOODLES_CONTROL_PROTOCOL_WORD];
         uint32_t response = link->header[NOODLES_CONTROL_RESPONSE_SEQ_WORD];
         if (response != 0) {
             errno = dirty ? EOWNERDEAD : EBUSY;
@@ -468,6 +469,27 @@ static int valid_command(const uint32_t *c, int allow_managed) {
     }
 }
 
+/* Descriptor checks shared by the raw and managed batch paths: 0, or the
+ * errno to fail with. Flagged draws (BLIT-008) need protocol 1.2, carry
+ * their modulation in the colour-key word and so cannot also be keyed, and
+ * must not read the rectangle they write. */
+static int check_descriptors(const noodles_link_t *link, const noodles_sprite_descriptor_t *d,
+                             unsigned count, int allow_managed) {
+    for (unsigned i = 0; i < count; ++i, ++d) {
+        if (d->flags > NOODLES_DRAW_FLAGS_MASK ||
+            !valid_rect(d->dst_addr, d->dst_pitch, d->width, d->height, allow_managed) ||
+            !valid_rect(d->src_addr, d->src_pitch, d->width, d->height, allow_managed))
+            return EINVAL;
+        if (!(d->flags & ~NOODLES_DRAW_KEY)) continue;
+        if ((d->flags & NOODLES_DRAW_KEY) ||
+            !(rect_end(d->dst_addr, d->dst_pitch, d->width, d->height) <= d->src_addr ||
+              rect_end(d->src_addr, d->src_pitch, d->width, d->height) <= d->dst_addr))
+            return EINVAL;
+        if ((link->protocol & 0xffffu) < 2) return ENOTSUP;
+    }
+    return 0;
+}
+
 static int descriptors_available(noodles_link_t *link) {
     if (link->batch_pending) {
         int complete;
@@ -577,12 +599,8 @@ int noodles_push_sprite_batch(noodles_link_t *link,
         errno = EINVAL;
         return -1;
     }
-    for (unsigned i = 0; i < count; ++i) {
-        const noodles_sprite_descriptor_t *d = descriptors + i;
-        if (d->flags > 1 || !valid_rect(d->dst_addr, d->dst_pitch, d->width, d->height, 0) ||
-            !valid_rect(d->src_addr, d->src_pitch, d->width, d->height, 0))
-            return fail(EINVAL);
-    }
+    int invalid = check_descriptors(link, descriptors, count, 0);
+    if (invalid) return fail(invalid);
     if (!descriptors_available(link) || !ring_has_space(link)) return -1;
     if (noodles_link_upload(link, NOODLES_SPRITE_DESCRIPTOR_ADDR, descriptors,
                              (size_t)count * sizeof(*descriptors)) != 0) return -1;
@@ -599,13 +617,8 @@ int noodles_link_push_sprite_descriptors_managed(
         errno = EINVAL;
         return -1;
     }
-    for (unsigned i = 0; i < count; ++i) {
-        const noodles_sprite_descriptor_t *d = descriptors + i;
-        if (d->flags > 1 ||
-            !valid_rect(d->dst_addr, d->dst_pitch, d->width, d->height, 1) ||
-            !valid_rect(d->src_addr, d->src_pitch, d->width, d->height, 1))
-            return fail(EINVAL);
-    }
+    int invalid = check_descriptors(link, descriptors, count, 1);
+    if (invalid) return fail(invalid);
     if (!descriptors_available(link) || !ring_has_space(link)) return -1;
     if (noodles_link_upload(link, NOODLES_SPRITE_DESCRIPTOR_ADDR, descriptors,
                              (size_t)count * sizeof(*descriptors)) != 0) return -1;

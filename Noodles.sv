@@ -187,6 +187,13 @@ wire [63:0] blend_rd64_data, blend_wr64_data;
 wire [7:0]  blend_rd64_len;
 wire        blend_rd64_en, blend_rd64_ready, blend_rd64_valid;
 wire        blend_wr_en, blend_wr_ready, blend_wr64_en, blend_wr64_ready;
+// BLIT-008: sprite_batch also launches blit_blend, for flagged descriptors
+// and for copies blit_copy64 cannot perform. CMDQ and sprite_batch never
+// launch it at the same time (CMDQ runs one engine per command).
+wire        sb_blend_start, sb_blend_enable, sb_blend_mirror_x, sb_blend_mirror_y;
+wire        sb_blend_key_enable;
+wire [31:0] sb_blend_dst_addr, sb_blend_src_addr, sb_blend_mod, sb_blend_key_value;
+wire [15:0] sb_blend_dst_pitch, sb_blend_src_pitch, sb_blend_width, sb_blend_height;
 
 // LINK-001/LINK-002/LINK-003: the real host-driven command path.
 // tools/link_push.c writes commands and write_ptr directly into shared
@@ -282,8 +289,10 @@ present #(
 // internally executes many descriptor copies.  Omitting it leaves the host
 // fence unchanged, so sprite-demo's one-descriptor diagnostic waits forever
 // and a following PRESENT can never retire.
+// A blend launched by sprite_batch is one descriptor of a batch, not a
+// command of its own; only CMDQ-launched BLIT_BLENDs advance the fence.
 wire cmd_done_pulse = blit_done || copy_done || batch_done || present_done || loader_done ||
-                      blend_done;
+                      (blend_done && !batch_busy);
 
 wire [31:0] fence_wr_addr, fence_wr_data;
 wire        fence_wr_en, fence_wr_ready;
@@ -407,15 +416,34 @@ sprite_batch sprite_batch
 	.wr_addr(batch_wr_addr), .wr_data(batch_wr_data), .wr_en(batch_wr_en),
 	.wr_ready(batch_wr_ready),
 	.wr64_addr(batch_wr64_addr), .wr64_data(batch_wr64_data),
-	.wr64_en(batch_wr64_en), .wr64_ready(batch_wr64_ready)
+	.wr64_en(batch_wr64_en), .wr64_ready(batch_wr64_ready),
+	.memory_idle(adapter_idle),
+	.blend_start(sb_blend_start),
+	.blend_dst_addr(sb_blend_dst_addr), .blend_dst_pitch(sb_blend_dst_pitch),
+	.blend_src_addr(sb_blend_src_addr), .blend_src_pitch(sb_blend_src_pitch),
+	.blend_width(sb_blend_width), .blend_height(sb_blend_height), .blend_mod(sb_blend_mod),
+	.blend_enable(sb_blend_enable), .blend_mirror_x(sb_blend_mirror_x),
+	.blend_mirror_y(sb_blend_mirror_y), .blend_key_enable(sb_blend_key_enable),
+	.blend_key_value(sb_blend_key_value), .blend_done(blend_done)
 );
 
+// Command fields are captured by blit_blend on start, so this mux only needs
+// to be valid on the start cycle; batch_busy selects sprite_batch's.
 blit_blend blit_blend
 (
-	.clk(clk_sys), .reset(reset), .start(blend_start),
-	.dst_addr(copy_dst_addr), .dst_pitch(copy_dst_pitch),
-	.src_addr(copy_src_addr), .src_pitch(copy_src_pitch),
-	.width(copy_width), .height(copy_height), .mod(blend_mod),
+	.clk(clk_sys), .reset(reset), .start(blend_start || sb_blend_start),
+	.dst_addr(batch_busy ? sb_blend_dst_addr : copy_dst_addr),
+	.dst_pitch(batch_busy ? sb_blend_dst_pitch : copy_dst_pitch),
+	.src_addr(batch_busy ? sb_blend_src_addr : copy_src_addr),
+	.src_pitch(batch_busy ? sb_blend_src_pitch : copy_src_pitch),
+	.width(batch_busy ? sb_blend_width : copy_width),
+	.height(batch_busy ? sb_blend_height : copy_height),
+	.mod(batch_busy ? sb_blend_mod : {blend_mod, 24'hff_ffff}),
+	.blend(batch_busy ? sb_blend_enable : 1'b1),
+	.mirror_x(batch_busy && sb_blend_mirror_x),
+	.mirror_y(batch_busy && sb_blend_mirror_y),
+	.key_enable(batch_busy && sb_blend_key_enable),
+	.key_value(sb_blend_key_value),
 	.busy(blend_busy), .done(blend_done),
 	.rd64_addr(blend_rd64_addr), .rd64_en(blend_rd64_en), .rd64_len(blend_rd64_len),
 	.rd64_ready(blend_rd64_ready), .rd64_data(blend_rd64_data), .rd64_valid(blend_rd64_valid),
@@ -435,8 +463,10 @@ blit_blend blit_blend
 // (the host only needs the count to arrive eventually, not within any
 // particular cycle), and by the time it wants to write, the engine that
 // just triggered it (blit/blit_copy) has already stopped writing.
-wire        wr_sel_batch  = batch_busy;
-wire        wr_sel_blend  = !wr_sel_batch && blend_busy;
+// blit_blend runs both as a command and inside a batch, so it outranks
+// sprite_batch, which issues nothing while its blend runs.
+wire        wr_sel_blend  = blend_busy;
+wire        wr_sel_batch  = !wr_sel_blend && batch_busy;
 wire        wr_sel_copy   = !wr_sel_batch && !wr_sel_blend && copy_busy;
 wire        wr_sel_link   = !wr_sel_batch && !wr_sel_blend && !wr_sel_copy && link_wr_en;
 wire        wr_sel_control = !wr_sel_batch && !wr_sel_blend && !wr_sel_copy && !wr_sel_link &&
@@ -445,38 +475,42 @@ wire        wr_sel_engine = !wr_sel_batch && !wr_sel_blend && !wr_sel_copy && !w
                             !wr_sel_control && blit_busy;
 wire        wr_sel_fence  = !wr_sel_batch && !wr_sel_blend && !wr_sel_copy && !wr_sel_link &&
                             !wr_sel_control && !wr_sel_engine && fence_wr_en;
-wire [31:0] adapter_wr_addr = wr_sel_batch ? batch_wr_addr : wr_sel_blend ? blend_wr_addr :
+wire [31:0] adapter_wr_addr = wr_sel_blend ? blend_wr_addr : wr_sel_batch ? batch_wr_addr :
                               wr_sel_copy ? copy_wr_addr :
                               wr_sel_link ? link_wr_addr : wr_sel_control ? control_wr_addr :
                               wr_sel_engine ? engine_wr_addr : fence_wr_addr;
-wire [31:0] adapter_wr_data = wr_sel_batch ? batch_wr_data : wr_sel_blend ? blend_wr_data :
+wire [31:0] adapter_wr_data = wr_sel_blend ? blend_wr_data : wr_sel_batch ? batch_wr_data :
                               wr_sel_copy ? copy_wr_data :
                               wr_sel_link ? link_wr_data : wr_sel_control ? control_wr_data :
                               wr_sel_engine ? engine_wr_data : fence_wr_data;
-wire        adapter_wr_en   = wr_sel_batch ? batch_wr_en : wr_sel_blend ? blend_wr_en :
+wire        adapter_wr_en   = wr_sel_blend ? blend_wr_en : wr_sel_batch ? batch_wr_en :
                               wr_sel_copy ? copy_wr_en :
                               wr_sel_link ? link_wr_en : wr_sel_control ? control_wr_en :
                               wr_sel_engine ? engine_wr_en : fence_wr_en;
-assign batch_wr_ready  = wr_sel_batch ? adapter_wr_ready : 1'b0;
-wire        adapter_wr_ready;
-assign blend_wr_ready  = wr_sel_blend  ? adapter_wr_ready : 1'b0;
-assign copy_wr_ready   = wr_sel_copy   ? adapter_wr_ready : 1'b0;
-assign link_wr_ready   = wr_sel_link   ? adapter_wr_ready : 1'b0;
-assign control_wr_ready = wr_sel_control ? adapter_wr_ready : 1'b0;
-assign engine_wr_ready = wr_sel_engine ? adapter_wr_ready : 1'b0;
-assign fence_wr_ready  = wr_sel_fence  ? adapter_wr_ready : 1'b0;
+// Each client's ready is its select, the adapter's registered queue space
+// and, for the scalar port, only that client's own paired request -- the
+// adapter's own ready depends on the muxed wr64_en, which let one engine's
+// request logic (the fill engine's column compare) reach another engine's
+// ready combinationally and set the 100MHz critical path. The selects are
+// exclusive, so each ready equals the adapter's view whenever it matters.
+wire        adapter_wr_space;
+assign blend_wr_ready  = wr_sel_blend  && adapter_wr_space && !blend_wr64_en;
+assign batch_wr_ready  = wr_sel_batch  && adapter_wr_space && !batch_wr64_en;
+assign copy_wr_ready   = wr_sel_copy   && adapter_wr_space;
+assign link_wr_ready   = wr_sel_link   && adapter_wr_space;
+assign control_wr_ready = wr_sel_control && adapter_wr_space;
+assign engine_wr_ready = wr_sel_engine && adapter_wr_space && !engine_wr64_en;
+assign fence_wr_ready  = wr_sel_fence  && adapter_wr_space;
 wire adapter_wr64_en = (wr_sel_engine && engine_wr64_en) ||
                        (wr_sel_batch && batch_wr64_en) ||
                        (wr_sel_blend && blend_wr64_en);
-wire        adapter_wr64_ready;
-assign engine_wr64_ready = adapter_wr64_en ? adapter_wr64_ready : 1'b0;
-wire adapter_batch_wr64_en = wr_sel_batch && batch_wr64_en;
-assign batch_wr64_ready = adapter_batch_wr64_en ? adapter_wr64_ready : 1'b0;
-assign blend_wr64_ready = (wr_sel_blend && blend_wr64_en) ? adapter_wr64_ready : 1'b0;
-wire [31:0] adapter_wr64_addr = wr_sel_batch ? batch_wr64_addr :
-                                wr_sel_blend ? blend_wr64_addr : engine_wr64_addr;
-wire [63:0] adapter_wr64_data = wr_sel_batch ? batch_wr64_data :
-                                wr_sel_blend ? blend_wr64_data : engine_wr64_data;
+assign engine_wr64_ready = wr_sel_engine && adapter_wr_space;
+assign batch_wr64_ready = wr_sel_batch && adapter_wr_space;
+assign blend_wr64_ready = wr_sel_blend && adapter_wr_space;
+wire [31:0] adapter_wr64_addr = wr_sel_blend ? blend_wr64_addr :
+                                wr_sel_batch ? batch_wr64_addr : engine_wr64_addr;
+wire [63:0] adapter_wr64_data = wr_sel_blend ? blend_wr64_data :
+                                wr_sel_batch ? batch_wr64_data : engine_wr64_data;
 
 // Priority mux into the DDRAM adapter's read port: link_control, link_ring,
 // batch, then blit_copy. LINK-003's cmd_ready gating keeps these from
@@ -565,11 +599,13 @@ ddram_adapter ddram_adapter
 	.wr_addr         (adapter_wr_addr),
 	.wr_data         (adapter_wr_data),
 	.wr_en           (adapter_wr_en),
-	.wr_ready        (adapter_wr_ready),
+	/* Clients use per-client readies derived from wr_space above. */
+	.wr_ready        (),
 	.wr64_addr       (adapter_wr64_addr),
 	.wr64_data       (adapter_wr64_data),
 	.wr64_en         (adapter_wr64_en),
-	.wr64_ready      (adapter_wr64_ready),
+	.wr64_ready      (),
+	.wr_space        (adapter_wr_space),
 	.rd_addr         (adapter_rd_addr),
 	.rd_en           (adapter_rd_en),
 	.rd_ready        (adapter_rd_ready),

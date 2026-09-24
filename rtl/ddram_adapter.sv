@@ -32,6 +32,10 @@ module ddram_adapter (
     input  logic [63:0]  wr64_data,
     input  logic         wr64_en,
     output logic         wr64_ready,
+    // Registered queue space. Multiplexed callers derive each client's ready
+    // from this and that client's own requests, so no client's request logic
+    // reaches another client's ready through the shared wr64_en term below.
+    output logic         wr_space,
 
     input  logic [31:0]  rd_addr,
     input  logic         rd_en,
@@ -131,8 +135,9 @@ module ddram_adapter (
     wire  [8:0] admit_words = rd64_fire ? {1'b0, rd64_len} : 9'd1;
 
     // A single ingress accepts one lane per cycle; paired writes take priority.
-    assign wr_ready   = (wr_count < DEPTH) && !wr64_en;
-    assign wr64_ready = (wr_count < DEPTH);
+    assign wr_space   = (wr_count < DEPTH);
+    assign wr_ready   = wr_space && !wr64_en;
+    assign wr64_ready = wr_space;
     assign rd_ready   = (rd_count < DEPTH) && (rsp_committed + 9'd1 <= 9'(DEPTH));
     assign rd64_ready = (rd_count < DEPTH) &&
                         (rsp_committed + {1'b0, rd64_len} <= 9'(DEPTH));
