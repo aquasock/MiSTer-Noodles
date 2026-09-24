@@ -182,6 +182,16 @@ FTP readback verified these separately named binaries under `/media/fat/pet`:
 | `sdk-smoke-2a` (installed ARM consumer) | `c05b8886bd177d7ef89d641dbfbdbe4f183f26f56f0b2fedd96d4fd0d79fec67` |
 | `stress-demo-sdk` | `16e94b09f79dcca427a314758f6556f9219822f106e371412c94f9671e995b72` |
 
+An extended hardware run on the same binaries completed 905 frames in
+60 seconds (15.1fps). A concurrent smoke consumer was rejected with
+`EBUSY` and exit status 1 while the original producer continued normally.
+Key-checker with 64 sprites at 128x128 completed 301 frames in ten seconds
+(30.1fps). A three-second uncapped run measured 74.89 Mpixel/s; this is a
+short sample, not a controlled comparison with the older host tool.
+Five-second clear/present and present-only runs reported 60.4fps and
+60.3fps. A final smoke consumer reopened successfully and left the marker
+clean. No unexpected failures or timeouts were reported.
+
 These are host execution results, not a new visual acceptance or exhaustive
-pixel comparison. Timeout, crash-recovery and competing-process cases are
-covered by the mocked host regression; no reset was induced on the device.
+pixel comparison. Timeout and crash-recovery cases are covered by the
+mocked host regression; no reset was induced on the device.
