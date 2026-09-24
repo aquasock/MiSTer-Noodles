@@ -2631,11 +2631,11 @@ Make 800x600 SVGA rendering the next standard framebuffer configuration while re
 
 #### Outcome:
 
-The user approved actual 800x600 landscape rendering, not merely HDMI scaling, and requested the normal proposal, source-publication, build and hardware-acceptance workflow. Source 37d21c9 updates core and host framebuffer geometry together to 800x600 with a 3200-byte pitch. Each 1920000-byte surface fits within its existing 2MiB slot, so buffer addresses, the command ABI, DDR3 sprite routing, 4:3 aspect ratio and GPU clock remain unchanged. Host/native and ARM tool builds and the full RTL suite pass, including a complete 480000-pixel SVGA fill under stalls and both sprite-batch tests using the host pitch constant. Core/host geometry and memory-footprint checks pass. The hardware-accepted c3d04ab 640x480 image remains the fallback until the new configuration is accepted.
+The user approved actual 800x600 landscape rendering, not merely HDMI scaling, and requested the normal proposal, source-publication, build and hardware-acceptance workflow. Source 37d21c9 updates core and host framebuffer geometry together to 800x600 with a 3200-byte pitch. Each 1920000-byte surface fits within its existing 2MiB slot, so buffer addresses, the command ABI, DDR3 sprite routing, 4:3 aspect ratio and GPU clock remain unchanged. Host/native and ARM tool builds and the full RTL suite pass, including a complete 480000-pixel SVGA fill under stalls and both sprite-batch tests using the host pitch constant. Core/host geometry and memory-footprint checks pass. A clean clone from GitHub built exact source 37d21c9 with seed5 and SOURCE_DATE_EPOCH=1790121600 in 4m23s, producing RBF SHA256 65ca7861f16add6df078287e79ad52e584f20fc3fb4fc6698990a8c156eb5587. Default slow +100C timing passes, but the four-corner gate rejects slow -40C setup at -0.137ns on the HDMI-clock VGA scaler-output line-buffer RAM to y_1r[13] path. Core setup passes all corners, with minimum +0.542ns; hold, recovery, removal and pulse width pass globally at every corner. The build retains the twelve known framework constraint warnings. The candidate has not been deployed, and the hardware-accepted c3d04ab 640x480 image remains loaded as the fallback. Built indicates successful compilation, not timing qualification.
 
 #### Next Steps:
 
-The proposal was published before source changes. Publish source and architecture metadata, then build from the exact online 37d21c9 revision using pinned seed5 and unchanged fitter settings with a twenty-minute build limit. Run detailed and four-corner timing checks and report the candidate for hardware testing. Do not mark hardware acceptance until the user supplies results or explicitly accepts the observed test.
+The proposal and source were published before the clean build. Obtain approval for the next timing-closure cycle before changing fitter settings or framework RTL; a seed4/seed6 comparison with the same four-corner gate is the proposed first step. Do not deploy this failing seed5 as the standard image or mark hardware acceptance until a qualified candidate is tested and the user supplies results or explicitly accepts the observed test.
 
 #### Files Modified:
 
@@ -2654,7 +2654,7 @@ The proposal was published before source changes. Publish source and architectur
 
 #### Status:
 
-- [ ] Built
+- [x] Built
 - [ ] Passed
 
 ---
