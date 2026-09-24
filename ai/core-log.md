@@ -2717,7 +2717,7 @@ Seed7 is the selected timing-qualified SVGA candidate. Hardware qualification an
 
 ---
 
-## 83 COMMIT Unreleased ??? 2026-09-23T19:17:59-07:00
+## 83 COMMIT Unreleased 4cd38a7 2026-09-23T19:17:59-07:00
 
 #### Coming From:
 
@@ -2729,11 +2729,11 @@ Qualify SVGA seed7 on hardware and pin its settings for clean online-source repr
 
 #### Outcome:
 
-The user approved hardware qualification of the four-corner-passing seed7 followed by pinning and reproduction verification. Upload the candidate under its own filename with the matching SVGA host tool, verify FTP readback hashes and preserve the older images. Keep 800x600 and 100MHz as the standard, with runtime resolution switching deferred.
+The four-corner-passing seed7 image was uploaded as Noodles_svga_seed7.rbf with matching stress-demo-svga-seed7, both verified by FTP readback. The user reported "Looks good" and explicitly waived independent clean-rebuild verification, so that rebuild was not run. The 256-sprite 128x128 workload gave 15.1fps in both the short run and the sixty-second run (905 frames); three uncapped runs gave 77.13/78.75/79.04 Mpixel/s. Key-checker with 64 sprites at 128x128 gave 30.1fps, and clear/present and present-only each gave 60.3fps. An initial key-checker invocation with count256 was rejected by argument validation; the corrected run and remaining checks completed without reported command errors or timeouts. Source 4cd38a7 pins seed7, preserves the original mixed QSF line endings and changes no RTL, constraints or other fitter assignments. Its assignment set matches the fitted candidate. The loaded RBF is a020e304aa6903e06e55c2efdba15d1513fb3aa4db9494840b6028a3ba43a47a, originally built from 37d21c9 plus SEED7. The pinned source has not been independently rebuilt to prove byte identity; Built refers to the matching candidate configuration, not a second compilation. Hardware acceptance covers the observed workload, not exhaustive pixel readback. Fixed 800x600 at 100MHz is now the standard, with older images preserved and runtime switching deferred.
 
 #### Next Steps:
 
-Run the fixed sprite workload, repeated uncapped throughput, clear, key-checker and present checks plus a sixty-second visible sprite run. Obtain the user's visual result rather than assuming acceptance from command success. Pin only the fitter seed, publish the source and build an independent clean clone from that revision with the fixed date and twenty-minute limit. Compare its RBF hash to the tested candidate and rerun detailed and four-corner timing before recording the final qualification state.
+Publish the pinned source and qualification record without claiming independent SVGA reproduction. Keep seed7 loaded and preserve the seed5 diagnostic and accepted 640x480 fallback with their matching tools. Resume GemRB readiness at the reusable host SDK stage when requested; retain the four-corner timing gate for future builds.
 
 #### Files Modified:
 
@@ -2745,7 +2745,7 @@ Run the fixed sprite workload, repeated uncapped throughput, clear, key-checker 
 
 #### Status:
 
-- [ ] Built
-- [ ] Passed
+- [x] Built
+- [x] Passed
 
 ---
