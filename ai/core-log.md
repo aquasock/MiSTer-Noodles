@@ -2942,3 +2942,41 @@ None.
 - [x] Passed
 
 ---
+
+## 89 COMMIT Unreleased ??? 2026-09-23T20:47:22-07:00
+
+#### Coming From:
+
+Unreleased 244ac16
+
+#### Purpose:
+
+Add engine-agnostic managed surfaces and a reusable texture-atlas cache for 2D game renderers.
+
+#### Outcome:
+
+Reserve `[0x32000000, 0x40000000)` as a 224MiB managed DDR3 arena and add opaque XRGB8888 surfaces with validated geometry, partial upload/readback, render-target use, and fence-aware deferred destruction and reuse. Keep tilemaps out of the hardware and public API: add a generic host-side atlas/cache that stores subimages in managed surfaces, plus a standalone 64x64 scrolling-tile workload modeled on GemRB backgrounds while remaining usable by SDL2 integrations for VCMI, OpenRCT2, Augustus, OpenRA, and other 2D engines. Existing raw-address APIs remain available outside the managed arena, while surface-based operations enforce allocation bounds and update source/destination lifetime fences. No RTL or accepted RBF change is planned for this milestone.
+
+#### Next Steps:
+
+Implement host regressions for allocation pressure, coalescing, partial transfers, clipping, in-flight destruction, reuse only after fence completion, atlas eviction, and multi-batch visible-tile rendering; then cross-build and run the standalone workload on the accepted Stage 2B hardware before requesting visual acceptance.
+
+#### Files Modified:
+
+- Makefile
+- lib/noodles_link.c
+- lib/noodles_link.h
+- lib/noodles_link_internal.h
+- lib/noodles_surface.c
+- lib/noodles_surface.h
+- sim/test_noodles_sdk.c
+- tools/tile_cache_demo.c
+- docs/INTEGRATION.md
+- docs/SDK.md
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
