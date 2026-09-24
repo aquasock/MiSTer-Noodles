@@ -103,8 +103,9 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 | Why doesn't the engine have a third (noise-fill) op? | BLIT component records | BLIT-005 |
 | How do I composite a sprite over a background without a bounding box? | BLIT component records | BLIT-006 |
 | How does alpha blending work, and what exact arithmetic does it use? | BLIT component records | BLIT-007 |
-| Which protocol version and capability bits does the core publish? | LINK component records | LINK-014 |
+| Which protocol version and capability bits does the core publish? | LINK component records | LINK-015 |
 | How do I draw with ADD, MOD, MUL or custom blend factors? | BLIT component records | BLIT-009 |
+| How do I blend a constant colour over a rectangle without a source surface? | BLIT component records | BLIT-010 |
 | How do I batch blended, mirrored or tinted sprites? | BLIT component records | BLIT-008 |
 | What's the real host-side API for pushing commands, and does it tell me when a draw finished? | LINK component records | LINK-004 |
 | How does the host know a specific command has actually finished, not just been dispatched? | LINK component records | LINK-005 |
@@ -151,7 +152,9 @@ LINK-012: "SUPERSEDED by LINK-013 -- protocol 1.1 (0x00010001) added capability 
 BLIT-008: "SPRITE_BATCH descriptor flags: bit 1 blend, bit 2 mirror-x, bit 3 mirror-y; flagged descriptors carry RGBA modulation in word 4 with SDL 2.32.10 generic-path arithmetic"
 LINK-013: "SUPERSEDED by LINK-014 -- protocol 1.2 (0x00010002) enabled BLIT-008 descriptor flags"
 BLIT-009: "Descriptor flag bit 4 selects a blend mode: SDL factors/operations for colour and alpha in flag bits 31:10, bit 8 single rounding (SDL MUL); project-defined exact 8-bit arithmetic"
-LINK-014: "Protocol 1.3 (0x00010003) enables BLIT-009 blend modes; capability mask unchanged"
+LINK-014: "SUPERSEDED by LINK-015 -- protocol 1.3 (0x00010003) enabled BLIT-009 blend modes"
+BLIT-010: "BLEND_FILL (opcode 8): constant straight-RGBA source in word 5, explicit BLIT-009 mode in word 6, destination-only reads"
+LINK-015: "Protocol 1.4 (0x00010004) adds capability bit 8 for BLEND_FILL; capability mask 0x000001fe"
 LINK-002: "64-slot ring buffer at phys 0x30020000 (header: write_ptr +0, read_ptr +8) / 0x30021000 (slots), reusing CMDQ-001's 32-byte slot format"
 LINK-003: "link_ring.sv polls write_ptr only while CMDQ is idle (cmd_ready), fetches via 8 sequential reads, dispatches to CMDQ, writes back read_ptr"
 LINK-004: "lib/noodles_link.{h,c} is the real host-side API (open/close, noodles_rgb, push_command/solid_fill/blit_copy) -- fire-and-forget, no completion signal by deliberate choice"
@@ -669,11 +672,30 @@ OUT-005: "OUT-004's single-fresh-vblank-edge PRESENT margin is not reliably suff
   kind: INTERFACE
   component_id: LINK
   title: "Protocol 1.3 adds BLIT-009 descriptor blend modes"
-  status: DECIDED
+  status: SUPERSEDED
   decided_date: 2026-09-24
   decision: "A core implementing BLIT-009 publishes protocol 0x00010003 with the unchanged capability mask 0x000000fe. Descriptor flag bit 4 and flag bits 31:8 are defined only on protocol 1.3 and later; every other LINK-013 rule is unchanged."
   consequence: "Hosts gate descriptors using bit 4 on protocol minor at least 3 and fail them with ENOTSUP otherwise, without publishing."
   supersedes: "LINK-013"
+
+- record_id: BLIT-010
+  kind: INTERFACE
+  component_id: BLIT
+  title: "BLEND_FILL (opcode 8): constant-source blended rectangles"
+  status: DECIDED
+  decided_date: 2026-09-24
+  decision: "Opcode 8 uses destination address word 1, destination pitch word 2 low 16 bits, width word 3 low 16 bits and height word 4 low 16 bits. Word 5 is one straight-RGBA source pixel, with R in bits 7:0, G in 15:8, B in 23:16 and A in 31:24. Word 6 is a valid BLIT-009 explicit blend-mode flags value: bit 4 selects the mode, bit 1 and mirror bits 2-3 are zero, bits 7:5 and 9 are zero, and the factor, operation and single-rounding fields retain BLIT-009's meanings. Word 7 is zero. The constant source is unmodulated, applies to every pixel in the destination rectangle and is combined with each existing destination pixel using the encoded mode. The operation reads no source surface and executes in normal command order."
+  consequence: "Hosts can accelerate SDL blended rectangle fills without allocating or uploading a one-colour source texture. The operation still reads the destination and writes only changed words, so it is distinct from SOLID_FILL. Clipping remains a host responsibility; SDK 0.8 clips its managed-surface and current-back-buffer helpers. Raw submissions require a nonzero valid rectangle and owned destination storage. Invalid modes or reserved fields fail SDK validation before publication, and capability bit 8 gates the operation."
+
+- record_id: LINK-015
+  kind: INTERFACE
+  component_id: LINK
+  title: "Protocol 1.4 adds the BLEND_FILL capability"
+  status: DECIDED
+  decided_date: 2026-09-24
+  decision: "A core implementing BLIT-010 publishes protocol 0x00010004 and opcode capability mask 0x000001fe, where bit 8 advertises BLEND_FILL. Every other LINK-014 control word, session and additive-minor-version rule is unchanged."
+  consequence: "Hosts gate opcode 8 on capability bit 8 and fail it with ENOTSUP without publishing when the bit is absent. Protocol 1.0 through 1.3 cores remain attachable for their advertised operations."
+  supersedes: "LINK-014"
 
 ```yaml
 - record_id: "<COMPONENT>-<NNN>"
