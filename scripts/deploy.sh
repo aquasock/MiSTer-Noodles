@@ -5,7 +5,7 @@ set -e
 
 HOST="${1:-${MISTER_HOST:-mister.local}}"
 DEST="${DEST:-/media/fat/pet}"
-BINS="build/arm/sdk-smoke build/arm/link-push build/arm/link-slot-dump build/arm/mem-scan build/arm/blit-copy-push build/arm/solid-fill-push build/arm/blit-copy-key-push build/arm/bench build/arm/present-demo build/arm/sprite-demo build/arm/load-bmp build/arm/stress-demo build/arm/present-probe-dump"
+BINS="build/arm/sdk-smoke build/arm/link-push build/arm/link-slot-dump build/arm/mem-scan build/arm/blit-copy-push build/arm/solid-fill-push build/arm/blit-copy-key-push build/arm/bench build/arm/present-demo build/arm/sprite-demo build/arm/load-bmp build/arm/stress-demo build/arm/tile-cache-demo build/arm/present-probe-dump"
 ASSETS="assets/sprite.bmp"
 
 for b in $BINS; do [ -f "$b" ] || { echo "missing $b -- run make first" >&2; exit 1; }; done
@@ -55,3 +55,7 @@ echo "magenta-colorkeyed smiley):"
 echo "  $DEST/stress-demo [sprite.bmp] [count] [seconds] [mode] [batches]"
 echo "  e.g.: cd $DEST && ./stress-demo assets/sprite.bmp 10 15"
 echo "  e.g. harder stress: ./stress-demo assets/sprite.bmp 64 15 sprites-batch 4"
+echo
+echo "managed-surface texture-cache demo: 154 visible 64x64 scrolling tiles"
+echo "from a 256-cell atlas, submitted in hardware batches:"
+echo "  $DEST/tile-cache-demo [seconds]"

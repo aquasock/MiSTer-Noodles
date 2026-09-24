@@ -1,7 +1,7 @@
 # Host SDK
 
-`libnoodles.a` is a C99 static library with a C++-compatible public header
-`noodles_link.h`. SDK 0.2.0 uses hardware protocol 1.0 to identify the live
+`libnoodles.a` is a C99 static library with C++-compatible public headers
+`noodles_link.h` and `noodles_surface.h`. SDK 0.3.0 uses hardware protocol 1.0 to identify the live
 800x600 core, claim one host session and detect reset before accepting a
 fence as completed. The command opcodes, framebuffer geometry and 100MHz
 core clock are unchanged.
@@ -120,7 +120,7 @@ initialized and quiescent SVGA core. Empty ring pointers cannot prove idle,
 and reset cannot be detected. A dirty legacy marker requires an external
 reload followed by `ack_reload=1`; the flag does not reload hardware.
 
-The 0.2 SDK refuses legacy attachment when it sees the current protocol
+The SDK refuses legacy attachment when it sees the current protocol
 identity. Use verified open for the stage-2B core. For the older recovery
 core, preserve and use its matching stage-2A binary package because static
 control bytes can survive switching back from a newer core.
@@ -180,7 +180,7 @@ transport, whose zero-size/unknown commands could hang fence waits.
 
 The SDK conservatively permits DDR3 spans only in
 `[0x30000000, 0x40000000)`, excluding `[0x30020000, 0x30022800)` control
-memory. Upload alone may write wholly inside the fixed descriptor table,
+memory and the managed arena `[0x32000000, 0x40000000)`. Upload alone may write wholly inside the fixed descriptor table,
 subject to its existing ownership protection. Board-SDRAM loads require
 page-aligned destinations and 8-byte-aligned DDR3 sources with rounded-up
 page backing storage. These checks are **not allocation or isolation**:
@@ -192,6 +192,40 @@ The raw batch entry point validates the command only; callers manually
 uploading descriptors remain responsible for their contents and must obey
 the same limits. Raw memory diagnostics remain explicitly outside the SDK.
 
+## Managed surfaces and texture cache
+
+Include `noodles_surface.h` for SDK-owned XRGB8888 storage. The allocator owns
+the explicit 224MiB physical arena `[0x32000000, 0x40000000)`. It uses
+page-sized allocations and 64-byte row-pitch alignment; callers provide
+dimensions, not addresses. Raw command and upload APIs reject every overlap
+with this arena so unmanaged code cannot alias an active surface through the
+SDK.
+
+`noodles_surface_create()` returns an opaque surface. Partial
+`noodles_surface_update()` and `noodles_surface_read()` require an entirely
+in-bounds rectangle and a host pitch large enough for one row. They wait with
+the caller's bounded timeout if GPU work still references that surface.
+Surface fill and copy operations clip signed rectangles against source and
+destination bounds before publishing a command. Same-surface copies remain
+unsupported because hardware overlap semantics are undefined.
+
+`noodles_surface_destroy()` is nonblocking and invalidates the handle. Its
+physical extent enters a deferred-free list and cannot be reused until the
+surface's last command fence has completed and, on verified hardware, the
+live-session challenge succeeds. `noodles_surface_collect()` reaps completed
+frees; allocation also collects opportunistically. Closing the link drains
+the command stream and releases all allocator metadata, but applications
+must not retain surface or cache pointers after close.
+
+The fixed-cell `noodles_texture_cache` packs same-sized images into one
+managed atlas and addresses them with application-defined 64-bit keys.
+Uploads replace the least-recently-used cell when full and wait only if that
+specific cell is still in flight. Batched draws clip visible cells and use
+the existing 64-entry `SPRITE_BATCH` operation. This is a generic residency
+helper rather than a tilemap ABI: engines remain responsible for map layout,
+animation and choosing visible keys. The `tile-cache-demo` workload scrolls
+154 visible 64x64 tiles through a 256-cell atlas.
+
 ## Migration and scope
 
 New consumers use an opaque pointer from `noodles_link_open()`, handle uniform
@@ -200,8 +234,9 @@ information now includes the hardware protocol version and
 `hardware_verified=1`. Repository draw tools use verified open. There is no
 stable shared-library ABI promise in this static-only pre-1.0 SDK.
 
-No SDL code, runtime resolution switch, texture allocator, automatic core
-reload or new drawing operations are included.
+No SDL code, runtime resolution switch, automatic core reload or new RTL
+drawing operations are included. Managed surfaces and the texture cache are
+host-SDK facilities over protocol 1.0.
 
 ## Stage-2A hardware execution
 

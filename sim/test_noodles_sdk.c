@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "../lib/noodles_link.h"
+#include "../lib/noodles_surface.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -14,6 +15,8 @@
 #include <unistd.h>
 
 static uint32_t memory[2048];
+static unsigned char descriptor_memory[4096];
+static unsigned char surface_memory[2 * 1024 * 1024];
 static char lock_path[256];
 static int map_fail, device_fail, complete_on_sleep, interrupt_sleep, clock_fail;
 static int maps, unmaps, sleeps;
@@ -40,13 +43,26 @@ int __wrap_open(const char *path, int flags, ...) {
 
 void *__wrap_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
     if (map_fail) { errno = ENOMEM; return MAP_FAILED; }
-    assert(length == sizeof(memory) && offset == 0x30020000);
     ++maps;
-    return memory;
+    if (offset == 0x30020000) {
+        assert(length == sizeof(memory));
+        return memory;
+    }
+    if (offset == 0x30022000) {
+        assert(length == sizeof(descriptor_memory));
+        return descriptor_memory;
+    }
+    assert(offset >= NOODLES_SURFACE_ARENA_ADDR);
+    assert((uint64_t)offset + length <=
+           (uint64_t)NOODLES_SURFACE_ARENA_ADDR + sizeof(surface_memory));
+    return surface_memory + (offset - NOODLES_SURFACE_ARENA_ADDR);
 }
 
 int __wrap_munmap(void *addr, size_t size) {
-    assert(addr == memory && size == sizeof(memory));
+    assert((addr == memory && size == sizeof(memory)) ||
+           (addr == descriptor_memory && size == sizeof(descriptor_memory)) ||
+           ((unsigned char *)addr >= surface_memory &&
+            (unsigned char *)addr + size <= surface_memory + sizeof(surface_memory)));
     ++unmaps;
     return 0;
 }
@@ -223,6 +239,112 @@ int main(void) {
         }
         assert(noodles_push_command(a, bad) == -1 && errno == EINVAL && memory[0] == before);
     }
+
+    /* Managed surfaces isolate their arena from raw access, preserve pitched
+     * partial transfers and clip draw geometry before publication. */
+    assert(noodles_link_upload(a, NOODLES_SURFACE_ARENA_ADDR, fill, sizeof(fill)) == -1 &&
+           errno == EINVAL);
+    memcpy(bad, fill, sizeof(bad));
+    bad[1] = NOODLES_SURFACE_ARENA_ADDR;
+    bad[2] = 256;
+    bad[3] = bad[4] = 64;
+    assert(noodles_push_command(a, bad) == -1 && errno == EINVAL);
+
+    noodles_surface_t *surface = NULL;
+    assert(noodles_surface_create(a, 0, 64, &surface) == -1 && errno == EINVAL && !surface);
+    assert(noodles_surface_create(a, 64, 64, &surface) == 0);
+    assert(noodles_surface_width(surface) == 64 && noodles_surface_height(surface) == 64);
+    assert(noodles_surface_pitch(surface) == 256);
+    noodles_rect_t transfer_rect = {2, 3, 2, 2};
+    uint32_t upload[6] = {0x11223344, 0x55667788, 0xdeadbeef,
+                          0x99aabbcc, 0xddeeff00, 0xcafebabe};
+    uint32_t readback[6] = {0};
+    assert(noodles_surface_update(surface, &transfer_rect, upload, 12, 10) == 0);
+    assert(noodles_surface_read(surface, &transfer_rect, readback, 12, 10) == 0);
+    assert(readback[0] == upload[0] && readback[1] == upload[1] && readback[2] == 0);
+    assert(readback[3] == upload[3] && readback[4] == upload[4] && readback[5] == 0);
+
+    uint32_t slot = memory[0];
+    noodles_rect_t clipped_fill = {-4, -5, 10, 12};
+    assert(noodles_surface_fill(surface, &clipped_fill, 0x12345678) == 0);
+    uint32_t *published = &memory[1024 + slot * 8];
+    uint32_t first_surface_address = published[1];
+    assert(published[0] == 1 && published[2] == 256 &&
+           published[3] == 6 && published[4] == 7);
+
+    /* Destruction invalidates the handle immediately, but allocation cannot
+     * recycle its physical extent until the submitted fill completes. */
+    assert(noodles_surface_destroy(surface) == 0);
+    assert(noodles_surface_width(surface) == 0);
+    noodles_surface_t *next_surface = NULL;
+    assert(noodles_surface_create(a, 64, 64, &next_surface) == 0);
+    slot = memory[0];
+    noodles_rect_t full_tile = {0, 0, 64, 64};
+    assert(noodles_surface_fill(next_surface, &full_tile, 0) == 0);
+    published = &memory[1024 + slot * 8];
+    assert(published[1] != first_surface_address);
+    memory[2] = memory[0];
+    memory[3] = (memory[3] & 0x80000000u) | noodles_link_last_fence(a);
+    size_t collected = 0;
+    assert(noodles_surface_collect(a, &collected) == 0 && collected == 1);
+    noodles_surface_t *reused_surface = NULL;
+    assert(noodles_surface_create(a, 64, 64, &reused_surface) == 0);
+    slot = memory[0];
+    assert(noodles_surface_fill(reused_surface, &full_tile, 0) == 0);
+    published = &memory[1024 + slot * 8];
+    assert(published[1] == first_surface_address);
+    memory[2] = memory[0];
+    memory[3] = (memory[3] & 0x80000000u) | noodles_link_last_fence(a);
+
+    /* Batch clipping translates managed sources to ordinary hardware
+     * descriptors while retaining the surface until that batch completes. */
+    noodles_surface_blit_t tile = {reused_surface, {0, 0, 66, 66}, -2, -2};
+    assert(noodles_surface_batch_to_back_buffer(a, &tile, 1) == 0);
+    const noodles_sprite_descriptor_t *descriptor =
+        (const noodles_sprite_descriptor_t *)descriptor_memory;
+    assert(descriptor->width == 62 && descriptor->height == 62);
+    assert(descriptor->dst_addr == noodles_link_back_buffer(a));
+    assert(descriptor->src_addr == first_surface_address + 2 * 256 + 2 * 4);
+
+    /* Free-space coalescing must recover the entire 224 MiB arena. */
+    memory[2] = memory[0];
+    memory[3] = (memory[3] & 0x80000000u) | noodles_link_last_fence(a);
+    assert(noodles_surface_destroy(next_surface) == 0);
+    assert(noodles_surface_destroy(reused_surface) == 0);
+    assert(noodles_surface_collect(a, &collected) == 0 && collected == 2);
+
+    noodles_texture_cache_t *cache = NULL;
+    assert(noodles_texture_cache_create(a, 64, 64, 2, 1, &cache) == 0);
+    uint32_t tile_pixels[64 * 64];
+    for (size_t i = 0; i < 64 * 64; ++i) tile_pixels[i] = (uint32_t)i;
+    assert(noodles_texture_cache_upload(cache, 1, tile_pixels, 256, 10) == 0);
+    assert(noodles_texture_cache_upload(cache, 2, tile_pixels, 256, 10) == 0);
+    noodles_texture_blit_t cached_tile = {1, {0, 0, 64, 64}, 0, 0};
+    assert(noodles_texture_cache_batch_to_back_buffer(cache, &cached_tile, 1) == 0);
+    memory[2] = memory[0];
+    memory[3] = (memory[3] & 0x80000000u) | noodles_link_last_fence(a);
+    assert(noodles_texture_cache_upload(cache, 3, tile_pixels, 256, 10) == 0);
+    cached_tile.key = 2;
+    assert(noodles_texture_cache_batch_to_back_buffer(cache, &cached_tile, 1) == -1 &&
+           errno == ENOENT);
+    cached_tile.key = 3;
+    assert(noodles_texture_cache_batch_to_back_buffer(cache, &cached_tile, 1) == 0);
+    memory[2] = memory[0];
+    memory[3] = (memory[3] & 0x80000000u) | noodles_link_last_fence(a);
+    assert(noodles_texture_cache_destroy(cache, 10) == 0);
+    assert(noodles_surface_collect(a, &collected) == 0 && collected == 1);
+
+    noodles_surface_t *blocks[224];
+    for (size_t i = 0; i < 224; ++i)
+        assert(noodles_surface_create(a, 4096, 64, &blocks[i]) == 0);
+    noodles_surface_t *exhausted = NULL;
+    assert(noodles_surface_create(a, 1, 1, &exhausted) == -1 && errno == ENOMEM);
+    for (size_t i = 0; i < 224; i += 2) assert(noodles_surface_destroy(blocks[i]) == 0);
+    for (size_t i = 1; i < 224; i += 2) assert(noodles_surface_destroy(blocks[i]) == 0);
+    assert(noodles_surface_collect(a, &collected) == 0 && collected == 224);
+    noodles_surface_t *whole_arena = NULL;
+    assert(noodles_surface_create(a, 4096, 14336, &whole_arena) == 0);
+
     clock_fail = 1;
     assert(noodles_link_drain(a, 10) == -1 && errno == EIO);
     assert(noodles_link_close(a, 10) == -1 && errno == EIO);

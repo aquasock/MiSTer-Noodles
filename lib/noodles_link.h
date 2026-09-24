@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define NOODLES_SDK_VERSION "0.2.0"
+#define NOODLES_SDK_VERSION "0.3.0"
 #define NOODLES_PROTOCOL_VERSION 0x00010000u
 #define NOODLES_BUFFER_A_ADDR 0x31000000u
 #define NOODLES_BUFFER_B_ADDR 0x31200000u
@@ -66,8 +66,8 @@ uint32_t noodles_link_back_buffer(const noodles_link_t *link);
 uint32_t noodles_rgb(uint8_t r, uint8_t g, uint8_t b);
 
 /* Nonblocking submission: EAGAIN means no command was published. Inputs must
- * remain alive/unchanged until completion. No allocator or memory sandbox.
- * Raw commands are checked against the implemented opcode layouts. */
+ * remain alive/unchanged until completion. Raw calls do not consult managed
+ * allocations and are therefore barred from that arena. */
 int noodles_push_command(noodles_link_t *link, const uint32_t command[8]);
 int noodles_push_solid_fill(noodles_link_t *link, uint32_t dst_addr, uint16_t dst_pitch,
                             uint16_t width, uint16_t height, uint32_t color);
@@ -90,7 +90,7 @@ int noodles_push_present(noodles_link_t *link, noodles_fence_t *fence);
 int noodles_present_and_wait(noodles_link_t *link);
 
 /* Upload excludes control memory except the fixed descriptor table, which is
- * ownership-protected. Arbitrary texture lifetimes remain caller-managed. */
+ * ownership-protected, and excludes the managed-surface arena. */
 int noodles_link_upload(noodles_link_t *link, uint32_t dst_addr, const void *data, size_t size_bytes);
 
 #ifdef __cplusplus

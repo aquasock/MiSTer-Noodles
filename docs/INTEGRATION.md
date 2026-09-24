@@ -64,12 +64,13 @@ Current fixed uses (end addresses are exclusive):
 | `[0x31000000, 0x311d4c00)` | 800x600 buffer A pixels; within its fixed 2MiB slot beginning at `0x31000000`. |
 | `[0x31200000, 0x313d4c00)` | 800x600 buffer B pixels; within its fixed 2MiB slot beginning at `0x31200000`. |
 | `0x31400000` and tool-specific addresses | Demo scratch/assets, not an allocator or a promise of available capacity. |
+| `[0x32000000, 0x40000000)` | SDK 0.3 managed-surface arena; 224MiB, excluded from raw SDK commands and uploads. |
 
 Leave the control-memory neighborhood and both 2MiB scanout slots reserved;
 do not treat gaps or demo addresses as a shared allocator. Run only one
 producer/application and no concurrent memory-writing diagnostic tools.
-The later managed-surface stage must establish its own bounded arena and
-exclude all platform/control/scanout uses before allocating textures.
+SDK 0.3 owns the bounded arena shown above for opaque managed surfaces. Do not
+address it through raw commands, direct `/dev/mem` mappings or legacy tools.
 
 Pixels occupy four bytes, with increasing-address bytes **R, G, B, unused**.
 `noodles_rgb(r,g,b)` produces `r | (g << 8) | (b << 16)` with a zero high byte.
@@ -183,15 +184,16 @@ capture `noodles_link_last_fence(device)` and use
 requires a target distance less than 2^30 completions. Do not compare raw
 counts with `>=`, or use the ring read pointer to authorize asset reuse.
 
-Keep all source pixels alive and unchanged until their last consumer
-completes. Wait before CPU access to unfinished GPU destinations. Only the
-fixed descriptor table has library-managed ownership today:
+Keep all raw source pixels alive and unchanged until their last consumer
+completes. Wait before CPU access to unfinished raw GPU destinations. The
+fixed descriptor table has library-managed ownership:
 `noodles_push_sprite_batch()` returns `-1/EAGAIN` before any descriptor
 write when that table is busy or the ring is full. Raw opcode-5 submissions
 also claim it; overlapping library uploads are blocked until completion.
-Direct `/dev/mem` writes bypass this protection; the SDK rejects
-draw commands targeting the control region. It is not general texture
-lifetime management.
+Direct `/dev/mem` writes bypass this protection. Managed surfaces add general
+allocation and lifetime tracking inside `[0x32000000, 0x40000000)`: their
+source and destination fences are recorded on successful submission,
+destruction defers reuse, and partial CPU transfers wait before access.
 
 Draw into `noodles_link_back_buffer()`, then call
 `noodles_present_and_wait()`, then query the back buffer again. The helper
@@ -218,7 +220,7 @@ draw-command layouts. Preserve the older 640x480 image and its matching
 stage-2A tools as the recovery fallback while later stages add managed
 surfaces and the drawing operations required by GemRB.
 
-There is currently no SDL renderer, texture allocator, alpha blending,
+There is currently no SDL renderer, alpha blending,
 tint, scaling or flipping API. The new render target is 800x600 and core audio is
 silent. The planned first consumer is GemRB v0.9.5 through SDL2 2.32.10;
 platform video/audio ownership and software fallback synchronization still

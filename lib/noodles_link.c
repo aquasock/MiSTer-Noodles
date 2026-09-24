@@ -58,7 +58,7 @@ static int session_error(const noodles_link_t *link) {
     return 0;
 }
 
-static int healthy(noodles_link_t *link) {
+int noodles_link_check(noodles_link_t *link) {
     if (!link) return fail(EINVAL);
     if (link->fault) return fail(link->fault);
     int error = session_error(link);
@@ -249,7 +249,7 @@ int noodles_link_close(noodles_link_t *link, uint32_t timeout_ms) {
     if (!link) return fail(EINVAL);
     uint64_t start = 0, deadline = 0;
     int error = 0;
-    if (healthy(link) != 0) {
+    if (noodles_link_check(link) != 0) {
         error = errno;
     } else if (monotonic_ns(&start) != 0) {
         error = errno;
@@ -283,6 +283,7 @@ int noodles_link_close(noodles_link_t *link, uint32_t timeout_ms) {
         if (mark_session(link, 'D') != 0) error = errno;
     }
     if (close(link->lock_fd) != 0 && !error) error = errno;
+    noodles_surface_link_cleanup(link);
     free(link);
     return error ? fail(error) : 0;
 }
@@ -321,7 +322,7 @@ noodles_fence_t noodles_link_last_fence(const noodles_link_t *link) {
 }
 
 int noodles_link_poll(noodles_link_t *link, noodles_fence_t target, int *complete) {
-    if (healthy(link) != 0) return -1;
+    if (noodles_link_check(link) != 0) return -1;
     if (!complete) return fail(EINVAL);
     __sync_synchronize();
     int reached = noodles_link_fence_reached(link, target);
@@ -349,7 +350,7 @@ int noodles_link_poll(noodles_link_t *link, noodles_fence_t target, int *complet
 }
 
 int noodles_link_wait(noodles_link_t *link, noodles_fence_t target, uint32_t timeout_ms) {
-    if (healthy(link) != 0) return -1;
+    if (noodles_link_check(link) != 0) return -1;
     uint64_t start;
     if (monotonic_ns(&start) != 0) { link->fault = errno; return -1; }
     uint64_t deadline = start + (uint64_t)timeout_ms * 1000000u;
@@ -365,37 +366,47 @@ int noodles_link_wait(noodles_link_t *link, noodles_fence_t target, uint32_t tim
 }
 
 int noodles_link_drain(noodles_link_t *link, uint32_t timeout_ms) {
-    if (healthy(link) != 0) return -1;
+    if (noodles_link_check(link) != 0) return -1;
     return noodles_link_wait(link, noodles_link_last_fence(link), timeout_ms);
 }
 
 static int submission_ready(noodles_link_t *link) {
-    if (healthy(link) != 0) return -1;
+    if (noodles_link_check(link) != 0) return -1;
     return link->present_pending ? fail(EAGAIN) : 0;
 }
 
-static int valid_span(uint32_t address, uint64_t bytes) {
+static int overlaps_managed_arena(uint32_t address, uint64_t bytes) {
     uint64_t end = (uint64_t)address + bytes;
-    return bytes && address >= 0x30000000u && end <= 0x40000000ull &&
-        !(address < 0x30022800u && end > 0x30020000u);
+    uint64_t arena_end = (uint64_t)NOODLES_SURFACE_ARENA_ADDR + NOODLES_SURFACE_ARENA_BYTES;
+    return address < arena_end && end > NOODLES_SURFACE_ARENA_ADDR;
 }
 
-static int valid_rect(uint32_t address, uint32_t pitch, uint32_t width, uint32_t height) {
+static int valid_span(uint32_t address, uint64_t bytes, int allow_managed) {
+    uint64_t end = (uint64_t)address + bytes;
+    return bytes && address >= 0x30000000u && end <= 0x40000000ull &&
+        !(address < 0x30022800u && end > 0x30020000u) &&
+        (allow_managed || !overlaps_managed_arena(address, bytes));
+}
+
+static int valid_rect(uint32_t address, uint32_t pitch, uint32_t width, uint32_t height,
+                      int allow_managed) {
     return width && height && width <= 65535 && height <= 65535 &&
         pitch <= 65535 && !(pitch & 3) && !(address & 3) &&
         pitch >= (uint64_t)width * 4 &&
-        valid_span(address, (uint64_t)(height - 1) * pitch + (uint64_t)width * 4);
+        valid_span(address, (uint64_t)(height - 1) * pitch + (uint64_t)width * 4,
+                   allow_managed);
 }
 
-static int valid_command(const uint32_t *c) {
+static int valid_command(const uint32_t *c, int allow_managed) {
     if (!c) return 0;
     switch (c[0]) {
     case NOODLES_OP_SOLID_FILL:
-        return !c[6] && !c[7] && valid_rect(c[1], c[2], c[3], c[4]);
+        return !c[6] && !c[7] && valid_rect(c[1], c[2], c[3], c[4], allow_managed);
     case NOODLES_OP_BLIT_COPY:
     case NOODLES_OP_BLIT_COPY_KEY:
         return (c[0] != NOODLES_OP_BLIT_COPY || !c[5]) &&
-            valid_rect(c[1], c[2], c[3], c[4]) && valid_rect(c[6], c[7], c[3], c[4]);
+            valid_rect(c[1], c[2], c[3], c[4], allow_managed) &&
+            valid_rect(c[6], c[7], c[3], c[4], allow_managed);
     case NOODLES_OP_PRESENT:
         return !(c[1] | c[2] | c[3] | c[4] | c[5] | c[6] | c[7]);
     case NOODLES_OP_SPRITE_BATCH:
@@ -405,7 +416,8 @@ static int valid_command(const uint32_t *c) {
         uint64_t length = ((uint64_t)c[5] + 1023) & ~1023ull;
         return !(c[2] | c[3] | c[4] | c[7]) && c[5] &&
             !(c[1] & 1023) && !(c[6] & 7) &&
-            (uint64_t)c[1] + length <= NOODLES_SDRAM_WINDOW_BYTES && valid_span(c[6], length);
+            (uint64_t)c[1] + length <= NOODLES_SDRAM_WINDOW_BYTES &&
+            valid_span(c[6], length, allow_managed);
     }
     default: return 0;
     }
@@ -436,9 +448,9 @@ static int ring_has_space(const noodles_link_t *link) {
     return 1;
 }
 
-int noodles_push_command(noodles_link_t *link, const uint32_t command[8]) {
+static int push_command(noodles_link_t *link, const uint32_t command[8], int allow_managed) {
     if (submission_ready(link) != 0) return -1;
-    if (!valid_command(command)) {
+    if (!valid_command(command, allow_managed)) {
         errno = EINVAL;
         return -1;
     }
@@ -465,6 +477,14 @@ int noodles_push_command(noodles_link_t *link, const uint32_t command[8]) {
         link->present_pending = 1;
     }
     return 0;
+}
+
+int noodles_push_command(noodles_link_t *link, const uint32_t command[8]) {
+    return push_command(link, command, 0);
+}
+
+int noodles_link_push_command_managed(noodles_link_t *link, const uint32_t command[8]) {
+    return push_command(link, command, 1);
 }
 
 int noodles_push_solid_fill(noodles_link_t *link, uint32_t dst_addr, uint16_t dst_pitch,
@@ -503,8 +523,9 @@ int noodles_push_sprite_batch(noodles_link_t *link,
     }
     for (unsigned i = 0; i < count; ++i) {
         const noodles_sprite_descriptor_t *d = descriptors + i;
-        if (d->flags > 1 || !valid_rect(d->dst_addr, d->dst_pitch, d->width, d->height) ||
-            !valid_rect(d->src_addr, d->src_pitch, d->width, d->height)) return fail(EINVAL);
+        if (d->flags > 1 || !valid_rect(d->dst_addr, d->dst_pitch, d->width, d->height, 0) ||
+            !valid_rect(d->src_addr, d->src_pitch, d->width, d->height, 0))
+            return fail(EINVAL);
     }
     if (!descriptors_available(link) || !ring_has_space(link)) return -1;
     if (noodles_link_upload(link, NOODLES_SPRITE_DESCRIPTOR_ADDR, descriptors,
@@ -512,7 +533,30 @@ int noodles_push_sprite_batch(noodles_link_t *link,
     const uint32_t command[8] = {
         NOODLES_OP_SPRITE_BATCH, NOODLES_SPRITE_DESCRIPTOR_ADDR, 0, count, 0, 0, 0, 0,
     };
-    return noodles_push_command(link, command);
+    return push_command(link, command, 0);
+}
+
+int noodles_link_push_sprite_descriptors_managed(
+    noodles_link_t *link, const noodles_sprite_descriptor_t *descriptors, uint16_t count) {
+    if (submission_ready(link) != 0) return -1;
+    if (!descriptors || count == 0 || count > NOODLES_SPRITE_DESCRIPTOR_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
+    for (unsigned i = 0; i < count; ++i) {
+        const noodles_sprite_descriptor_t *d = descriptors + i;
+        if (d->flags > 1 ||
+            !valid_rect(d->dst_addr, d->dst_pitch, d->width, d->height, 1) ||
+            !valid_rect(d->src_addr, d->src_pitch, d->width, d->height, 1))
+            return fail(EINVAL);
+    }
+    if (!descriptors_available(link) || !ring_has_space(link)) return -1;
+    if (noodles_link_upload(link, NOODLES_SPRITE_DESCRIPTOR_ADDR, descriptors,
+                             (size_t)count * sizeof(*descriptors)) != 0) return -1;
+    const uint32_t command[8] = {
+        NOODLES_OP_SPRITE_BATCH, NOODLES_SPRITE_DESCRIPTOR_ADDR, 0, count, 0, 0, 0, 0,
+    };
+    return push_command(link, command, 1);
 }
 
 int noodles_push_load_sdram(noodles_link_t *link, uint32_t sdram_dst_addr,
@@ -563,7 +607,7 @@ int noodles_link_upload(noodles_link_t *link, uint32_t dst_addr, const void *dat
     uint64_t end = (uint64_t)dst_addr + size_bytes;
     int descriptor_upload = dst_addr >= NOODLES_SPRITE_DESCRIPTOR_ADDR && end <= descriptor_end;
     if (!data || !size_bytes || size_bytes > UINT32_MAX ||
-        (!descriptor_upload && !valid_span(dst_addr, size_bytes))) return fail(EINVAL);
+        (!descriptor_upload && !valid_span(dst_addr, size_bytes, 0))) return fail(EINVAL);
     long page = sysconf(_SC_PAGESIZE);
     if (page <= 0 || (page & (page - 1))) return fail(EIO);
     uint32_t aligned_addr = dst_addr & ~(uint32_t)(page - 1);
