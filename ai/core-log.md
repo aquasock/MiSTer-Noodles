@@ -86,7 +86,7 @@ Keep the accepted `6b9ff63` image as the timing-qualified fallback while the ble
 
 ---
 
-## 3 COMMIT Unreleased ??? 2026-09-23T22:25:51-07:00
+## 3 COMMIT Unreleased 0b48215 2026-09-23T22:25:51-07:00
 
 #### Coming From:
 
@@ -98,11 +98,11 @@ Add per-descriptor blend, mirror and colour/alpha modulation to SPRITE_BATCH and
 
 #### Outcome:
 
-Planned, not yet implemented. A new reference record will define sprite descriptor flag bits for straight-alpha blending, horizontal mirroring and vertical mirroring, with the colour-key word reinterpreted as an RGBA modulation for flagged descriptors, and the arithmetic of SDL 2.32.10's generic path for colour and alpha modulation with and without blending. A protocol minor revision will advertise the new descriptor semantics without changing the command layout. The blend engine will gain a colour-modulation stage, reversed source walking for vertical mirroring and burst-reversed pixel placement for horizontal mirroring, and `sprite_batch` will dispatch flagged descriptors to it, waiting for the DDR3 adapter to drain between descriptors so overlapping draws read completed results, while unflagged descriptors keep the accepted `blit_copy64` path. Batch-launched blends will not advance the host fence individually. The timing fix will give each write client a ready signal derived only from the adapter's registered queue space and its own requests, removing the combinational path from one engine's request logic into another engine's ready. The SDK will add flagged surface and texture-cache batch draws with mirror-aware clipping and will gate them on the protocol revision.
+Reference records BLIT-008 and LINK-013 define descriptor flag bits 1-3 for blending and horizontal and vertical mirroring, with the colour-key word as an RGBA modulation and SDL 2.32.10's generic colour and alpha modulation arithmetic, advertised as protocol 1.2. The blend engine gained colour modulation, a plain-store mode, burst-reversed horizontal and row-reversed vertical mirroring and colour keys, `sprite_batch` dispatches to it and drains the adapter around its draws, and SDK 0.5 adds flagged surface and texture-cache batches with mirror-aware clipping. While building the mixed-batch test, the accepted `blit_copy64` was found to leave odd widths' last column uncopied, hang from the second row on and misread sources that are not 8-byte aligned, reproducible with the unmodified pre-cycle RTL; at the user's choice of option A, `sprite_batch` now sends it only even-width copies with 8-byte-aligned source address and pitch and routes all others to the blend engine. Write clients now take their ready from the adapter's registered queue space and their own requests. Source `ce924b8` failed setup on seeds 13, 5 and 7 by 1.1 to 1.8ns, entirely from the blend engine's block-RAM tag FIFO into its pixel FIFO; `0b48215` keeps the tags in registers and registers each response beat, bringing seeds 13, 7 and 5 to worst setup of -0.071, -0.150 and -0.380ns at slow -40C with hold and fast corners passing. The remaining small paths are in `blend_walk` request formation, `blit_copy64` destination-address arithmetic and the `link_control` read request into the adapter queue. Simulation passed the 33.8M-vector datapath test, 4000 randomized engine rectangles and 320 overlapping descriptors in eight mixed batches against a sequential model, with mutations of the mirror and clipping logic detected, plus all 37 simulations, host, sanitizer and installed-consumer tests and a brute-force mirrored clipping check. The user directed that seed 13, RBF SHA256 `bb142a6e6ee81bdc5b8a61092cdc2903146bdf737f2ac91dfc0f0858ae26badf`, be treated as passing for testing; it was deployed as `Noodles_batch_seed13_TIMING_VIOLATED.rbf` with hash-verified tools and reported protocol 0x00010002. Hardware readback was bit-exact for 10 single-command cases and 12 rounds of 576 overlapping batched draws, 282 of them flagged and including rerouted odd and unaligned copies; blending measured 61.05 Mpixel/s single and 61.04 batched, `blit-bench` 76.65, 76.63 and 77.44 Mpixel/s, the 256-sprite workload 15.1fps and the tile cache 60.2fps. After host-only commit `5de85a5` replaced the symmetric demo sprite with an arrow, the batched demo ran at 60.3fps and the user confirmed that mirroring, tinting, blending and edge clipping all passed.
 
 #### Next Steps:
 
-Extend the exhaustive datapath and randomized engine simulations to cover modulation, both mirror axes, keyed and flagged batches and overlapping batched draws, and pass host, sanitizer and full simulation regressions. Build three seeds through the four-corner gate, deploy with hash readback, verify flagged draws on hardware against the C model, measure batch throughput, confirm existing benchmarks, and obtain user visual acceptance of a mirrored and tinted demo.
+Close the remaining slow -40C setup paths in `blend_walk` request formation, `blit_copy64` address arithmetic and the `link_control` read request, verifying with a local fit and four-corner gate before publishing, then rebuild three seeds. Then continue the GemRB-driven work with the factor-based blend mode unit, designed to share the existing DSP multipliers.
 
 #### Files Modified:
 
@@ -113,22 +113,31 @@ Extend the exhaustive datapath and randomized engine simulations to cover modula
 - rtl/blit_blend.sv
 - rtl/sprite_batch.sv
 - rtl/link_control.sv
+- Makefile
 - sim/blend_ref.h
+- sim/engine_blend_dut.sv
+- sim/engine_sprite_batch_dut.sv
+- sim/engine_sprite_batch_sdram_dut.sv
 - sim/tb_blend_px.cpp
 - sim/tb_blit_blend.cpp
+- sim/tb_link_control.cpp
 - sim/tb_sprite_batch.cpp
+- sim/test_noodles_link.c
+- sim/test_noodles_sdk.c
+- sim/test_sdk_install.sh
+- lib/noodles.pc.in
 - lib/noodles_link.c
 - lib/noodles_link.h
+- lib/noodles_link_internal.h
 - lib/noodles_surface.c
 - lib/noodles_surface.h
-- sim/test_noodles_sdk.c
 - tools/blend_demo.c
 - docs/INTEGRATION.md
 - docs/SDK.md
 
 #### Status:
 
-- [ ] Built
-- [ ] Passed
+- [x] Built
+- [x] Passed
 
 ---
