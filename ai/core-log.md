@@ -195,7 +195,7 @@ The timing-qualified seed-7 blend-mode image is loaded on the MiSTer at 10.10.0.
 
 ---
 
-## 5 COMMIT Unreleased ??? 2026-09-24T07:57:47-07:00
+## 5 COMMIT Unreleased 0df688d 2026-09-24T07:57:47-07:00
 
 #### Coming From:
 
@@ -207,24 +207,25 @@ Add bounded CPU transfer and fill operations for the current hardware back buffe
 
 #### Outcome:
 
-The planned SDK 0.7 operations will read, update and fill clipped regions of the current 800x600 back buffer while preserving pending-present ownership, bounded fence waits, pitch validation and command order. They will use protocol 1.3's existing fixed back buffers and commands, require no RTL or RBF change, and retain managed surfaces for textures and offscreen render targets.
+Source `0df688d` publishes SDK 0.7 with `noodles_back_buffer_read`, `noodles_back_buffer_update` and `noodles_back_buffer_fill`. Transfers require fully in-bounds rectangles, validate host pitch, refuse a pending presentation, perform bounded link drains before resolving the current buffer and copy each row using the hardware pitch; fill clips signed rectangles and submits the existing raw solid-fill command to the current buffer. Host tests cover pitched transfers, clipping, pending-present refusal and both framework-buffer roles. The complete host and SDK-install suites, manual AddressSanitizer and UndefinedBehaviorSanitizer runs, SDK build and installed ARM C and C++ consumers passed. MiSTer-GemRB sources `43b4fe7` and `667661e` used the new API for its SDL default target, and the existing timing-qualified protocol-1.3 RBF passed the expanded hardware diagnostic with hash `a6d5728e`; the same Throne of Bhaal AR4000 save ran without a reported visual fault and eliminated the measured full-screen composition copy.
 
 #### Next Steps:
 
-Implement the public back-buffer operations, add host tests for clipping, pitched transfers, buffer-role changes and pending-present refusal, run the complete host, sanitizer and installed-consumer suites, then update MiSTer-GemRB to render its SDL default target directly and verify the existing hardware diagnostic before repeating gameplay timing.
+Use SDK 0.7 as the baseline for direct display-target integrations. The GemRB workload now shows that its remaining approximately 20 blended rectangle fallbacks per frame cost about 19-20ms in regional synchronization plus 13-14ms in CPU fallback and queue handling, so scope an ordered FPGA blended-fill command and enable the existing MiSTer ALSA path in the same required RBF build and timing-qualification cycle.
 
 #### Files Modified:
 
+- docs/SDK.md
 - lib/noodles.pc.in
 - lib/noodles_link.h
 - lib/noodles_surface.c
 - lib/noodles_surface.h
 - sim/test_noodles_sdk.c
-- docs/SDK.md
+- sim/test_sdk_install.sh
 
 #### Status:
 
-- [ ] Built
-- [ ] Passed
+- [x] Built
+- [x] Passed
 
 ---
