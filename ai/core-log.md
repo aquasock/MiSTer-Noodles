@@ -2801,3 +2801,32 @@ Obtain user visual acceptance of the migrated host workload before recording har
 - [ ] Passed
 
 ---
+
+## 85 COMMIT Unreleased e461d3e 2026-09-23T19:43:20-07:00
+
+#### Coming From:
+
+Unreleased 775405d
+
+#### Purpose:
+
+Exercise the published SDK on hardware with a longer sprite soak and concurrent-client exclusion.
+
+#### Outcome:
+
+At the user's request, the existing hash-verified 775405d SDK binaries were tested on the unchanged accepted SVGA seed7 core. The sixty-second 256-sprite, four-batch, 128x128 run completed 905 frames at 15.1fps. A second SDK consumer launched during the soak was rejected with EBUSY and exit status one while the first producer continued successfully. Ten seconds of key-checker with 64 sprites gave 301 frames at 30.1fps; a three-second uncapped sample measured 74.89 Mpixel/s, without establishing a controlled comparison against the older host tool. Five-second clear/present and present-only runs gave 60.4fps and 60.3fps. A final independent consumer reopened, filled, presented and closed successfully, leaving a clean session marker. All expected-success commands returned zero with no reported timeout. The only nonzero result was the intended competing-client rejection. Documentation e461d3e records this evidence; Built refers to the tested source 775405d binaries, with no new FPGA or host-code changes in this documentation commit. Visual acceptance and exhaustive pixel comparison were not performed, so Passed remains unchecked.
+
+#### Next Steps:
+
+Record user visual feedback separately when available and scope stage 2B only after approval. Keep the accepted FPGA image and fallback artifacts unchanged; timeout and crash-recovery policy remain covered by mocked SDK tests rather than induced failures on the device, and live reset detection is still unavailable.
+
+#### Files Modified:
+
+- docs/SDK.md
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
