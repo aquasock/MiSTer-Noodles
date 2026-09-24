@@ -27,7 +27,7 @@ None.
 
 ---
 
-## 2 COMMIT Unreleased ??? 2026-09-23T21:41:35-07:00
+## 2 COMMIT Unreleased 1d4957f 2026-09-23T21:41:35-07:00
 
 #### Coming From:
 
@@ -39,35 +39,49 @@ Add single-command straight-alpha source-over blending as opcode 7 BLIT_BLEND wi
 
 #### Outcome:
 
-Planned, not yet implemented. A reference record will first define the SDL2 `SDL_BLENDMODE_BLEND` equation, Porter-Duff source-over with straight alpha taken from pixel byte 3 and multiplied by an 8-bit per-command alpha modulation, with rounding checked against the SDL 2.32.10 source so the hardware can be bit-exact to a C reference model. A new `rtl/blit_blend.sv` engine, leaving the accepted `blit_copy64` path unmodified, will fetch source and destination bursts, blend through a pipelined datapath and write back, skipping pixels with zero effective alpha. It will be dispatched as opcode 7 using the copy command layout with word 5 carrying the alpha modulation, advertised through capability bit 7 and protocol 1.1. The SDK will add raw, managed-surface and texture-cache blend calls while still accepting protocol 1.0 cores, returning `ENOTSUP` for blending there. Batch blending, additive and modulate modes, tinting and destination-read skipping are deferred; GemRB v0.9.5's blit flags will be reviewed to inform that follow-on scope.
+Reference records BLIT-007 and LINK-012 define the blend and protocol 1.1, superseding LINK-011, with arithmetic taken from SDL 2.32.10's generic truncating /255 path, since SDL's unmodulated fast path uses a >>8 approximation, and implemented with the exact identity D(x) = (x + 1 + (x >> 8)) >> 8. Source `1d4957f` adds `blend_px`, `blend_walk` and the `blit_blend` burst engine without modifying `blit_copy64`, plus CMDQ opcode 7, protocol 0x00010001 with mask 0xfe, and SDK 0.4 raw, surface and texture-cache blend calls that accept any 1.x core and return ENOTSUP without the capability. Engine simulation exposed a real hazard: with tightly packed rows, one 64-bit word can hold two rows' edge pixels, so full-word read-modify-write could restore a stale lane; single-lane edge words now use the 32-bit write port. The exhaustive datapath test matched all 16842752 vectors, the randomized engine test with bus stalls and variable latency passed 1500 rectangles plus fixed cases, all 36 simulations, host and sanitizer tests, installed consumers and ARM builds passed, and Quartus synthesis used 51 of 112 DSP blocks. Clean GitHub builds with seeds 13, 5 and 7 failed setup at the slow corners with worst slack -0.389, -0.404 and -0.596ns; hold, recovery, removal and pulse width passed. The failing paths run from the fill engine's column compare through the top-level write-port select into `blit_copy64`, not through the blend engine. At the user's explicit request the best seed-13 image, SHA256 `3d6763813453ebc1304f34a2b2f7b706ca02dade68a202813eef8cedf3b2c869`, was deployed as `Noodles_blend_seed13_TIMING_VIOLATED.rbf` with hash-verified `-blend` tools. On the accepted protocol-1.0 core, SDK 0.4 verified, refused blending, and matched baseline benchmarks. On the blend image, hardware readback of 10 cases and 24671 blended pixels was bit-exact, blending measured 56.66 Mpixel/s, `blit-bench` gave 73.94, 78.48 and 81.58 Mpixel/s, the 256-sprite workload held 15.1fps, the tile cache 60.2fps and the blend demo 60.3fps, without errors or timeouts. The user reported that the blended sprites looked perfect and explicitly waived the timing violations for now; Passed records that hardware and visual acceptance, not timing qualification.
 
 #### Next Steps:
 
-Verify the datapath exhaustively against the C model in Verilator, test the engine under stalls, misaligned and odd widths and zero, full and mixed alpha, and run the full simulation suite and host regressions. Build three distinct seeds through the four-corner timing gate and stop for direction on any failure. Then deploy a blend demo with pixel readback comparison and throughput reporting, confirm that `blit-bench` and tile-cache results match the accepted baseline, and obtain user visual acceptance.
+Keep the accepted `6b9ff63` image as the timing-qualified fallback while the blend image remains a timing-waived diagnostic baseline. Close the write-port select timing path before this work is released, and scope the next GemRB-driven capability from the review of GemRB v0.9.5's SDL2 renderer.
 
 #### Files Modified:
 
+- Makefile
 - Noodles.sv
 - files.qip
+- rtl/blend_px.sv
+- rtl/blend_walk.sv
 - rtl/blit_blend.sv
 - rtl/cmdq.sv
 - rtl/link_control.sv
 - sim/blend_ref.h
+- sim/cmdq_batch_dut.sv
+- sim/engine_blend_dut.sv
+- sim/engine_copy_dut.sv
+- sim/engine_ddram_dut.sv
+- sim/engine_dut.sv
+- sim/tb_blend_px.cpp
 - sim/tb_blit_blend.cpp
+- sim/tb_cmdq_batch.cpp
+- sim/tb_link_control.cpp
+- sim/test_noodles_link.c
+- sim/test_noodles_sdk.c
+- sim/test_sdk_install.sh
+- lib/noodles.pc.in
 - lib/noodles_link.c
 - lib/noodles_link.h
+- lib/noodles_link_internal.h
 - lib/noodles_surface.c
 - lib/noodles_surface.h
-- sim/test_noodles_sdk.c
 - tools/blend_demo.c
-- Makefile
 - scripts/deploy.sh
 - docs/INTEGRATION.md
 - docs/SDK.md
 
 #### Status:
 
-- [ ] Built
-- [ ] Passed
+- [x] Built
+- [x] Passed
 
 ---
