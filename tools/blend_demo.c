@@ -117,6 +117,16 @@ static int require_blend(noodles_link_t *link) {
 static int verify(noodles_link_t *link) {
     enum { DW = 300, DH = 40, SW = 131, SH = 33 };
     static uint32_t dst[DW * DH], src[SW * SH], expect[DW * DH], got[DW * DH];
+    noodles_device_info_t info;
+    if (noodles_link_get_info(link, &info) != 0) {
+        perror("noodles_link_get_info");
+        return -1;
+    }
+    if (!(info.opcode_mask & NOODLES_CAP_BLEND_FILL)) {
+        fprintf(stderr, "core protocol 0x%08x mask 0x%03x lacks BLEND_FILL\n",
+                info.protocol_version, info.opcode_mask);
+        return -1;
+    }
     noodles_surface_t *ds = NULL, *ss = NULL;
     if (noodles_surface_create(link, DW, DH, &ds) != 0 ||
         noodles_surface_create(link, SW, SH, &ss) != 0) {
@@ -177,6 +187,66 @@ static int verify(noodles_link_t *link) {
     }
     printf("PASS: %zu hardware blend cases, %lu blended pixels bit-exact, surroundings unchanged\n",
            sizeof(cases) / sizeof(cases[0]), pixels);
+
+    // BLEND_FILL uses one constant, unmodulated RGBA source, clips in the
+    // managed-surface helper and must leave every surrounding pixel intact.
+    const struct { int x, y; uint32_t w, h, color, mode; } fill_cases[] = {
+        {0, 0, 131, 33, 0x80402010u, NOODLES_DRAW_MODE_BLEND},
+        {1, 2, 127, 31, 0xff112233u, NOODLES_DRAW_MODE_NONE},
+        {-7, 3, 64, 25, 0x6020c080u, NOODLES_DRAW_MODE_ADD},
+        {250, -4, 80, 21, 0xc0a04020u, NOODLES_DRAW_MODE_MOD},
+        {297, 37, 19, 11, 0x4080a0c0u, NOODLES_DRAW_MODE_MUL},
+        {5, 5, 1, 29, 0x7f123456u, NOODLES_DRAW_MODE_STENCIL_ALPHA},
+        {7, 9, 2, 17, 0x90abcdefu,
+         NOODLES_DRAW_BLEND_MODE(NOODLES_BLENDFACTOR_ONE_MINUS_DST_COLOR,
+                                 NOODLES_BLENDFACTOR_SRC_COLOR, NOODLES_BLENDOP_SUBTRACT,
+                                 NOODLES_BLENDFACTOR_DST_ALPHA,
+                                 NOODLES_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
+                                 NOODLES_BLENDOP_REV_SUBTRACT)},
+    };
+    unsigned long fill_pixels = 0;
+    for (size_t i = 0; i < sizeof(fill_cases) / sizeof(fill_cases[0]); ++i) {
+        for (size_t p = 0; p < DW * DH; ++p) dst[p] = next_random();
+        memcpy(expect, dst, sizeof(dst));
+        int x0 = fill_cases[i].x < 0 ? 0 : fill_cases[i].x;
+        int y0 = fill_cases[i].y < 0 ? 0 : fill_cases[i].y;
+        int x1 = fill_cases[i].x + (int)fill_cases[i].w;
+        int y1 = fill_cases[i].y + (int)fill_cases[i].h;
+        if (x1 > DW) x1 = DW;
+        if (y1 > DH) y1 = DH;
+        for (int y = y0; y < y1; ++y)
+            for (int x = x0; x < x1; ++x) {
+                uint32_t *d = &expect[y * DW + x];
+                *d = noodles_mode_ref(fill_cases[i].color, *d, 0xffffffffu, fill_cases[i].mode);
+                ++fill_pixels;
+            }
+        if (noodles_surface_update(ds, &whole_dst, dst, DW * 4, 2000) != 0) {
+            perror("noodles_surface_update");
+            return -1;
+        }
+        const noodles_rect_t rect = {fill_cases[i].x, fill_cases[i].y,
+                                     fill_cases[i].w, fill_cases[i].h};
+        if (RETRY(noodles_surface_blend_fill(ds, &rect, fill_cases[i].color,
+                                             fill_cases[i].mode)) != 0) {
+            perror("noodles_surface_blend_fill");
+            return -1;
+        }
+        if (noodles_surface_read(ds, &whole_dst, got, DW * 4, 2000) != 0) {
+            perror("noodles_surface_read");
+            return -1;
+        }
+        int bad = 0;
+        for (int p = 0; p < DW * DH; ++p)
+            if (got[p] != expect[p] && bad++ < 8)
+                fprintf(stderr, "fill case %zu: (%d,%d) got %08x want %08x\n", i, p % DW,
+                        p / DW, got[p], expect[p]);
+        if (bad) {
+            fprintf(stderr, "FAIL: fill case %zu: %d pixels\n", i, bad);
+            return -1;
+        }
+    }
+    printf("PASS: %zu hardware blend-fill cases, %lu pixels bit-exact, clipping and surroundings unchanged\n",
+           sizeof(fill_cases) / sizeof(fill_cases[0]), fill_pixels);
 
     // SPRITE_BATCH draws, in order, overlapping in the destination surface.
     enum { ROUNDS = 12, DRAWS = 48 };
