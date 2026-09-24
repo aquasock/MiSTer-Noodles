@@ -26,3 +26,48 @@ None.
 - [x] Passed
 
 ---
+
+## 2 COMMIT Unreleased ??? 2026-09-23T21:41:35-07:00
+
+#### Coming From:
+
+Unreleased 6ebd0fd
+
+#### Purpose:
+
+Add single-command straight-alpha source-over blending as opcode 7 BLIT_BLEND with SDK support.
+
+#### Outcome:
+
+Planned, not yet implemented. A reference record will first define the SDL2 `SDL_BLENDMODE_BLEND` equation, Porter-Duff source-over with straight alpha taken from pixel byte 3 and multiplied by an 8-bit per-command alpha modulation, with rounding checked against the SDL 2.32.10 source so the hardware can be bit-exact to a C reference model. A new `rtl/blit_blend.sv` engine, leaving the accepted `blit_copy64` path unmodified, will fetch source and destination bursts, blend through a pipelined datapath and write back, skipping pixels with zero effective alpha. It will be dispatched as opcode 7 using the copy command layout with word 5 carrying the alpha modulation, advertised through capability bit 7 and protocol 1.1. The SDK will add raw, managed-surface and texture-cache blend calls while still accepting protocol 1.0 cores, returning `ENOTSUP` for blending there. Batch blending, additive and modulate modes, tinting and destination-read skipping are deferred; GemRB v0.9.5's blit flags will be reviewed to inform that follow-on scope.
+
+#### Next Steps:
+
+Verify the datapath exhaustively against the C model in Verilator, test the engine under stalls, misaligned and odd widths and zero, full and mixed alpha, and run the full simulation suite and host regressions. Build three distinct seeds through the four-corner timing gate and stop for direction on any failure. Then deploy a blend demo with pixel readback comparison and throughput reporting, confirm that `blit-bench` and tile-cache results match the accepted baseline, and obtain user visual acceptance.
+
+#### Files Modified:
+
+- Noodles.sv
+- files.qip
+- rtl/blit_blend.sv
+- rtl/cmdq.sv
+- rtl/link_control.sv
+- sim/blend_ref.h
+- sim/tb_blit_blend.cpp
+- lib/noodles_link.c
+- lib/noodles_link.h
+- lib/noodles_surface.c
+- lib/noodles_surface.h
+- sim/test_noodles_sdk.c
+- tools/blend_demo.c
+- Makefile
+- scripts/deploy.sh
+- docs/INTEGRATION.md
+- docs/SDK.md
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
