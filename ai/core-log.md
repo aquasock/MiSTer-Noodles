@@ -359,3 +359,55 @@ Repeat AR4000 once with statistics disabled, then capture a spell-heavy interval
 - [x] Passed
 
 ---
+
+## 9 COMMIT Unreleased ??? 2026-09-24T13:44:40-07:00
+
+#### Coming From:
+
+Unreleased 513f218
+
+#### Purpose:
+
+Replace the measured per-rectangle solid-fill submission bottleneck with ordered multi-table fill descriptors while preserving protocol compatibility and exact rendering.
+
+#### Outcome:
+
+Protocol 1.6 and SDK 0.10 will add a capability-gated `FILL_BATCH` operation that reuses the protocol-1.5 descriptor-table ring and fence ownership, sequences up to 64 validated opaque fills through the existing fill engine, and retains every earlier scalar operation for older consumers. The SDL consumer will buffer consecutive opaque fills while flushing at draw, blend, synchronization, target and presentation boundaries so command order remains exact.
+
+#### Next Steps:
+
+Implement and exhaustively simulate command decode, table selection, descriptor execution, ownership, clipping, ring pressure and mixed fill-draw ordering; run host, sanitizer, installed-SDK and consumer diagnostics; then perform exactly two Quartus fits using seeds 13 and 7, deploy the stronger passing image, repeat exact-pixel and HDMI-audio hardware checks, and compare the same GemRB combat workload against its measured 11.5-11.9ms per-frame fill-submission baseline.
+
+#### Files Modified:
+
+- Makefile
+- Noodles.qsf
+- Noodles.sv
+- README.md
+- docs/BUILD.md
+- docs/INTEGRATION.md
+- docs/QUALIFICATION.md
+- docs/SDK.md
+- lib/noodles.pc.in
+- lib/noodles_link.c
+- lib/noodles_link.h
+- lib/noodles_link_internal.h
+- lib/noodles_surface.c
+- lib/noodles_surface.h
+- rtl/cmdq.sv
+- rtl/fill_batch.sv
+- rtl/link_control.sv
+- sim/cmdq_batch_dut.sv
+- sim/engine_fill_batch_dut.sv
+- sim/tb_cmdq_batch.cpp
+- sim/tb_fill_batch.cpp
+- sim/test_noodles_link.c
+- sim/test_noodles_sdk.c
+- sim/test_sdk_install.sh
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
