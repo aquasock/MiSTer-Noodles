@@ -12,29 +12,23 @@
 // sdram.sv's copy port (cpsel/cpaddr/cpdin/cprd/cpreq/cpbusy) is a bulk
 // one-time-load mechanism, traced from its own STATE_IDLE/STATE_WAITCP/
 // STATE_CP logic: once triggered (cpreq rising edge while cpsel is high),
-// it demands a NEW 16-bit word every single clk_sdram cycle for exactly
+// it demands a NEW 16-bit word every single clk_sys cycle for exactly
 // 512 consecutive cycles (one full page, 1KB) -- there is no
 // backpressure, so whatever supplies cpdin must never stall mid-burst.
 // DDR3 reads (via ddram_adapter's rd64 port) are comparatively slow and
 // non-deterministic, so this module cannot stream DDR3 straight into the
 // copy port; it stages one page (1KB) at a time in sdram_page_buffer, a
-// small dual-clock BRAM, then flushes that whole page in one uninterrupted
+// small single-clock BRAM, then flushes that whole page in one uninterrupted
 // burst. This mirrors the reference design this project's sdram.sv was
 // vendored from (MiSTer-devel/NeoGeo_MiSTer's neogeo.sv memcp_state
 // machine): fill a small page-sized buffer from the ROM/DDR3 source, then
 // drain it into the copy port, one page at a time, advancing both
 // pointers by 1024 bytes per page.
 //
-// Clock domains: the page-fill side (reading DDR3 via rd64, writing
-// sdram_page_buffer's port A) runs in clk_sys, since ddram_adapter itself
-// is clk_sys-domain. The page-flush side (driving sdram.sv's copy port,
-// reading sdram_page_buffer's port B) MUST run in clk_sdram, because the
-// copy port's 512-cycle burst is a clk_sdram-cycle-exact protocol with no
-// stalling -- crossing that into clk_sys per-word would be unworkable.
-// The two sides hand off per-page via sdram_cdc (already proven in step
-// 3/4): domain A's "page filled, here is its SDRAM word address" request
-// carries the page's destination address across; domain B's "page fully
-// streamed" response carries nothing but the round-trip completion.
+// SDR-008: fill and flush share clk_sys. A registered start pulse hands
+// each completed page to the flush sequencer; fill waits for completion
+// before reusing the buffer. Buffering is still required to supply 512
+// uninterrupted words despite variable-latency DDR3 responses.
 //
 // Preconditions/limitations (documented here, not enforced in hardware,
 // matching this project's existing single-outstanding-first precedent):
@@ -55,7 +49,7 @@
 module sdram_loader #(
     parameter int ADDR_WIDTH = 32
 ) (
-    // Domain A: clk_sys. Client-facing control (driven by cmdq.sv) and
+    // Client-facing control (driven by cmdq.sv) and
     // the DDR3-side rd64 read port (driven into ddram_adapter, arbitrated
     // alongside sprite_batch/blit_copy64/link_ring in Noodles.sv).
     input  logic                   clk,
@@ -76,10 +70,6 @@ module sdram_loader #(
     input  logic [63:0]            rd64_data,
     input  logic                   rd64_valid,
 
-    // Domain B: clk_sdram. sdram.sv's real copy port.
-    input  logic                   clk_sdram,
-    input  logic                   reset_b,
-
     output logic                   cpsel,
     output logic [26:1]            cpaddr,
     output logic [15:0]            cpdin,
@@ -88,11 +78,8 @@ module sdram_loader #(
     input  logic                   cpbusy
 );
 
-    // ---- Page buffer: 1KB (512 x 16-bit words), shared between domains
-    // via its own dual-clock ports. Domain A (fill) writes port A;
-    // domain B (flush) reads port B. sdram_cdc's single-outstanding
-    // handshake below guarantees the two domains never touch it at
-    // overlapping times (see sdram_page_buffer.sv's header).
+    // Fill owns the write port until handoff; flush then owns the read
+    // data until completion. The final registered write precedes handoff.
     logic        pbuf_we_a;
     logic [8:0]  pbuf_addr_a;
     logic [15:0] pbuf_din_a;
@@ -100,13 +87,11 @@ module sdram_loader #(
     logic [15:0] pbuf_dout_b;
 
     sdram_page_buffer page_buffer (
-        .clk_a(clk), .we_a(pbuf_we_a), .addr_a(pbuf_addr_a), .din_a(pbuf_din_a),
-        .clk_b(clk_sdram), .addr_b(pbuf_addr_b), .dout_b(pbuf_dout_b)
+        .clk(clk), .we_a(pbuf_we_a), .addr_a(pbuf_addr_a), .din_a(pbuf_din_a),
+        .addr_b(pbuf_addr_b), .dout_b(pbuf_dout_b)
     );
 
-    // ---- Per-page handoff CDC: domain A hands the page's destination
-    // word address across; domain B's response carries no payload, just
-    // the round-trip "this page has been fully streamed" completion.
+    // ---- Synchronous per-page handoff ----
     logic        handoff_en;
     logic        handoff_ready;
     logic [25:0] handoff_dst_word;
@@ -115,17 +100,12 @@ module sdram_loader #(
     logic [25:0] b_dst_word;
     logic        b_done;
 
-    sdram_cdc #(.ADDR_WIDTH(26), .DATA_WIDTH(1)) page_handoff (
-        .clk_a(clk), .reset_a(reset),
-        .a_addr(handoff_dst_word), .a_en(handoff_en), .a_ready(handoff_ready),
-        .a_data(), .a_valid(handoff_done),
-        .clk_b(clk_sdram), .reset_b(reset_b),
-        .b_addr(b_dst_word), .b_start(b_start),
-        .b_data(1'b0), .b_done(b_done)
-    );
+    assign b_start = handoff_en;
+    assign b_dst_word = handoff_dst_word;
+    assign handoff_done = b_done;
 
     // =========================================================
-    // Domain A: fill sequencer
+    // Fill sequencer
     // =========================================================
     typedef enum logic [2:0] {
         A_IDLE, A_FILL_REQ, A_FILL_WAIT, A_FILL_UNPACK, A_HANDOFF, A_WAIT_DONE
@@ -241,19 +221,20 @@ module sdram_loader #(
     end
 
     // =========================================================
-    // Domain B: flush sequencer -- streams one page into sdram.sv's
+    // Flush sequencer -- streams one page into sdram.sv's
     // copy port per b_start pulse, then reports completion via b_done.
     // =========================================================
     typedef enum logic [1:0] {B_IDLE, B_ISSUE, B_WAIT_RISE, B_WAIT_FALL} state_b_t;
     state_b_t state_b;
     logic     cpbusy_prev;
+    assign handoff_ready = (state_b == B_IDLE) && !handoff_en && !b_done;
 
     assign cpsel  = 1'b1;
     assign cpaddr = b_dst_word;
     assign cpdin  = pbuf_dout_b;
 
-    always_ff @(posedge clk_sdram or posedge reset_b) begin
-        if (reset_b) begin
+    always_ff @(posedge clk or posedge reset) begin
+        if (reset) begin
             state_b     <= B_IDLE;
             cpreq       <= 1'b0;
             b_done      <= 1'b0;
@@ -311,14 +292,14 @@ module sdram_loader #(
     end
 
     // ---- Page buffer read-side prefetch: cpdin must be valid one
-    // clk_sdram cycle before sdram.sv actually samples it, since
+    // clk_sys cycle before sdram.sv actually samples it, since
     // sdram_page_buffer's port B has one cycle of read latency. Traced
     // from sdram.sv's own STATE_WAITCP/STATE_CP timing: STATE_WAITCP
     // (cprd's first high cycle) does not itself consume cpdin -- the
     // first real sample happens the cycle after, in STATE_CP. So
     // addr_b=0 is armed when this page's request is issued (b_start,
     // one cycle before cpreq is even visible to sdram.sv), landing
-    // dout_b=mem[0] exactly on STATE_WAITCP's cycle -- one clk_sdram
+    // dout_b=mem[0] exactly on STATE_WAITCP's cycle -- one clk_sys
     // cycle ahead of when STATE_CP's first iteration actually needs it.
     // From there, incrementing addr_b once every cycle cprd is high
     // (including the WAITCP cycle itself, for 511 total increments)
@@ -326,8 +307,8 @@ module sdram_loader #(
     // consumption cycles.
     logic [9:0] page_inc_count;
 
-    always_ff @(posedge clk_sdram or posedge reset_b) begin
-        if (reset_b) begin
+    always_ff @(posedge clk or posedge reset) begin
+        if (reset) begin
             pbuf_addr_b    <= '0;
             page_inc_count <= '0;
         end else if (state_b == B_IDLE && b_start) begin

@@ -39,6 +39,7 @@
 // automatic coverage-based sizing -- use it to vary per-sprite blit size.
 
 #define _POSIX_C_SOURCE 199309L
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -143,8 +144,13 @@ static int push_batch_retry(noodles_link_t *link,
     struct timespec delay = {.tv_sec = 0, .tv_nsec = PUSH_RETRY_DELAY_NS};
     for (int i = 0; i < PUSH_RETRY_ITERS; ++i) {
         if (noodles_push_sprite_batch(link, descriptors, count) == 0) return 0;
+        if (errno != EAGAIN) {
+            perror("sprite batch submission");
+            return 1;
+        }
         nanosleep(&delay, NULL);
     }
+    fprintf(stderr, "sprite batch submission timed out (ring full or descriptors busy)\n");
     return 1;
 }
 
@@ -168,23 +174,12 @@ static int present_retry(noodles_link_t *link) {
     return 1;
 }
 
-// sprite_batch's descriptor table lives at one fixed DRAM address (RTL:
-// "the descriptor address is deliberately fixed in sprite_batch") -- there
-// is no per-command base address to point separate batches at separate
-// buffers. noodles_push_sprite_batch() uploads there directly and returns
-// as soon as the ring accepts the SPRITE_BATCH command, without waiting for
-// the hardware to actually finish consuming those descriptors. With more
-// than one batch pushed per frame this is a real race: overwriting the
-// descriptor table for batch N+1 before batch N's SPRITE_BATCH has
-// actually executed silently corrupts batch N's in-flight positions with
-// batch N+1's, which is exactly what made 4 batches/frame look like only
-// 64 distinct sprites moving (in lockstep groups of ~4) instead of 256
-// independent ones. Fence-wait on LINK-005's completion count after each
-// batch push, before touching the descriptor table again.
+// Used by blit-bench to count completed work, not to protect descriptors:
+// the library now owns that exclusion.
 static int wait_for_fence(noodles_link_t *link, uint32_t target) {
     struct timespec delay = {.tv_sec = 0, .tv_nsec = PUSH_RETRY_DELAY_NS};
     for (int i = 0; i < PUSH_RETRY_ITERS; ++i) {
-        if ((int32_t)(noodles_link_done_count(link) - target) >= 0) return 0;
+        if (noodles_link_fence_reached(link, target)) return 0;
         nanosleep(&delay, NULL);
     }
     return 1;
@@ -420,12 +415,9 @@ int main(int argc, char **argv) {
         // Descriptors are static across iterations (no per-frame sprite
         // motion) so that the measured rate reflects blitting alone rather
         // than host-side bookkeeping. Only ONE batch is in flight at a time,
-        // waited to completion via the fence before the next is pushed --
-        // sprite_batch's descriptor table lives at one fixed DRAM address
-        // (see the note above push_batch_retry), so pushing a second batch
-        // before the first retires would overwrite descriptors still being
-        // consumed. That serialization is also what makes the number
-        // meaningful: each iteration is a full, completed batch.
+        // waited to completion via the fence so each measured iteration is
+        // a full, completed batch. The library independently protects the
+        // shared descriptor table against early reuse.
         // Must be the live back buffer, not a hardcoded constant: which of
         // A/B is currently back depends on the parity the FPGA came up with.
         const uint32_t back = noodles_link_back_buffer(&link);
@@ -448,7 +440,7 @@ int main(int argc, char **argv) {
         while (now_s() - b_start < run_seconds) {
             for (int b = 0; b < batches; ++b) {
                 if (push_batch_retry(&link, descriptors, MAX_SPRITES)) {
-                    fprintf(stderr, "blit-bench: ring stuck uploading batch\n");
+                    fprintf(stderr, "blit-bench: batch submission failed\n");
                     bench_failed = 1;
                     break;
                 }
@@ -511,17 +503,7 @@ int main(int argc, char **argv) {
                     descriptors[j].flags = 1;
                 }
                 if (push_batch_retry(&link, descriptors, MAX_SPRITES)) {
-                    fprintf(stderr, "frame %ld: ring stuck uploading sprite batch %d\n", frame, b);
-                    failed = 1;
-                    break;
-                }
-                // Must not overwrite the (single, fixed-address) descriptor
-                // table with the next batch's positions until this one has
-                // actually finished executing -- see wait_for_fence()'s
-                // comment for why.
-                const uint32_t target = link.done_baseline + link.submitted;
-                if (wait_for_fence(&link, target)) {
-                    fprintf(stderr, "frame %ld: sprite batch %d never completed\n", frame, b);
+                    fprintf(stderr, "frame %ld: sprite batch %d submission failed\n", frame, b);
                     failed = 1;
                     break;
                 }

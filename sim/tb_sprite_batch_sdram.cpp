@@ -1,15 +1,14 @@
 // Verilator testbench for engine_sprite_batch_sdram_dut.sv (SDR-004,
 // core-log entry 67, step 5b's integration gap): drives sprite_batch's
 // real DESC_REQ/DESC_WAIT/LAUNCH/COPY loop with pixel-data reads routed
-// through the REAL sdram_adapter+sdram_cdc (mock sdram.sv backend),
-// exactly like Noodles.sv now wires it -- unlike tb_sprite_batch.cpp
-// (still all-DDR3) and tb_sdram_adapter.cpp (drives sdram_adapter
+// through the real single-clock sdram_adapter (mock sdram.sv backend),
+// unlike tb_sprite_batch.cpp (production's all-DDR3 routing) and
+// tb_sdram_adapter.cpp (drives sdram_adapter
 // directly from C++, never through blit_copy64's own burst-shaping
-// logic). Follows the dual-independent-clock idiom from
-// tb_sdram_cdc.cpp/tb_sdram_adapter.cpp/tb_sdram_loader.cpp.
+// logic).
 //
 // mock_busy is toggled on a cadence loosely matching sdram.sv's own
-// periodic refresh (cycles_per_refresh=780 clk_sdram cycles) so this test
+// periodic refresh (cycles_per_refresh=780 clk_sys cycles) so this test
 // can reproduce a burst read landing across a refresh window -- the
 // scenario tb_sdram_adapter.cpp's own busy_hold_cycles regression test
 // already covers for a single round trip, but never previously exercised
@@ -28,17 +27,9 @@
 
 namespace {
 
-constexpr uint64_t kPeriodA = 50;  // clk_sys
-constexpr uint64_t kPeriodB = 11;  // clk_sdram
 constexpr uint64_t kFillPattern = 0xEEEEEEEEEEEEEEEEull;
 constexpr int kReadLatency = 3;
 constexpr uint32_t kDescriptorBase = 0x3002'2000u;
-
-enum EdgeFlags {
-    kNone     = 0,
-    kAPosedge = 1 << 0,
-    kBPosedge = 1 << 1,
-};
 
 // Same behavioral Avalon-MM DDR3 memory as tb_sprite_batch.cpp/
 // tb_blit_copy64.cpp -- backs descriptor fetch and destination writes only
@@ -117,36 +108,17 @@ public:
 
     Vengine_sprite_batch_sdram_dut &dut() { return *dut_; }
 
-    // One full clk_sys+clk_sdram step, servicing the DDR3 mock on clk_sys
-    // posedges and toggling mock_busy on a clk_sdram cadence approximating
-    // sdram.sv's real periodic refresh -- both independent of each other,
-    // exactly like the real silicon's two free-running clock domains.
-    int Step(AvalonMemory &mem) {
-        uint64_t next = std::min(next_a_, next_b_);
-        int flags = 0;
-        if (next == next_a_) {
-            if (!dut_->clk) {
-                // About to rise: present DDR3 mock outputs before the edge
-                // sprite_batch/ddram_adapter will sample them on.
-                dut_->DDRAM_BUSY = 0;
-                dut_->DDRAM_DOUT = mem.dout();
-                dut_->DDRAM_DOUT_READY = mem.dout_ready() ? 1 : 0;
-            }
-            dut_->clk = !dut_->clk;
-            flags |= dut_->clk ? kAPosedge : 0;
-            next_a_ += kPeriodA / 2;
-        }
-        if (next == next_b_) {
-            dut_->clk_sdram = !dut_->clk_sdram;
-            flags |= dut_->clk_sdram ? kBPosedge : 0;
-            next_b_ += kPeriodB / 2;
-        }
+    void Tick(AvalonMemory &mem) {
+        dut_->DDRAM_BUSY = 0;
+        dut_->DDRAM_DOUT = mem.dout();
+        dut_->DDRAM_DOUT_READY = mem.dout_ready() ? 1 : 0;
+        dut_->clk = 0;
         dut_->eval();
-        if (flags & kAPosedge) {
-            mem.Step(dut_->DDRAM_WE, dut_->DDRAM_RD, dut_->DDRAM_ADDR,
-                      dut_->DDRAM_BURSTCNT, dut_->DDRAM_DIN, dut_->DDRAM_BE);
-        }
-        if (flags & kBPosedge) {
+        mem.Step(dut_->DDRAM_WE, dut_->DDRAM_RD, dut_->DDRAM_ADDR,
+                 dut_->DDRAM_BURSTCNT, dut_->DDRAM_DIN, dut_->DDRAM_BE);
+        dut_->clk = 1;
+        dut_->eval();
+        if (idle_cycles_ != 0) {
             if (refresh_countdown_ == 0) {
                 dut_->mock_busy = !dut_->mock_busy;
                 refresh_countdown_ = dut_->mock_busy ? busy_cycles_ : idle_cycles_;
@@ -154,14 +126,9 @@ public:
                 --refresh_countdown_;
             }
         }
-        return flags;
     }
 
-    void WaitPosedgeA(AvalonMemory &mem) {
-        while (!(Step(mem) & kAPosedge)) {}
-    }
-
-    // Configures the periodic mock_busy toggle: idle_cycles clk_sdram
+    // Configures the periodic mock_busy toggle: idle_cycles clk_sys
     // cycles low, then busy_cycles high, repeating. Pass idle_cycles == 0
     // (the default) to disable the refresh model entirely (mock_busy
     // stays low throughout).
@@ -173,8 +140,6 @@ public:
 
 private:
     std::unique_ptr<Vengine_sprite_batch_sdram_dut> dut_;
-    uint64_t next_a_ = kPeriodA / 2;
-    uint64_t next_b_ = kPeriodB / 2;
     int idle_cycles_ = 0;
     int busy_cycles_ = 0;
     int refresh_countdown_ = 0;
@@ -205,16 +170,13 @@ int main(int argc, char **argv) {
     Vengine_sprite_batch_sdram_dut &dut = tb.dut();
 
     dut.clk = 0;
-    dut.clk_sdram = 0;
     dut.reset = 1;
-    dut.reset_b = 1;
     dut.start = 0;
     dut.mock_busy = 0;
     dut.mock_delay = 2;
-    for (int i = 0; i < 8; ++i) tb.WaitPosedgeA(mem);
+    for (int i = 0; i < 8; ++i) tb.Tick(mem);
     dut.reset = 0;
-    dut.reset_b = 0;
-    tb.WaitPosedgeA(mem);
+    tb.Tick(mem);
 
     // Mirror stress-demo's sprites-batch mode: 64 descriptors sharing one
     // 24x24 source sprite (like assets/sprite.bmp downsampled), colorkey
@@ -261,12 +223,12 @@ int main(int argc, char **argv) {
 
     dut.start = 1;
     dut.count = kCount;
-    tb.WaitPosedgeA(mem);
+    tb.Tick(mem);
     dut.start = 0;
 
     // Enable a refresh-like periodic busy window on the mock SDRAM,
     // matching sdram.sv's real cadence proportionally scaled to this
-    // test's much smaller transfer (real: 780 clk_sdram cycles idle, ~6
+    // test's much smaller transfer (real: 780 clk_sys cycles idle, ~6
     // busy). This is the scenario that hung real hardware: a burst read
     // landing while the controller is "busy" with no visible ready-drop.
     tb.SetRefreshCadence(/*idle_cycles=*/97, /*busy_cycles=*/6);
@@ -274,7 +236,7 @@ int main(int argc, char **argv) {
     long guard = 0;
     const long kGuardLimit = 4000000;
     do {
-        tb.WaitPosedgeA(mem);
+        tb.Tick(mem);
         if (++guard > kGuardLimit) {
             std::fprintf(stderr,
                          "sprite_batch never completed (busy=%d) after %ld clk_sys cycles\n",
@@ -282,7 +244,7 @@ int main(int argc, char **argv) {
             return Fail("batch of 64 descriptors hung reading through sdram_adapter");
         }
     } while (!dut.done);
-    tb.WaitPosedgeA(mem);
+    tb.Tick(mem);
 
     std::printf(
         "PASS: sprite_batch %u descriptors of %ux%u through sdram_adapter, completed in %ld "

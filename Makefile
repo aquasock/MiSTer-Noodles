@@ -37,6 +37,7 @@ HOSTSPRITE  := build/host/sprite-demo
 HOSTLOADBMP := build/host/load-bmp
 HOSTSTRESS  := build/host/stress-demo
 HOSTPRESENTPROBE := build/host/present-probe-dump
+HOSTLINKTEST := build/host/test-noodles-link
 
 HOST    ?= mister.local
 DEST    ?= /media/fat/pet
@@ -46,33 +47,43 @@ SIM_DIR   := build/sim
 
 SOLID_FILL_SIM    := $(SIM_DIR)/solid_fill/Vengine_dut
 DDRAM_ADAPTER_SIM := $(SIM_DIR)/ddram_adapter/Vengine_ddram_dut
+DDRAM_INGRESS_SIM := $(SIM_DIR)/ddram_ingress/Vddram_adapter
 BLIT_COPY_SIM     := $(SIM_DIR)/blit_copy/Vengine_copy_dut
 BLIT_COPY64_SIM   := $(SIM_DIR)/blit_copy64/Vengine_copy64_dut
+BLIT_COPY64_PIPELINE_SIM := $(SIM_DIR)/blit_copy64_pipeline/Vblit_copy64
 LINK_RING_SIM     := $(SIM_DIR)/link_ring/Vlink_ring_dut
 LINK_FENCE_SIM    := $(SIM_DIR)/link_fence/Vlink_fence_dut
 PRESENT_SIM       := $(SIM_DIR)/present/Vpresent_dut
 BATCH_CMDQ_SIM    := $(SIM_DIR)/cmdq_batch/Vcmdq_batch_dut
 SPRITE_BATCH_SIM  := $(SIM_DIR)/sprite_batch/Vengine_sprite_batch_dut
-SDRAM_CDC_SIM     := $(SIM_DIR)/sdram_cdc/Vsdram_cdc_dut
 SDRAM_ADAPTER_SIM := $(SIM_DIR)/sdram_adapter/Vsdram_adapter_dut
 SDRAM_LOADER_SIM := $(SIM_DIR)/sdram_loader/Vsdram_loader_dut
 SPRITE_BATCH_SDRAM_SIM := $(SIM_DIR)/sprite_batch_sdram/Vengine_sprite_batch_sdram_dut
 
-.PHONY: all host deploy sim clean
+.PHONY: all host deploy sim test-host clean
 
 all: $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS) $(ARMPRESENTPROBE)
 
-sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(BLIT_COPY_SIM) $(BLIT_COPY64_SIM) $(LINK_RING_SIM) $(LINK_FENCE_SIM) $(PRESENT_SIM) $(BATCH_CMDQ_SIM) $(SPRITE_BATCH_SIM) $(SDRAM_CDC_SIM) $(SDRAM_ADAPTER_SIM) $(SDRAM_LOADER_SIM) $(SPRITE_BATCH_SDRAM_SIM)
+test-host: $(HOSTLINKTEST)
+	$(HOSTLINKTEST)
+
+$(HOSTLINKTEST): sim/test_noodles_link.c lib/noodles_link.c lib/noodles_link.h
+	@mkdir -p $(dir $@)
+	$(HOSTCC) $(CFLAGS) -o $@ sim/test_noodles_link.c lib/noodles_link.c \
+		-Wl,--wrap=mmap -Wl,--wrap=munmap
+
+sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(DDRAM_INGRESS_SIM) $(BLIT_COPY_SIM) $(BLIT_COPY64_SIM) $(BLIT_COPY64_PIPELINE_SIM) $(LINK_RING_SIM) $(LINK_FENCE_SIM) $(PRESENT_SIM) $(BATCH_CMDQ_SIM) $(SPRITE_BATCH_SIM) $(SDRAM_ADAPTER_SIM) $(SDRAM_LOADER_SIM) $(SPRITE_BATCH_SDRAM_SIM)
 	$(SOLID_FILL_SIM)
 	$(DDRAM_ADAPTER_SIM)
+	$(DDRAM_INGRESS_SIM)
 	$(BLIT_COPY_SIM)
 	$(BLIT_COPY64_SIM)
+	$(BLIT_COPY64_PIPELINE_SIM)
 	$(LINK_RING_SIM)
 	$(LINK_FENCE_SIM)
 	$(PRESENT_SIM)
 	$(BATCH_CMDQ_SIM)
 	$(SPRITE_BATCH_SIM)
-	$(SDRAM_CDC_SIM)
 	$(SDRAM_ADAPTER_SIM)
 	$(SDRAM_LOADER_SIM)
 	$(SPRITE_BATCH_SDRAM_SIM)
@@ -95,6 +106,12 @@ $(DDRAM_ADAPTER_SIM): rtl/cmdq.sv rtl/blit.sv rtl/ddram_adapter.sv sim/engine_dd
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
 		rtl/cmdq.sv rtl/blit.sv rtl/ddram_adapter.sv sim/engine_ddram_dut.sv sim/tb_ddram_adapter.cpp -o $(notdir $@)
 
+$(DDRAM_INGRESS_SIM): rtl/ddram_adapter.sv sim/tb_ddram_ingress.cpp
+	@mkdir -p $(dir $@)
+	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module ddram_adapter \
+		--Wall --Wno-fatal \
+		rtl/ddram_adapter.sv sim/tb_ddram_ingress.cpp -o $(notdir $@)
+
 $(BLIT_COPY_SIM): rtl/cmdq.sv rtl/blit.sv rtl/blit_copy.sv rtl/blit_copy64.sv rtl/sprite_batch.sv rtl/ddram_adapter.sv sim/engine_copy_dut.sv sim/tb_blit_copy.cpp
 	@mkdir -p $(dir $@)
 	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module engine_copy_dut \
@@ -106,6 +123,12 @@ $(BLIT_COPY64_SIM): rtl/blit_copy64.sv rtl/ddram_adapter.sv sim/engine_copy64_du
 	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module engine_copy64_dut \
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
 		rtl/blit_copy64.sv rtl/ddram_adapter.sv sim/engine_copy64_dut.sv sim/tb_blit_copy64.cpp -o $(notdir $@)
+
+$(BLIT_COPY64_PIPELINE_SIM): rtl/blit_copy64.sv sim/tb_blit_copy64_pipeline.cpp
+	@mkdir -p $(dir $@)
+	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module blit_copy64 \
+		--Wall --Wno-fatal -Wno-DECLFILENAME \
+		rtl/blit_copy64.sv sim/tb_blit_copy64_pipeline.cpp -o $(notdir $@)
 
 $(SPRITE_BATCH_SIM): rtl/sprite_batch.sv rtl/blit_copy64.sv rtl/ddram_adapter.sv sim/engine_sprite_batch_dut.sv sim/tb_sprite_batch.cpp
 	@mkdir -p $(dir $@)
@@ -131,29 +154,23 @@ $(PRESENT_SIM): rtl/present.sv sim/present_dut.sv sim/tb_present.cpp
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
 		rtl/present.sv sim/present_dut.sv sim/tb_present.cpp -o $(notdir $@)
 
-$(SDRAM_CDC_SIM): rtl/sdram_cdc.sv sim/sdram_cdc_dut.sv sim/tb_sdram_cdc.cpp
-	@mkdir -p $(dir $@)
-	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module sdram_cdc_dut \
-		--Wall --Wno-fatal -Wno-DECLFILENAME \
-		rtl/sdram_cdc.sv sim/sdram_cdc_dut.sv sim/tb_sdram_cdc.cpp -o $(notdir $@)
-
-$(SDRAM_ADAPTER_SIM): rtl/sdram_cdc.sv rtl/sdram_adapter.sv sim/sdram_adapter_dut.sv sim/tb_sdram_adapter.cpp
+$(SDRAM_ADAPTER_SIM): rtl/sdram_adapter.sv sim/sdram_adapter_dut.sv sim/tb_sdram_adapter.cpp
 	@mkdir -p $(dir $@)
 	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module sdram_adapter_dut \
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
-		rtl/sdram_cdc.sv rtl/sdram_adapter.sv sim/sdram_adapter_dut.sv sim/tb_sdram_adapter.cpp -o $(notdir $@)
+		rtl/sdram_adapter.sv sim/sdram_adapter_dut.sv sim/tb_sdram_adapter.cpp -o $(notdir $@)
 
-$(SDRAM_LOADER_SIM): rtl/sdram_cdc.sv rtl/sdram_page_buffer.sv rtl/sdram_loader.sv sim/sdram_loader_dut.sv sim/tb_sdram_loader.cpp
+$(SDRAM_LOADER_SIM): rtl/sdram_page_buffer.sv rtl/sdram_loader.sv sim/sdram_loader_dut.sv sim/tb_sdram_loader.cpp
 	@mkdir -p $(dir $@)
 	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module sdram_loader_dut \
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
-		rtl/sdram_cdc.sv rtl/sdram_page_buffer.sv rtl/sdram_loader.sv sim/sdram_loader_dut.sv sim/tb_sdram_loader.cpp -o $(notdir $@)
+		rtl/sdram_page_buffer.sv rtl/sdram_loader.sv sim/sdram_loader_dut.sv sim/tb_sdram_loader.cpp -o $(notdir $@)
 
-$(SPRITE_BATCH_SDRAM_SIM): rtl/sprite_batch.sv rtl/blit_copy64.sv rtl/ddram_adapter.sv rtl/sdram_cdc.sv rtl/sdram_adapter.sv sim/sdram_adapter_dut.sv sim/engine_sprite_batch_sdram_dut.sv sim/tb_sprite_batch_sdram.cpp
+$(SPRITE_BATCH_SDRAM_SIM): rtl/sprite_batch.sv rtl/blit_copy64.sv rtl/ddram_adapter.sv rtl/sdram_adapter.sv sim/sdram_adapter_dut.sv sim/engine_sprite_batch_sdram_dut.sv sim/tb_sprite_batch_sdram.cpp
 	@mkdir -p $(dir $@)
 	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module engine_sprite_batch_sdram_dut \
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
-		rtl/sprite_batch.sv rtl/blit_copy64.sv rtl/ddram_adapter.sv rtl/sdram_cdc.sv rtl/sdram_adapter.sv sim/sdram_adapter_dut.sv sim/engine_sprite_batch_sdram_dut.sv sim/tb_sprite_batch_sdram.cpp -o $(notdir $@)
+		rtl/sprite_batch.sv rtl/blit_copy64.sv rtl/ddram_adapter.sv rtl/sdram_adapter.sv sim/sdram_adapter_dut.sv sim/engine_sprite_batch_sdram_dut.sv sim/tb_sprite_batch_sdram.cpp -o $(notdir $@)
 
 $(ARMLINK): tools/link_push.c lib/noodles_link.c lib/noodles_link.h | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CFLAGS) -static -o $@ tools/link_push.c lib/noodles_link.c

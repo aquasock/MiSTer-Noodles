@@ -1,6 +1,4 @@
-// Verilator testbench for rtl/sdram_loader.sv (core-log entry 66's step
-// 5a). Follows the dual-independent-clock idiom introduced by
-// tb_sdram_cdc.cpp/tb_sdram_adapter.cpp.
+// Verilator testbench for the single-clock SDRAM page loader.
 //
 // sim/sdram_loader_dut.sv's two mocks stand in for ddram_adapter's real
 // rd64 contract (DDR3 source) and sdram.sv's real copy-port protocol
@@ -36,15 +34,6 @@
 
 namespace {
 
-constexpr uint64_t kPeriodA = 50;  // clk_sys
-constexpr uint64_t kPeriodB = 11;  // clk_sdram
-
-enum EdgeFlags {
-    kNone     = 0,
-    kAPosedge = 1 << 0,
-    kBPosedge = 1 << 2,
-};
-
 class Testbench {
 public:
     Testbench() : dut_(new Vsdram_loader_dut) {}
@@ -52,34 +41,15 @@ public:
 
     Vsdram_loader_dut &dut() { return *dut_; }
 
-    int Step() {
-        uint64_t next = std::min(next_a_, next_b_);
-        int flags = 0;
-        if (next == next_a_) {
-            dut_->clk_sys = !dut_->clk_sys;
-            flags |= dut_->clk_sys ? kAPosedge : 0;
-            next_a_ += kPeriodA / 2;
-        }
-        if (next == next_b_) {
-            dut_->clk_sdram = !dut_->clk_sdram;
-            flags |= dut_->clk_sdram ? kBPosedge : 0;
-            next_b_ += kPeriodB / 2;
-        }
+    void Tick() {
+        dut_->clk = 0;
         dut_->eval();
-        return flags;
-    }
-
-    void WaitPosedgeA() {
-        while (!(Step() & kAPosedge)) {}
-    }
-    void WaitPosedgeB() {
-        while (!(Step() & kBPosedge)) {}
+        dut_->clk = 1;
+        dut_->eval();
     }
 
 private:
     std::unique_ptr<Vsdram_loader_dut> dut_;
-    uint64_t next_a_ = kPeriodA / 2;
-    uint64_t next_b_ = kPeriodB / 2;
 };
 
 int Fail(const char *msg) {
@@ -100,7 +70,7 @@ struct PageCapture {
     int count = 0;
 };
 
-// Runs one full load, watching domain B's copy-port probes to record
+// Runs one full load, watching copy-port probes to record
 // every page/word actually written, then validates page count, addresses,
 // and data against the expected model.
 bool RunOneLoad(Testbench &tb, uint32_t src_addr, uint32_t dst_addr,
@@ -123,7 +93,7 @@ bool RunOneLoad(Testbench &tb, uint32_t src_addr, uint32_t dst_addr,
     // mock_busy is asserted, exactly reproducing the real bug's
     // vanishing-edge scenario.
     if (busy_hold_cycles > 0) dut.mock_busy = 1;
-    tb.WaitPosedgeA();
+    tb.Tick();
     dut.start = 0;
 
     if (!dut.busy) {
@@ -135,7 +105,7 @@ bool RunOneLoad(Testbench &tb, uint32_t src_addr, uint32_t dst_addr,
     bool saw_done = false;
     int busy_remaining = busy_hold_cycles;
     for (int i = 0; i < 2000000 && !saw_done; ++i) {
-        tb.WaitPosedgeB();
+        tb.Tick();
         if (busy_remaining > 0) {
             --busy_remaining;
             if (busy_remaining == 0) dut.mock_busy = 0;
@@ -150,6 +120,10 @@ bool RunOneLoad(Testbench &tb, uint32_t src_addr, uint32_t dst_addr,
                 return false;
             }
             PageCapture &p = pages.back();
+            if (p.count >= 512) {
+                std::fprintf(stderr, "  page contained more than 512 words\n");
+                return false;
+            }
             uint32_t idx = dut.cp_word_idx_probe;
             if (idx != static_cast<uint32_t>(p.count)) {
                 std::fprintf(stderr, "  page word out of order: got idx %u, expected %d\n",
@@ -158,9 +132,6 @@ bool RunOneLoad(Testbench &tb, uint32_t src_addr, uint32_t dst_addr,
             }
             p.words[p.count++] = dut.cp_word_data_probe;
         }
-        // done is a clk_sys-domain pulse; sampling it once per clk_sdram
-        // step is safe since it stays high a full clk_sys half-period,
-        // much longer than one clk_sdram step.
         if (dut.done) saw_done = true;
     }
     if (!saw_done) {
@@ -206,7 +177,7 @@ bool RunOneLoad(Testbench &tb, uint32_t src_addr, uint32_t dst_addr,
     }
 
     // Give the clk_sys side a few more cycles to settle back to idle.
-    for (int i = 0; i < 8; ++i) tb.WaitPosedgeA();
+    for (int i = 0; i < 8; ++i) tb.Tick();
     if (dut.busy) {
         std::fprintf(stderr, "  busy did not clear after done\n");
         return false;
@@ -222,22 +193,17 @@ int main(int argc, char **argv) {
     Testbench tb;
     Vsdram_loader_dut &dut = tb.dut();
 
-    dut.clk_sys = 0;
-    dut.clk_sdram = 0;
+    dut.clk = 0;
     dut.reset = 1;
-    dut.reset_b = 1;
     dut.start = 0;
     dut.src_addr = 0;
     dut.dst_addr = 0;
     dut.length = 0;
     dut.ddr_mock_delay = 0;
     dut.mock_busy = 0;
-    for (int i = 0; i < 8; ++i) tb.WaitPosedgeA();
-    for (int i = 0; i < 8; ++i) tb.WaitPosedgeB();
+    for (int i = 0; i < 8; ++i) tb.Tick();
     dut.reset = 0;
-    dut.reset_b = 0;
-    tb.WaitPosedgeA();
-    tb.WaitPosedgeB();
+    tb.Tick();
 
     if (dut.busy || dut.done)
         return Fail("reset state is wrong");
@@ -268,6 +234,46 @@ int main(int argc, char **argv) {
     if (!RunOneLoad(tb, 0x3140'0000u, 0x0000'0000u, 1024, /*ddr_delay=*/0,
                      /*busy_hold_cycles=*/50000)) {
         return Fail("sdram_loader hung across a busy copy-port window");
+    }
+
+    dut.length = 0;
+    dut.start = 1;
+    tb.Tick();
+    dut.start = 0;
+    for (int i = 0; i < 8; ++i) {
+        tb.Tick();
+        if (dut.busy || dut.done || dut.cp_accept_probe)
+            return Fail("zero-length load launched a page");
+    }
+
+    // Reset both loader and controller mock during fill and flush.
+    // Real board reset/init behavior still requires hardware validation.
+    for (int age : {1, 100, -1}) {
+        dut.src_addr = 0x31400000;
+        dut.dst_addr = 0x4000;
+        dut.length = 2048;
+        dut.ddr_mock_delay = 0;
+        dut.start = 1;
+        tb.Tick();
+        dut.start = 0;
+        if (age < 0) {
+            int guard = 0;
+            while (!dut.cp_accept_probe && ++guard < 10000) tb.Tick();
+            if (!dut.cp_accept_probe) return Fail("reset case never reached flush");
+            for (int i = 0; i < 100; ++i) tb.Tick();
+        } else {
+            for (int i = 0; i < age; ++i) tb.Tick();
+        }
+        dut.reset = 1;
+        tb.Tick();
+        dut.reset = 0;
+        for (int i = 0; i < 8; ++i) {
+            tb.Tick();
+            if (dut.busy || dut.done || dut.cp_accept_probe)
+                return Fail("stale page handoff escaped after reset");
+        }
+        if (!RunOneLoad(tb, 0x31402000, 0x8000, 1024, 0))
+            return Fail("page load failed after reset");
     }
 
     std::printf(

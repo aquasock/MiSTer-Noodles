@@ -118,17 +118,39 @@ public:
 
         dut_->clk = 0;
         dut_->eval();
-        dut_->clk = 1;
+        const auto addr = dut_->DDRAM_ADDR;
+        const auto burst = dut_->DDRAM_BURSTCNT;
+        const auto data = dut_->DDRAM_DIN;
+        const auto be = dut_->DDRAM_BE;
+        dut_->DDRAM_BUSY = 1;
+        dut_->eval();
+        if (dut_->DDRAM_ADDR != addr || dut_->DDRAM_BURSTCNT != burst ||
+            dut_->DDRAM_DIN != data || dut_->DDRAM_BE != be) {
+            std::fprintf(stderr, "FAIL: DDRAM_BUSY feeds command payload at cycle %u: "
+                         "addr %x/%x burst %u/%u data %llx/%llx be %x/%x\n",
+                         cycles_, addr, dut_->DDRAM_ADDR, burst, dut_->DDRAM_BURSTCNT,
+                         static_cast<unsigned long long>(data),
+                         static_cast<unsigned long long>(dut_->DDRAM_DIN), be, dut_->DDRAM_BE);
+            std::exit(1);
+        }
+        if (dut_->DDRAM_WE || dut_->DDRAM_RD) {
+            std::fprintf(stderr, "FAIL: DDRAM command accepted while busy\n");
+            std::exit(1);
+        }
+        dut_->DDRAM_BUSY = (++cycles_ % 29) < 17;
         dut_->eval();
 
         mem.Step(dut_->DDRAM_WE, dut_->DDRAM_RD, dut_->DDRAM_ADDR,
                   dut_->DDRAM_BURSTCNT, dut_->DDRAM_DIN, dut_->DDRAM_BE);
+        dut_->clk = 1;
+        dut_->eval();
     }
 
     Vengine_copy64_dut &dut() { return *dut_; }
 
 private:
     std::unique_ptr<Vengine_copy64_dut> dut_;
+    unsigned cycles_ = 0;
 };
 
 int Fail(const char *msg) {
@@ -155,6 +177,10 @@ void RunCopy(Testbench &tb, AvalonMemory &mem, uint32_t dst_addr, uint32_t dst_p
         tb.Tick(mem);
         if (++guard > 200000) { std::fprintf(stderr, "copy never completed\n"); std::exit(1); }
     } while (!dut.done);
+    while (!dut.adapter_idle) {
+        tb.Tick(mem);
+        if (++guard > 200000) { std::fprintf(stderr, "adapter never drained\n"); std::exit(1); }
+    }
     tb.Tick(mem);
 }
 

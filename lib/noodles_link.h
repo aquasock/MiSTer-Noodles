@@ -14,7 +14,7 @@
 // (or even started) executing it -- LINK-004 shipped this library without
 // a completion signal deliberately, since nothing needed one yet.
 // LINK-005 adds one: noodles_link_submitted_count()/noodles_link_done_count()
-// let a caller ask "has command #N actually finished" by comparing the two,
+// let a caller ask "has command #N actually finished" using a baseline-adjusted fence,
 // for the first time cases that need it (surface readback, safely reusing a
 // BLIT_COPY's source region) rather than just fire-and-forget.
 
@@ -53,6 +53,10 @@ typedef struct {
     uint32_t dst_addr, dst_pitch, width, height, colorkey, src_addr, src_pitch, flags;
 } noodles_sprite_descriptor_t;
 
+// One producer/handle at a time, with calls serialized by the caller. Open
+// only after previous work has drained (or a fresh core load), and finish
+// pending work before close. Concurrent producers and reset during a handle's
+// lifetime are unsupported; closing a handle does not cancel FPGA commands.
 typedef struct {
     int fd;
     void *map;
@@ -65,6 +69,8 @@ typedef struct {
     uint32_t done_baseline;     // LINK-005 fence value at open() time; done_baseline + submitted
                                  // converts a per-handle submitted count into the fence's own
                                  // absolute numbering -- see noodles_present_and_wait()
+    uint32_t batch_fence;       // completion target owning the fixed descriptor table
+    int batch_pending;
 } noodles_link_t;
 
 // Opens /dev/mem and maps LINK-002's header+slot region. Returns 0 on
@@ -83,8 +89,11 @@ void noodles_link_close(noodles_link_t *link);
 uint32_t noodles_rgb(uint8_t r, uint8_t g, uint8_t b);
 
 // Pushes a raw 8-word command (CMDQ-001's slot layout) into the ring.
-// Returns 0 on success, -1 if the ring is full (the command is NOT
-// partially written in that case). Every noodles_push_* wrapper below is
+// Returns 0 on success, -1 with errno=EAGAIN if the ring is full or an
+// opcode-5 batch still owns the descriptor table; NULL command gives EINVAL.
+// Failed submissions do not write a slot. Raw opcode-5 submissions also
+// acquire descriptor ownership, but the caller must upload descriptors first.
+// Every noodles_push_* wrapper below is
 // built on this; use it directly for an opcode this library doesn't yet
 // wrap.
 int noodles_push_command(noodles_link_t *link, const uint32_t command[8]);
@@ -118,6 +127,11 @@ int noodles_push_blit_copy_key(noodles_link_t *link, uint32_t dst_addr, uint16_t
 // SPRITE_BATCH (opcode 5): uploads up to 64 fixed-format descriptors (2 KiB)
 // to the reserved DDRAM list and queues one command. Descriptor flags bit 0 enables
 // colorkeying; all other bits are reserved and must be zero.
+// Returns 0 on submission, NOT completion. Returns -1 with errno=EAGAIN
+// while the previous batch is unfinished or the ring is full, without
+// touching descriptors or publishing a command. Retry later; no explicit
+// per-batch fence wait is required for safe reuse. Invalid pointer/count
+// gives EINVAL; upload failures preserve their errno and publish nothing.
 int noodles_push_sprite_batch(noodles_link_t *link,
                                const noodles_sprite_descriptor_t *descriptors,
                                uint16_t count);
@@ -138,28 +152,18 @@ int noodles_push_sprite_batch(noodles_link_t *link,
 int noodles_push_load_sdram(noodles_link_t *link, uint32_t sdram_dst_addr,
                              uint32_t ddr3_src_addr, uint32_t length);
 
-// Count of commands successfully pushed through THIS handle since
-// noodles_link_open() -- NOT an absolute, cross-session count (the library
-// has no way to know that). Only meaningful compared against
-// noodles_link_done_count() when the handle has been open since a fresh
-// core load, matching the FPGA-side counter's own lifetime (LINK-005).
-// Concretely: this is safe for one long-lived handle (open once, e.g. at
-// game startup, push many commands over the run), but comparing it against
-// noodles_link_done_count() across two SEPARATE short-lived processes each
-// opening their own handle is not meaningful -- each one's submitted count
-// restarts at 0 while done_count keeps counting from the shared FPGA
-// session, so an old, already-satisfied done_count can make a brand new
-// command look "done" before it has even been pushed. When in doubt, use
-// noodles_link_done_count() alone and compare it against a value read
-// BEFORE the push, not against submitted_count().
+// Count of commands successfully pushed through THIS handle since open.
+// Capture target = link->done_baseline + noodles_link_submitted_count(link)
+// immediately after a successful push, then use noodles_link_fence_reached().
 uint32_t noodles_link_submitted_count(const noodles_link_t *link);
 
-// Reads LINK-005's completion fence directly from DRAM: a monotonic count,
-// published by rtl/link_fence.sv, of commands that have ACTUALLY finished
-// executing (not just been dispatched). A command is done once this
-// return value is >= the noodles_link_submitted_count() value observed
-// right after that command's push call returned.
+// Reads the 31-bit completion count, excluding front-buffer parity. Wraps
+// modulo 2^31; a plain >= comparison is not safe across wraparound.
 uint32_t noodles_link_done_count(const noodles_link_t *link);
+
+// Nonblocking completion check for a baseline-adjusted target. Both values
+// are compared modulo 2^31; target must be less than 2^30 completions away.
+int noodles_link_fence_reached(const noodles_link_t *link, uint32_t target);
 
 // PRESENT (opcode 4, OUT-004): the double-buffer flip. Pushes the command
 // and BLOCKS until LINK-005's fence confirms the flip actually happened --
@@ -190,6 +194,9 @@ uint32_t noodles_link_back_buffer(const noodles_link_t *link);
 // noodles_push_blit_copy()/noodles_push_blit_copy_key() to composite it
 // onto a buffer, exactly like any other source region. Returns 0 on
 // success, -1 on failure (check errno).
+// Uploads overlapping the reserved descriptor table return EAGAIN without
+// touching memory while a batch owns it. Direct /dev/mem writes bypass this
+// protection and must not modify in-flight descriptors.
 int noodles_link_upload(noodles_link_t *link, uint32_t dst_addr, const void *data,
                          size_t size_bytes);
 

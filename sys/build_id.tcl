@@ -5,7 +5,16 @@
 proc generateBuildID_Verilog {} {
 
 	# Get the timestamp (see: http://www.altera.com/support/examples/tcl/tcl-date-time-stamp.html)
-	set buildDate "`define BUILD_DATE \"[clock format [ clock seconds ] -format %y%m%d]\""
+	if {[info exists ::env(SOURCE_DATE_EPOCH)]} {
+		if {![string is wideinteger -strict $::env(SOURCE_DATE_EPOCH)] ||
+		    $::env(SOURCE_DATE_EPOCH) < 0} {
+			error "SOURCE_DATE_EPOCH must be a nonnegative integer timestamp"
+		}
+		set date [clock format $::env(SOURCE_DATE_EPOCH) -gmt 1 -format %y%m%d]
+	} else {
+		set date [clock format [clock seconds] -format %y%m%d]
+	}
+	set buildDate "`define BUILD_DATE \"$date\""
 
 	# Create a Verilog file for output
 	set outputFileName "build_id.v"

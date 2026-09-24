@@ -43,11 +43,9 @@ module blit_copy64 #(
     logic [PTR_W-1:0] wr_ptr, rd_ptr;
     logic [PTR_W-1:0] resp_ptr;
     logic [LENB-1:0] pair_count;
-    // Pairs reserved (fifo slots claimed) since their read was accepted,
-    // freed only once written out -- distinct from pair_count, which only
-    // starts counting once a pair's DATA has actually arrived. Gates new
-    // burst requests so wr_ptr can never lap rd_ptr regardless of how many
-    // requests are still in flight awaiting their response.
+    // FIFO slots are reserved at request formation and freed on head
+    // capture. pair_count counts only responses still in the FIFO; neither
+    // count includes the independent head/output registers.
     logic [LENB-1:0] reserved_count;
     logic [15:0] col, row, width_r, height_r;
     logic [15:0] row_remain_r;
@@ -81,26 +79,27 @@ module blit_copy64 #(
     logic [ADDR_WIDTH-1:0] swr_addr;
     logic [31:0] swr_data;
 
-    wire lower_key = key_enable_r && data_fifo[rd_ptr][31:0] == key_r;
-    wire upper_key = key_enable_r && data_fifo[rd_ptr][63:32] == key_r;
-    wire pair_ready = active && pair_count != 0 && valid_fifo[rd_ptr];
+    logic head_valid;
+    logic [ADDR_WIDTH-1:0] head_addr;
+    logic [63:0] head_data;
+
+    wire lower_key = key_enable_r && head_data[31:0] == key_r;
+    wire upper_key = key_enable_r && head_data[63:32] == key_r;
+    wire pair_ready = active && head_valid;
     // No dst1_fifo: the second pixel of a pair is always the first + 4
     // bytes by construction (both come from the same pair_col, one pixel
     // apart, and a pair never straddles a row because want_len is clamped
     // to row_remain). Storing it would need a second bank of 16 32-bit
     // adders whose results land on this module's critical path, so it is
     // derived here at the read side, where there is slack.
-    wire [ADDR_WIDTH-1:0] dst1_cur = dst0_fifo[rd_ptr] + ADDR_WIDTH'(4);
+    wire [ADDR_WIDTH-1:0] dst1_cur = head_addr + ADDR_WIDTH'(4);
     // The old "dst1 == dst0 + 4" guard here was always true for the reason
     // above; only the 8-byte alignment of dst0 still needs checking, since
     // an unaligned pair cannot be merged into a single 64-bit write.
     wire paired_write = pair_ready && !lower_key && !upper_key &&
-                         (dst0_fifo[rd_ptr][2] == 1'b0);
+                         (head_addr[2] == 1'b0);
     wire scalar_first_skip = pair_ready && !paired_write &&
                              !scalar_second && lower_key;
-    // scalar_first_cand/scalar_second_cand deliberately do NOT gate on
-    // wr_ready (unlike the old scalar_first_write/scalar_second_write) --
-    // see the comment at stage_scalar below.
     wire scalar_first_cand = pair_ready && !paired_write &&
                               !scalar_second && !lower_key;
     wire scalar_second_skip = pair_ready && !paired_write &&
@@ -108,52 +107,28 @@ module blit_copy64 #(
     wire scalar_second_cand = pair_ready && !paired_write &&
                                scalar_second && !upper_key;
     wire scalar_write_cand = scalar_first_cand || scalar_second_cand;
-    // stage_scalar/swr_valid/swr_addr/swr_data mirror stage_paired/pwr_*
-    // exactly: the old scalar_first_write/scalar_second_write gated on
-    // wr_ready directly, so wr_en/wr_addr/wr_data were combinational off
-    // rd_ptr through the key-compare chain, all the way into ddram_
-    // adapter's registered wr_addr_q -- the same one-hop register-to-
-    // register path already fixed twice this segment on the read-request
-    // and paired-write ports, just on the scalar (colorkeyed/misaligned)
-    // write port instead. stage_scalar only has to reach the LOCAL
-    // swr_valid/swr_addr/swr_data register; wr_en/wr_addr/wr_data are that
-    // register's registered outputs.
-    wire stage_scalar = scalar_write_cand && (!swr_valid || wr_ready);
+    // Key/alignment decisions operate only on the registered head; the
+    // output registers isolate them from the adapter's write queue.
+    wire stage_scalar = scalar_write_cand && (!swr_valid || wr_ready) &&
+                        (!pwr_valid || wr64_ready);
     wire stage_scalar_first = stage_scalar && !scalar_second;
     wire stage_scalar_second = stage_scalar && scalar_second;
     wire scalar_pair_done = scalar_second_skip || stage_scalar_second ||
                             (stage_scalar_first && upper_key);
     wire scalar_advance = scalar_first_skip ||
                           (stage_scalar_first && !upper_key);
-    // paired_write itself never depended on wr64_ready (unlike the old
-    // write_complete gating below), so it is safe to use directly as the
-    // "should we stage a paired write" decision.
-    //
-    // stage_paired/pwr_valid/pwr_addr/pwr_data replace the previous direct
-    // combinational wr64_en/wr64_addr/wr64_data assigns. The old code fed
-    // data_fifo[rd_ptr] (a 16:1, 64-bit read mux) through the key compares
-    // straight into wr64_en/wr64_data, which crossed the module boundary
-    // combinationally into ddram_adapter's wr64_fire and its wr_data_q
-    // register -- one continuous register-to-register path with no break
-    // at the boundary, 11.1ns and the 100MHz critical path once the
-    // want_len chain (fixed separately) was no longer the bottleneck.
-    // stage_paired instead only has to reach a LOCAL register (pwr_valid/
-    // pwr_addr/pwr_data); wr64_en/wr64_addr/wr64_data are that register's
-    // registered output, so ddram_adapter now sees a clean register-to-
-    // register input with no combinational logic in front of it.
-    //
-    // Retiring the pair (freeing its FIFO slot, advancing rd_ptr) happens
-    // when the pair is STAGED here, not when ddram_adapter's wr64_fire
-    // actually commits it to the adapter's own write queue -- exactly the
-    // same "commit at formation, not acceptance" reasoning already used
-    // for the read-request register above: pwr_addr/pwr_data hold a COPY
-    // of dst0_fifo[rd_ptr]/data_fifo[rd_ptr], so freeing valid_fifo[rd_ptr]
-    // the instant that copy is taken is correct regardless of how long the
-    // copy then waits to actually drain into ddram_adapter (bounded to one
-    // pair, since a second stage_paired cannot happen until pwr_valid is
-    // free or draining this same cycle).
-    wire stage_paired = paired_write && (!pwr_valid || wr64_ready);
+    // The head owns a copy of the FIFO entry until all its drawable pixels
+    // have been staged. Opposite-port pending writes must drain first to
+    // preserve ordering when transitioning between paired and scalar writes.
+    wire stage_paired = paired_write && (!pwr_valid || wr64_ready) &&
+                        (!swr_valid || wr_ready);
     wire retire_now = stage_paired || scalar_pair_done;
+
+    // FIFO muxes end at this register, before key/alignment decisions.
+    // rd_ptr always selects the next uncaptured entry, so retiring a head
+    // can refill it on the same edge without a look-ahead read-pointer mux.
+    wire load_head = active && (!head_valid || retire_now) &&
+                     pair_count != 0 && valid_fifo[rd_ptr];
 
     // How many contiguous pairs the CURRENT burst request should ask for:
     // bounded by free FIFO capacity and by the pairs remaining in the
@@ -218,6 +193,7 @@ module blit_copy64 #(
             want_len_p <= 0; want_len_p_valid <= 0;
             pwr_valid <= 0; pwr_addr <= 0; pwr_data <= 0;
             swr_valid <= 0; swr_addr <= 0; swr_data <= 0;
+            head_valid <= 0; head_addr <= 0; head_data <= 0;
             wr_ptr <= 0; rd_ptr <= 0; resp_ptr <= 0; valid_fifo <= 0;
             scalar_second <= 0;
             col <= 0; row <= 0; width_r <= 0; height_r <= 0;
@@ -243,10 +219,18 @@ module blit_copy64 #(
                 want_len_p <= 0; want_len_p_valid <= 0;
                 pwr_valid <= 0;
                 swr_valid <= 0;
+                head_valid <= 0;
                 valid_fifo <= 0; wr_ptr <= 0; rd_ptr <= 0; resp_ptr <= 0;
                 scalar_second <= 0;
                 scalar_tail <= 0;
             end else if (active) begin
+                if (load_head) begin
+                    head_valid <= 1'b1;
+                    head_addr <= dst0_fifo[rd_ptr];
+                    head_data <= data_fifo[rd_ptr];
+                end else if (retire_now) begin
+                    head_valid <= 1'b0;
+                end
                 // PREPARE: compute the next want_len_p from the CURRENT
                 // row_remain_r/avail_pairs. This is the "slow" compare
                 // chain, but it terminates here in a register and does not
@@ -290,26 +274,19 @@ module blit_copy64 #(
                     // Accepted with no new request to replace it.
                     req_valid <= 1'b0;
                 end
-                // Stage a paired write into the local output register
-                // (pwr_valid/pwr_addr/pwr_data) rather than driving
-                // wr64_en/wr64_addr/wr64_data straight off data_fifo[rd_ptr]
-                // -- see the comment at stage_paired above.
                 if (stage_paired) begin
                     pwr_valid <= 1'b1;
-                    pwr_addr <= dst0_fifo[rd_ptr];
-                    pwr_data <= data_fifo[rd_ptr];
+                    pwr_addr <= head_addr;
+                    pwr_data <= head_data;
                 end else if (pwr_valid && wr64_ready) begin
                     // Drained with no new pair to replace it.
                     pwr_valid <= 1'b0;
                 end
-                // Stage a scalar write into the local output register
-                // (swr_valid/swr_addr/swr_data), mirroring pwr_valid above
-                // -- see the comment at stage_scalar.
                 if (stage_scalar) begin
                     swr_valid <= 1'b1;
-                    swr_addr <= scalar_second ? dst1_cur : dst0_fifo[rd_ptr];
-                    swr_data <= scalar_second ? data_fifo[rd_ptr][63:32] :
-                                                data_fifo[rd_ptr][31:0];
+                    swr_addr <= scalar_second ? dst1_cur : head_addr;
+                    swr_data <= scalar_second ? head_data[63:32] :
+                                                head_data[31:0];
                 end else if (swr_valid && wr_ready) begin
                     // Drained with no new half-word to replace it.
                     swr_valid <= 1'b0;
@@ -319,49 +296,35 @@ module blit_copy64 #(
                     valid_fifo[resp_ptr] <= 1'b1;
                     resp_ptr <= resp_ptr + 1'b1;
                 end
-                case ({rd64_valid, retire_now})
+                case ({rd64_valid, load_head})
                     2'b10: pair_count <= pair_count + 1'b1;
                     2'b01: begin
                         valid_fifo[rd_ptr] <= 1'b0;
                         rd_ptr <= rd_ptr + 1'b1;
                         pair_count <= pair_count - 1'b1;
-                        pairs_done <= pairs_done + 1'b1;
-                        scalar_second <= 1'b0;
                     end
                     2'b11: begin
                         valid_fifo[rd_ptr] <= 1'b0;
                         rd_ptr <= rd_ptr + 1'b1;
-                        pairs_done <= pairs_done + 1'b1;
-                        scalar_second <= 1'b0;
                     end
                     default: pair_count <= pair_count;
                 endcase
-                // reserved_count must reflect BOTH a newly reserved burst
-                // (+want_len, now charged when the request is FORMED rather
-                // than when it is accepted -- reserving a cycle earlier is
-                // strictly more conservative and keeps avail_pairs correct
-                // for the very next formation) and a pair retiring (-1)
-                // even when they land on the very same cycle: formation is
-                // independent of retire_now timing, so with wide rows
-                // forcing multiple bursts per FIFO_DEPTH window this
-                // coincidence is common, not a corner case. Two separate
-                // nonblocking assignments to reserved_count in different
-                // branches would let one silently clobber the other; this
-                // single combined assignment is the only writer.
+                // A copied head no longer occupies a FIFO slot, even while
+                // stalled. Combine reservation and release on the same edge.
                 reserved_count <= reserved_count +
                                   (commit_now ? want_len_p : {LENB{1'b0}}) -
-                                  (retire_now ? {{(LENB-1){1'b0}}, 1'b1} : {LENB{1'b0}});
+                                  (load_head ? {{(LENB-1){1'b0}}, 1'b1} : {LENB{1'b0}});
+                if (retire_now) begin
+                    pairs_done <= pairs_done + 1'b1;
+                    scalar_second <= 1'b0;
+                end
                 if (scalar_advance)
                     scalar_second <= 1'b1;
-                // Completion must be gated on pairs_done (every pair
-                // actually WRITTEN), not pairs_issued/pair_count -- a burst
-                // request marks pairs_issued as soon as it is FORMED, which
-                // can now run well ahead of its data actually arriving (the
-                // adapter may still be draining earlier descriptors, or
-                // yielding to a write under DDR-007's read/write fairness),
-                // so pair_count==0 no longer implies nothing is still
-                // outstanding once bursts are in play.
-                if (pairs_done == total_pairs) begin
+                // Retirement means staged or skipped, not yet accepted.
+                // Keep active until the final output drains; a new start
+                // must never clear an outstanding write.
+                if (pairs_done == total_pairs && !head_valid &&
+                    !pwr_valid && !swr_valid) begin
                     active <= 0; busy <= 0; done <= 1;
                 end
             end

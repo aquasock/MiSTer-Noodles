@@ -22,7 +22,7 @@
 //    tail) before dropping it -- exercising the loader's edge-triggered
 //    (not fixed-count) completion detection.
 module sdram_loader_dut (
-    input  logic        clk_sys,
+    input  logic        clk,
     input  logic         reset,
     input  logic         start,
     input  logic [31:0]  src_addr,
@@ -31,9 +31,6 @@ module sdram_loader_dut (
     output logic         busy,
     output logic         done,
     input  logic [7:0]   ddr_mock_delay,
-
-    input  logic        clk_sdram,
-    input  logic         reset_b,
 
     // SDR-004's refresh-hang fix (sdram_adapter.sv) revealed the same
     // one-cycle-pulse anti-pattern on this module's own cpreq write
@@ -91,7 +88,7 @@ module sdram_loader_dut (
     assign rd64_valid = (ddr_state == DDR_VALID);
     assign rd64_data  = ddr_pattern(ddr_latched_addr);
 
-    always_ff @(posedge clk_sys or posedge reset) begin
+    always_ff @(posedge clk or posedge reset) begin
         if (reset) begin
             ddr_state        <= DDR_IDLE;
             ddr_latched_addr <= '0;
@@ -133,8 +130,8 @@ module sdram_loader_dut (
     assign cp_word_idx_probe  = 9'd511 - cpcnt;
     assign cp_word_data_probe = cpdin;
 
-    always_ff @(posedge clk_sdram or posedge reset_b) begin
-        if (reset_b) begin
+    always_ff @(posedge clk or posedge reset) begin
+        if (reset) begin
             cp_state   <= CP_IDLE;
             old_cpreq  <= 1'b0;
             cpbusy     <= 1'b0;
@@ -189,12 +186,11 @@ module sdram_loader_dut (
     end
 
     sdram_loader #(.ADDR_WIDTH(32)) dut (
-        .clk(clk_sys), .reset(reset),
+        .clk(clk), .reset(reset),
         .start(start), .src_addr(src_addr), .dst_addr(dst_addr), .length(length),
         .busy(busy), .done(done),
         .rd64_addr(rd64_addr), .rd64_en(rd64_en), .rd64_active(rd64_active), .rd64_len(rd64_len),
         .rd64_ready(rd64_ready), .rd64_data(rd64_data), .rd64_valid(rd64_valid),
-        .clk_sdram(clk_sdram), .reset_b(reset_b),
         .cpsel(cpsel), .cpaddr(cpaddr), .cpdin(cpdin),
         .cprd(cprd), .cpreq(cpreq), .cpbusy(cpbusy)
     );

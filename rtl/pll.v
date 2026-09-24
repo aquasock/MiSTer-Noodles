@@ -9,10 +9,6 @@ module pll (
 		input  wire  refclk,   //  refclk.clk
 		input  wire  rst,      //   reset.reset
 		output wire  outclk_0, // outclk0.clk
-		// SDR-001: dedicated ~100MHz output for a future FPGA-owned
-		// SDRAM controller domain, added alongside the existing 20MHz
-		// clk_sys output rather than replacing it -- see core-log entry 61.
-		output wire  outclk_1, // outclk1.clk
 		output wire  locked    //  locked.export
 	);
 
@@ -20,7 +16,6 @@ module pll (
 		.refclk   (refclk),   //  refclk.clk
 		.rst      (rst),      //   reset.reset
 		.outclk_0 (outclk_0), // outclk0.clk
-		.outclk_1 (outclk_1), // outclk1.clk
 		.locked   (locked)    //  locked.export
 	);
 
@@ -66,12 +61,12 @@ endmodule
 // Retrieval info: 	<generic name="gui_dsm_out_sel" value="1st_order" />
 // Retrieval info: 	<generic name="gui_use_locked" value="true" />
 // Retrieval info: 	<generic name="gui_en_adv_params" value="false" />
-// Retrieval info: 	<generic name="gui_number_of_clocks" value="2" />
+// Retrieval info: 	<generic name="gui_number_of_clocks" value="1" />
 // Retrieval info: 	<generic name="gui_multiply_factor" value="1" />
 // Retrieval info: 	<generic name="gui_frac_multiply_factor" value="1" />
 // Retrieval info: 	<generic name="gui_divide_factor_n" value="1" />
 // Retrieval info: 	<generic name="gui_cascade_counter0" value="false" />
-// Retrieval info: 	<generic name="gui_output_clock_frequency0" value="20.0" />
+// Retrieval info: 	<generic name="gui_output_clock_frequency0" value="100.0" />
 // Retrieval info: 	<generic name="gui_divide_factor_c0" value="1" />
 // Retrieval info: 	<generic name="gui_actual_output_clock_frequency0" value="0 MHz" />
 // Retrieval info: 	<generic name="gui_ps_units0" value="ps" />

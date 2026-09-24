@@ -12,8 +12,8 @@ make sim        # Verilator RTL simulation (rtl/ engines, no Quartus needed)
 quartus_sh --flow compile Noodles   # full FPGA build -> output_files/Noodles.rbf
 ```
 
-`Noodles.qsf` pins the settings a full build needs to reproduce a previously
-validated bitstream bit for bit (see below); the Quartus project is named
+`Noodles.qsf` pins the fitter settings for the accepted seed-5 build
+(see below); the Quartus project is named
 `Noodles`, so a full build writes `output_files/Noodles.rbf`.
 
 ## Two levels of build
@@ -40,7 +40,7 @@ Three settings must match for a build to reproduce a previously validated
 result -- all three are already pinned in `Noodles.qsf`, committed to source
 control, so an ordinary clone and build reproduces them automatically:
 
-- `SEED` (currently `1`) -- Quartus's fitter uses its seed as the starting
+- `SEED` (currently `5`) -- Quartus's fitter uses its seed as the starting
   point for placement search; a different seed can produce meaningfully
   different placement, routing and timing closure on the *same* source.
 - `NUM_PARALLEL_PROCESSORS` (currently `16`) -- fitter thread count. This
@@ -48,11 +48,24 @@ control, so an ordinary clone and build reproduces them automatically:
   placement if changed, even with the same seed.
 - `ALM_REGISTER_PACKING_EFFORT` (currently `MEDIUM`).
 
-Matching all three -- which a plain `git clone` + `quartus_sh --flow compile
-Noodles` does, since they live in `Noodles.qsf` -- reproduces a **bit-for-bit
-identical** bitstream, modulo the build-date bytes described below. This was
-verified from two independent clean copies of the same commit; see
+Use the exact qualified source revision, Quartus version, these settings,
+and the recorded build date. Matching settings alone is not proof of
+reproducibility; compare the resulting RBF hash against
 [QUALIFICATION.md](QUALIFICATION.md).
+
+For the accepted 2026-09-23 build, use a clean checkout without prior Quartus
+databases and run:
+
+```sh
+SOURCE_DATE_EPOCH=1790121600 quartus_sh --flow compile Noodles
+quartus_sta -t tools/report_timing.tcl
+sha256sum output_files/Noodles.rbf
+```
+
+The epoch pins `BUILD_DATE` to `260923` in UTC. The small project adaptation
+in `sys/build_id.tcl` honors this input; without it, normal builds retain the
+framework's local-calendar-date behavior. All synthesis and fitter inputs
+must also match; do not assume a different date changes only a few RBF bytes.
 
 ## Known gotchas
 
@@ -65,9 +78,8 @@ verified from two independent clean copies of the same commit; see
   build.** A pre-flow step (`sys/build_id.tcl`, wired in via
   `PRE_FLOW_SCRIPT_FILE` in `Noodles.qsf`) produces it; it is not checked-in
   source (`.gitignore`'d) and carries only a `YYMMDD` date stamp used for the
-  OSD version string. It has no effect on timing or placement, but the date
-  is embedded in the bitstream, so two builds made on different calendar
-  days differ in those bytes only -- not a reproducibility failure.
+  OSD version string. The date is a synthesis input embedded in the bitstream.
+  Set `SOURCE_DATE_EPOCH` as above for reproduction across calendar days.
 - Running `quartus_map` directly against the live project for a quick
   sanity check is safe on this project (unlike some MiSTer cores) since
   `Noodles.qsf` does not source a separate platform pin-assignment fragment

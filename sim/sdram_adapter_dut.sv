@@ -24,7 +24,7 @@
 // hardware-only hang this was fixed for (see sdram_adapter.sv's own
 // SEQ_ISSUE comment).
 module sdram_adapter_dut (
-    input  logic        clk_sys,
+    input  logic        clk,
     input  logic         reset,
     input  logic [31:0]  rd64_addr,
     input  logic         rd64_en,
@@ -33,8 +33,6 @@ module sdram_adapter_dut (
     output logic [63:0]  rd64_data,
     output logic         rd64_valid,
 
-    input  logic        clk_sdram,
-    input  logic         reset_b,
     input  logic [7:0]   mock_delay,
     input  logic         mock_busy,
 
@@ -51,7 +49,7 @@ module sdram_adapter_dut (
     assign sd_addr_probe = sd_addr;
 
     sdram_adapter #(.ADDR_WIDTH(32)) dut_i (
-        .clk_sys   (clk_sys),
+        .clk       (clk),
         .reset     (reset),
         .rd64_addr (rd64_addr),
         .rd64_en   (rd64_en),
@@ -60,8 +58,6 @@ module sdram_adapter_dut (
         .rd64_data (rd64_data),
         .rd64_valid(rd64_valid),
 
-        .clk_sdram (clk_sdram),
-        .reset_b   (reset_b),
         .sd_sel    (sd_sel),
         .sd_addr   (sd_addr),
         .sd_dout   (sd_dout),
@@ -86,8 +82,8 @@ module sdram_adapter_dut (
     logic accept_pulse;
     assign sd_accept_probe = accept_pulse;
 
-    always_ff @(posedge clk_sdram or posedge reset_b) begin
-        if (reset_b) begin
+    always_ff @(posedge clk or posedge reset) begin
+        if (reset) begin
             mstate       <= M_IDLE;
             mcount       <= '0;
             sd_ready     <= 1'b1;
@@ -123,4 +119,3 @@ module sdram_adapter_dut (
     end
 
 endmodule
-

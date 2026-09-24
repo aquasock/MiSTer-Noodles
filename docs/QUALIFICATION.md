@@ -8,9 +8,37 @@ from. The build procedure itself is in [BUILD.md](BUILD.md).
 
 | # | Date | Build | Seed | RBF SHA-256 | Hardware status |
 |---|---|---|---:|---|---|
-| 1 | 2026-09-22 | **Current:** SPRITE_BATCH engine, 64-bit DDRAM path, PRESENT retirement-acknowledgement fix | 1 | `25f9d3a1…edba93` | Accepted -- see below |
+| 2 | 2026-09-23 | **Current:** shared 100MHz clock, registered write ingress and slot enables, honest DDR3 constraints | 5 | `b76fb924…247b8d` | Accepted; clean-commit reproduction pending |
+| 1 | 2026-09-22 | Historical: SPRITE_BATCH engine, 64-bit DDRAM path, PRESENT retirement-acknowledgement fix | 1 | `25f9d3a1…edba93` | Accepted -- see below |
 
-## Current build (1)
+## Current build (2)
+
+Quartus Prime Lite 17.0.2 Build 602, Cyclone V `5CSEBA6U23I7`,
+revision `Noodles`, seed 5, 16 fitter threads, MEDIUM register packing,
+`BUILD_DATE "260923"`. Accepted RBF SHA-256:
+`b76fb924c43cb25b9c516e216f247dacb576ec72ab6ef408b1a275d9bc247b8d`.
+
+The core PLL has one 100MHz output. Core setup is +0.541ns and hold
++0.252ns; minimum setup across reported clocks is +0.327ns (HDMI).
+All reported setup, hold, recovery, removal and pulse-width categories have
+zero TNS. Seeds 4 and 6 also pass, with core setup +0.319/+0.071ns.
+Resources: 11,120 ALMs, 14,286 registers, 362,241 block-memory bits.
+Twelve framework unmatched-filter/ignored-exception warnings remain;
+constraint coverage and multi-corner qualification are not complete.
+
+On the MiSTer, the 256-sprite 128x128 workload ran at 15.1fps, including a
+60-second run of 905 frames visually accepted by the owner. Key-checker,
+clear and present checks completed at approximately 60fps. Uncapped
+throughput samples were 76.18, 80.11 and 81.16 Mpixel/s. No command failures
+or timeouts were reported. These are workload checks, not exhaustive pixel
+readback validation.
+
+The tested bitstream came from an isolated seed-5 source snapshot. Publication
+and an independent clean rebuild from the online commit are in progress;
+bit-for-bit reproduction of this revision is not yet claimed. The reproduction
+command pins the date using `SOURCE_DATE_EPOCH`; see [BUILD.md](BUILD.md).
+
+## Historical build (1)
 
 Quartus Prime Lite 17.0.2 Build 602, Cyclone V `5CSEBA6U23I7`, project
 revision `Noodles` (top-level entity `sys_top`), MEDIUM ALM register

@@ -1,26 +1,9 @@
-// Integration coverage for SDR-004 (core-log entry 67, step 5b): the real
-// combination Noodles.sv now wires up -- sprite_batch's descriptor-table
-// reads (rd_addr/rd_en, 32-bit) still on ddram_adapter/DDR3, but its
-// pixel-data reads (rd64, feeding blit_copy64's burst engine) now routed
-// through the real sdram_adapter.sv + sdram_cdc.sv, backed by
-// sdram_adapter_dut's behavioral sdram.sv mock (with its mock_busy input
-// driven here as a periodic toggle matching sdram.sv's own real
-// STATE_RFSH/IDLE_x refresh cadence) -- rather than ddram_adapter for
-// both, as engine_sprite_batch_dut.sv (the pre-Step-5b testbench) still
-// exercises.
-//
-// This is the first simulation coverage of blit_copy64's actual
-// multi-pair burst requests (rd64_len > 1, sized by row width and FIFO
-// capacity, not the fixed lengths tb_sdram_adapter.cpp's own unit test
-// picks) driving the real sdram_adapter end to end, across two genuinely
-// asynchronous clock domains -- tb_sdram_adapter.cpp only ever drove
-// sdram_adapter directly from a C++ testbench, never through
-// blit_copy64/sprite_batch's own request-shaping logic.
+// Optional SDRAM sprite-source integration coverage on one clock.
+// Production Noodles.sv still routes sprite reads to DDR3; this harness
+// keeps the SDRAM burst path exercised with a refresh-aware controller mock.
 module engine_sprite_batch_sdram_dut (
-    input  logic          clk,       // clk_sys: sprite_batch, blit_copy64, ddram_adapter, sdram_adapter's domain A
-    input  logic          clk_sdram, // sdram_adapter's domain B (genuinely async vs. clk)
+    input  logic          clk,
     input  logic          reset,
-    input  logic          reset_b,   // clk_sdram-domain reset, mirrors Noodles.sv's reset_sdram bridge
 
     input  logic          start,
     input  logic [15:0]   count,
@@ -111,13 +94,13 @@ module engine_sprite_batch_sdram_dut (
         .idle            (adapter_idle)
     );
 
-    // Pixel-data reads: SDR-004's new path, real sdram_adapter + sdram_cdc
+    // Pixel-data reads: real sdram_adapter
     // backed by sdram_adapter_dut's mock sdram.sv model.
     logic [25:0] sd_addr_probe;
     logic        sd_accept_probe;
 
     sdram_adapter_dut sdram_i (
-        .clk_sys   (clk),
+        .clk       (clk),
         .reset     (reset),
         .rd64_addr (batch_rd64_addr),
         .rd64_en   (batch_rd64_en),
@@ -126,8 +109,6 @@ module engine_sprite_batch_sdram_dut (
         .rd64_data (batch_rd64_data),
         .rd64_valid(batch_rd64_valid),
 
-        .clk_sdram (clk_sdram),
-        .reset_b   (reset_b),
         .mock_delay(mock_delay),
         .mock_busy (mock_busy),
 

@@ -419,13 +419,9 @@ wire [63:0] adapter_wr64_data = wr_sel_batch ? batch_wr64_data : engine_wr64_dat
 // word it had actually asked for.
 wire        rd_sel_link = link_rd_active;
 wire        rd_sel_batch = !rd_sel_link && batch_rd_active;
-// SDR-007: sprite_batch's pixel-data rd64 reads are back on DDR3, undoing
-// step 5b's move onto sdram_adapter. Measured on hardware: DDR3 is a
-// 64-bit bus driven directly by clk_sys (ddram_adapter.sv: ddram_clk =
-// clk) that already issues real multi-word Avalon bursts, whereas the
-// SDRAM path is 16-bit and pays a full serialized sdram_cdc round trip
-// per sub-word. Raising clk_sys to 65MHz scales DDR3's bus with it but
-// does nothing for SDRAM's fixed-rate CDC latency.
+// Sprite reads remain on the hardware-proven DDR3 burst path. SDR-008
+// removes the SDRAM CDC overhead without changing this routing choice;
+// the optional SDRAM path still performs four 16-bit reads per pair.
 wire        rd_sel_batch64 = rd_sel_batch && batch_rd64_en;
 // SDR-003 (step 5a): sdram_loader's fill side is a rd64-only client (it
 // never uses the 32-bit rd/rd_addr path at all), given lowest priority
@@ -538,40 +534,17 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 ///////////////////////   CLOCKS   ///////////////////////////////
 
-// SDR-001: clk_sdram is a dedicated ~100MHz domain for the FPGA-
-// owned SDRAM controller below (core-log entry 61's step 1 added the
-// clock in isolation; entry 62's step 2 now drives the real sdram module
-// off it, with its data-interface inputs still tied inactive -- see the
-// sdram instance's own comment).
-wire clk_sys, clk_sdram, pll_locked;
+// SDR-008: core and board SDRAM share one 100MHz PLL output.
+wire clk_sys, pll_locked;
 pll pll
 (
 	.refclk(CLK_50M),
 	.rst(0),
 	.outclk_0(clk_sys),
-	.outclk_1(clk_sdram),
 	.locked(pll_locked)
 );
 
 wire reset = RESET | status[0] | buttons[1];
-
-// SDR-002 (core-log entry 64, step 3's open question resolved this step):
-// sdram_cdc/sdram_adapter's domain-B (clk_sdram) flops need their own
-// reset, separate from sdram.sv's own init/startup sequencing (already,
-// separately, tied to ~pll_locked below and left untouched). reset_sdram
-// is a standard async-assert/2FF-synchronized-deassert bridge: reset
-// (clk_sys-domain, asynchronous relative to clk_sdram) can assert
-// reset_sdram immediately, but de-assertion is resynchronized through two
-// clk_sdram-domain flops before the sdram_adapter/sdram_cdc logic actually
-// comes out of reset, so a de-assertion edge landing near a clk_sdram
-// clock edge cannot propagate a metastable value into those domain-B
-// state machines.
-reg [1:0] reset_sdram_sync = 2'b11;
-wire      reset_sdram = reset_sdram_sync[1];
-always_ff @(posedge clk_sdram or posedge reset) begin
-	if (reset) reset_sdram_sync <= 2'b11;
-	else       reset_sdram_sync <= {reset_sdram_sync[0], 1'b0};
-end
 
 // SDR-001 (core-log entry 62, step 2): the local SDRAM board
 // controller, vendored from MiSTer-devel/NeoGeo_MiSTer's rtl/sdram.sv (see
@@ -589,7 +562,7 @@ end
 sdram sdram
 (
 	.init    (~pll_locked),
-	.clk     (clk_sdram),
+	.clk     (clk_sys),
 
 	.SDRAM_DQ  (SDRAM_DQ),
 	.SDRAM_A   (SDRAM_A),
@@ -624,7 +597,7 @@ sdram sdram
 
 // SDR-007: sprite_batch's rd64 reads reverted to DDR3 (see the mux above),
 // so sdram_adapter's client-facing rd64 port is tied inactive again, as it
-// was in step 4 before entry 67's step 5b. The adapter, sdram_cdc bridge,
+// was in step 4 before entry 67's step 5b. The adapter,
 // sdram.sv controller and sdram_loader all remain instantiated and
 // functional -- SDRAM is simply no longer in the sprite read path. Kept
 // wired (rather than deleted) so it stays available as a potential second
@@ -637,7 +610,7 @@ wire [63:0] sdram_rd64_data_unused;
 
 sdram_adapter #(.ADDR_WIDTH(32)) sdram_adapter
 (
-	.clk_sys (clk_sys),
+	.clk     (clk_sys),
 	.reset   (reset),
 
 	.rd64_addr (32'b0),
@@ -646,9 +619,6 @@ sdram_adapter #(.ADDR_WIDTH(32)) sdram_adapter
 	.rd64_ready(sdram_rd64_ready_unused),
 	.rd64_data (sdram_rd64_data_unused),
 	.rd64_valid(sdram_rd64_valid_unused),
-
-	.clk_sdram(clk_sdram),
-	.reset_b  (reset_sdram),
 
 	.sd_sel  (sdram_adapter_sel),
 	.sd_addr (sdram_adapter_addr),
@@ -694,9 +664,6 @@ sdram_loader #(.ADDR_WIDTH(32)) sdram_loader
 	.rd64_data  (loader_rd64_data),
 	.rd64_valid (loader_rd64_valid),
 
-	.clk_sdram(clk_sdram),
-	.reset_b  (reset_sdram),
-
 	.cpsel (loader_cpsel),
 	.cpaddr(loader_cpaddr),
 	.cpdin (loader_cpdin),
@@ -708,12 +675,12 @@ sdram_loader #(.ADDR_WIDTH(32)) sdram_loader
 // The controller's periodic auto-refresh is host-timed, not self-timed
 // (see rtl/sdram.sv: `if (refresh ^ refresh_old)`) -- toggling on every
 // rising edge of a free-running counter at cycles_per_refresh's own
-// cadence (780 clk_sdram cycles at 100MHz = 7.8us, the standard 64ms/8192-
+// cadence (780 clk_sys cycles at 100MHz = 7.8us, the standard 64ms/8192-
 // row JEDEC refresh interval) keeps the chip refreshed even while nothing
 // is issuing real reads/writes yet.
 reg [9:0] sdram_refresh_count;
 reg       sdram_refresh;
-always_ff @(posedge clk_sdram) begin
+always_ff @(posedge clk_sys) begin
 	if (sdram_refresh_count == 10'd779) begin
 		sdram_refresh_count <= '0;
 		sdram_refresh <= ~sdram_refresh;

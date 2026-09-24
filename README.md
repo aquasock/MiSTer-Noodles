@@ -37,14 +37,29 @@ got there.
 `lib/noodles_link.h`/`.c` is the real ARM-side library: open the ring,
 push a `SOLID_FILL` or `BLIT_COPY`, pack a color (note: the byte order is
 R in the low byte, not the `0xRRGGBB` reading a hex literal suggests --
-see BLIT-004), and check `noodles_link_done_count()` against a value read
-before the push to know when a specific command actually finished.
+see BLIT-004). After a successful push, capture
+`link.done_baseline + noodles_link_submitted_count(&link)` and use
+`noodles_link_fence_reached(&link, target)` to check that command's completion.
+
+Use one serialized producer/handle, opened only when earlier work has drained
+or after a fresh core load. Finish outstanding commands before closing; close
+does not cancel FPGA work. Concurrent producers and reset during a handle's
+lifetime are not supported.
+
+`noodles_push_sprite_batch()` protects the fixed descriptor table until the
+previous batch completes. It returns `-1` with `errno == EAGAIN` when the table
+is busy or the ring is full, without modifying descriptors or publishing a
+command. Retry later; other failures should be reported rather than retried.
+Raw batch commands also acquire ownership, and overlapping
+`noodles_link_upload()` calls are blocked while the table is owned.
+Direct memory writes bypass this protection.
 
 ## Build
 
     make          # cross-build the ARM-side host tools (static, armv7/Cortex-A9)
     make host     # native build of the same tools, for testing off-device
     make sim      # Verilator simulation of the RTL (CMDQ/BLIT/LINK)
+    make test-host # native host-library regression; no MiSTer or /dev/mem needed
     make deploy HOST=192.168.1.42   # scp the tools to /media/fat/pet (root / "1")
     make clean
 

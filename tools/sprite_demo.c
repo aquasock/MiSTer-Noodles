@@ -151,7 +151,8 @@ int main(int argc, char **argv) {
                 SPRITE_W, SPRITE_H, colorkey);
         }
         if (queued != 0) {
-            fprintf(stderr, "frame %ld: ring full compositing sprite\n", frame);
+            fprintf(stderr, "frame %ld: sprite submission failed\n", frame);
+            perror("sprite submission");
             break;
         }
         if (wait_fence(&link, done_before, "sprite composite")) break;

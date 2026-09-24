@@ -69,7 +69,12 @@ module ddram_adapter (
     logic [31:0] wr_addr_q [0:DEPTH-1];
     logic [63:0] wr_data_q [0:DEPTH-1];
     logic        wr_full_q [0:DEPTH-1];
-    logic [PTR_W-1:0] wr_head, wr_tail;
+    logic [PTR_W-1:0] wr_head;
+    logic [DEPTH-1:0] wr_tail, wr_slot_en;  // one-hot reservation and delayed commit
+    logic [31:0] wr_ingress_addr;
+    logic [63:0] wr_ingress_data;
+    logic wr_ingress_full, wr_pending;
+    // Counts all accepted writes, including the reserved ingress slot.
     logic [PTR_W:0] wr_count;
 
     logic [31:0] rd_addr_q [0:DEPTH-1];
@@ -125,7 +130,8 @@ module ddram_adapter (
     logic [8:0] rsp_committed;
     wire  [8:0] admit_words = rd64_fire ? {1'b0, rd64_len} : 9'd1;
 
-    assign wr_ready   = (wr_count < DEPTH);
+    // A single ingress accepts one lane per cycle; paired writes take priority.
+    assign wr_ready   = (wr_count < DEPTH) && !wr64_en;
     assign wr64_ready = (wr_count < DEPTH);
     assign rd_ready   = (rd_count < DEPTH) && (rsp_committed + 9'd1 <= 9'(DEPTH));
     assign rd64_ready = (rd_count < DEPTH) &&
@@ -133,9 +139,14 @@ module ddram_adapter (
 
     wire [7:0] head_len = (rd_count != 0 && rd_is64_q[rd_head]) ? rd_len_q[rd_head] : 8'd1;
     wire want_read = (rd_count != 0);
-    wire want_write = (wr_count != 0);
-    wire read_issue = want_read && !ddram_busy && (!want_write || rr);
-    wire write_issue = want_write && !ddram_busy && (!want_read || !rr);
+    wire want_write = (wr_count != 0) && ((wr_count != 1) || !wr_pending);
+    // Choose the payload without bridge backpressure. Gating the address
+    // mux with busy creates a bridge-ready -> address -> bridge-input path.
+    // Busy still gates command acceptance and queue advancement.
+    wire select_read = want_read && (!want_write || rr);
+    wire select_write = want_write && (!want_read || !rr);
+    wire read_issue = select_read && !ddram_busy;
+    wire write_issue = select_write && !ddram_busy;
     wire read_rsp = ddram_dout_ready && (rsp_count != 0);
 
     assign ddram_clk = clk;
@@ -144,15 +155,15 @@ module ddram_adapter (
     // and the real Avalon-MM target auto-increments its own address and
     // streams that many beats back with no further command from this
     // adapter. Writes are always single-beat.
-    assign ddram_burstcnt = read_issue ? head_len : 8'd1;
+    assign ddram_burstcnt = select_read ? head_len : 8'd1;
 
     assign ddram_rd = read_issue;
     assign ddram_we = write_issue;
-    assign ddram_addr = read_issue ? rd_addr_q[rd_head][31:3] :
+    assign ddram_addr = select_read ? rd_addr_q[rd_head][31:3] :
                         wr_count != 0 ? wr_addr_q[wr_head][31:3] : 29'b0;
-    assign ddram_be = write_issue ? (wr_full_q[wr_head] ? 8'hff :
+    assign ddram_be = select_write ? (wr_full_q[wr_head] ? 8'hff :
                                      (wr_addr_q[wr_head][2] ? 8'hf0 : 8'h0f)) : 8'b0;
-    assign ddram_din = write_issue ? (wr_full_q[wr_head] ? wr_data_q[wr_head] :
+    assign ddram_din = select_write ? (wr_full_q[wr_head] ? wr_data_q[wr_head] :
                                       (wr_addr_q[wr_head][2] ?
                                        {wr_data_q[wr_head][31:0], 32'b0} :
                                        {32'b0, wr_data_q[wr_head][31:0]})) : 64'b0;
@@ -168,7 +179,9 @@ module ddram_adapter (
         if (reset) begin
             rr <= 1'b0;
             wr_head <= 0;
-            wr_tail <= 0;
+            wr_tail <= {{(DEPTH-1){1'b0}}, 1'b1};
+            wr_slot_en <= '0;
+            wr_pending <= 1'b0;
             wr_count <= 0;
             rd_head <= 0;
             rd_tail <= 0;
@@ -179,11 +192,22 @@ module ddram_adapter (
             rsp_committed <= 0;
         end else begin
             rr <= !rr;
+            // Every accepted write reserves its slot before the next-cycle
+            // commit. Producer decisions never drive the queue's wide enables.
+            wr_pending <= wr_fire || wr64_fire;
+            wr_slot_en <= wr_tail & {DEPTH{wr_fire || wr64_fire}};
             if (wr_fire || wr64_fire) begin
-                wr_addr_q[wr_tail] <= wr64_fire ? wr64_addr : wr_addr;
-                wr_data_q[wr_tail] <= wr64_fire ? wr64_data : {32'b0, wr_data};
-                wr_full_q[wr_tail] <= wr64_fire;
-                wr_tail <= wr_tail + 1'b1;
+                wr_ingress_addr <= wr64_fire ? wr64_addr : wr_addr;
+                wr_ingress_data <= wr64_fire ? wr64_data : {32'b0, wr_data};
+                wr_ingress_full <= wr64_fire;
+                wr_tail <= {wr_tail[DEPTH-2:0], wr_tail[DEPTH-1]};
+            end
+            for (int i = 0; i < DEPTH; i++) begin
+                if (wr_slot_en[i]) begin
+                    wr_addr_q[i] <= wr_ingress_addr;
+                    wr_data_q[i] <= wr_ingress_data;
+                    wr_full_q[i] <= wr_ingress_full;
+                end
             end
             if (write_issue)
                 wr_head <= wr_head + 1'b1;

@@ -1,7 +1,4 @@
-// Verilator testbench for rtl/sdram_adapter.sv (core-log entry 61's step
-// 4). Follows the dual-independent-clock idiom introduced by
-// tb_sdram_cdc.cpp: clk_sys and clk_sdram are stepped as two genuinely
-// independent, non-integer-ratio clocks.
+// Verilator testbench for the single-clock SDRAM read adapter.
 //
 // sim/sdram_adapter_dut.sv's mock stands in for rtl/sdram.sv's real
 // normal-port protocol (see that file's header comment for why the real
@@ -26,15 +23,6 @@
 
 namespace {
 
-constexpr uint64_t kPeriodA = 50;  // clk_sys
-constexpr uint64_t kPeriodB = 11;  // clk_sdram
-
-enum EdgeFlags {
-    kNone     = 0,
-    kAPosedge = 1 << 0,
-    kBPosedge = 1 << 2,
-};
-
 class Testbench {
 public:
     Testbench() : dut_(new Vsdram_adapter_dut) {}
@@ -42,37 +30,18 @@ public:
 
     Vsdram_adapter_dut &dut() { return *dut_; }
 
-    int Step() {
-        uint64_t next = std::min(next_a_, next_b_);
-        int flags = 0;
-        if (next == next_a_) {
-            dut_->clk_sys = !dut_->clk_sys;
-            flags |= dut_->clk_sys ? kAPosedge : 0;
-            next_a_ += kPeriodA / 2;
-        }
-        if (next == next_b_) {
-            dut_->clk_sdram = !dut_->clk_sdram;
-            flags |= dut_->clk_sdram ? kBPosedge : 0;
-            next_b_ += kPeriodB / 2;
-        }
+    void Tick() {
+        dut_->clk = 0;
         dut_->eval();
-        return flags;
+        dut_->clk = 1;
+        dut_->eval();
     }
-
-    void WaitPosedgeA() {
-        while (!(Step() & kAPosedge)) {}
-    }
-    void WaitPosedgeB() {
-        while (!(Step() & kBPosedge)) {}
-    }
-    void WaitPosedgesA(int n) {
-        for (int i = 0; i < n; ++i) WaitPosedgeA();
+    void Ticks(int n) {
+        for (int i = 0; i < n; ++i) Tick();
     }
 
 private:
     std::unique_ptr<Vsdram_adapter_dut> dut_;
-    uint64_t next_a_ = kPeriodA / 2;
-    uint64_t next_b_ = kPeriodB / 2;
 };
 
 int Fail(const char *msg) {
@@ -113,17 +82,17 @@ bool RunOneRequest(Testbench &tb, uint32_t byte_addr, uint8_t mock_delay,
     // Simulates a real sdram.sv refresh/copy-port busy window that
     // happens to overlap the moment our request is first raised: mock_busy
     // makes the mock ignore sel&rd (without ever dropping sd_ready) for
-    // busy_hold_cycles clk_sdram edges, proving sdram_adapter's sequencer
+    // busy_hold_cycles clk_sys edges, proving sdram_adapter's sequencer
     // holds its request as a level and retries rather than assuming a
     // blind one-cycle pulse is always accepted (the real, hardware-only
     // bug this regression test guards against -- see sdram_adapter.sv's
     // SEQ_ISSUE comment).
     if (busy_hold_cycles > 0) dut.mock_busy = 1;
     dut.rd64_en    = 1;
-    tb.WaitPosedgeA();
+    tb.Tick();
     dut.rd64_en = 0;
     for (int i = 0; i < busy_hold_cycles; ++i) {
-        tb.WaitPosedgeB();
+        tb.Tick();
         // The whole point of the regression test: while mock_busy is
         // asserted, the mock must NEVER accept, no matter how long
         // sdram_adapter holds sd_sel/sd_rd asserted -- this confirms the
@@ -148,7 +117,7 @@ bool RunOneRequest(Testbench &tb, uint32_t byte_addr, uint8_t mock_delay,
     int next_expected = 0;
     bool saw_valid = false;
     for (int i = 0; i < 4000 && !saw_valid; ++i) {
-        tb.WaitPosedgeB();
+        tb.Tick();
         if (dut.sd_accept_probe) {
             if (next_expected >= 4) {
                 std::fprintf(stderr, "  observed a 5th sub-word access\n");
@@ -183,7 +152,7 @@ bool RunOneRequest(Testbench &tb, uint32_t byte_addr, uint8_t mock_delay,
         return false;
     }
 
-    tb.WaitPosedgesA(2);
+    tb.Ticks(2);
     if (!dut.rd64_ready) {
         std::fprintf(stderr, "  rd64_ready did not return after the response\n");
         return false;
@@ -208,7 +177,7 @@ bool RunBurstRequest(Testbench &tb, uint32_t byte_addr, uint8_t len,
     dut.rd64_len   = len;
     dut.mock_delay = mock_delay;
     dut.rd64_en    = 1;
-    tb.WaitPosedgeA();
+    tb.Tick();
     dut.rd64_en = 0;
 
     if (dut.rd64_ready) {
@@ -216,13 +185,14 @@ bool RunBurstRequest(Testbench &tb, uint32_t byte_addr, uint8_t len,
         return false;
     }
 
-    for (int word = 0; word < len; ++word) {
+    const int words = len ? len : 1;
+    for (int word = 0; word < words; ++word) {
         uint32_t word_addr = byte_addr + static_cast<uint32_t>(word) * 8;
         uint32_t word_base = (word_addr >> 1) & 0x3FFFFFFu;
         int next_expected = 0;
         bool saw_valid = false;
         for (int i = 0; i < 4000 && !saw_valid; ++i) {
-            tb.WaitPosedgeB();
+            tb.Tick();
             if (dut.sd_accept_probe) {
                 if (next_expected >= 4) {
                     std::fprintf(stderr, "  word %d: observed a 5th sub-word access\n", word);
@@ -240,7 +210,7 @@ bool RunBurstRequest(Testbench &tb, uint32_t byte_addr, uint8_t len,
             // rd64_ready must stay low for every word except possibly the
             // very last, and even then only once the final response has
             // actually landed (checked separately below).
-            if (word != len - 1 && dut.rd64_ready) {
+            if (word != words - 1 && dut.rd64_ready) {
                 std::fprintf(stderr, "  rd64_ready rose mid-burst before word %d\n", word);
                 return false;
             }
@@ -269,10 +239,10 @@ bool RunBurstRequest(Testbench &tb, uint32_t byte_addr, uint8_t len,
         // starting the next word's search, or that next word's loop could
         // catch this word's still-falling tail and declare victory with
         // zero sub-word accesses actually observed.
-        for (int i = 0; i < 4000 && dut.rd64_valid; ++i) tb.WaitPosedgeB();
+        for (int i = 0; i < 4000 && dut.rd64_valid; ++i) tb.Tick();
     }
 
-    tb.WaitPosedgesA(2);
+    tb.Ticks(2);
     if (!dut.rd64_ready) {
         std::fprintf(stderr, "  rd64_ready did not return after the full burst\n");
         return false;
@@ -288,21 +258,16 @@ int main(int argc, char **argv) {
     Testbench tb;
     Vsdram_adapter_dut &dut = tb.dut();
 
-    dut.clk_sys = 0;
-    dut.clk_sdram = 0;
+    dut.clk = 0;
     dut.reset = 1;
-    dut.reset_b = 1;
     dut.rd64_en = 0;
     dut.rd64_addr = 0;
     dut.rd64_len = 1;
     dut.mock_delay = 0;
     dut.mock_busy = 0;
-    for (int i = 0; i < 8; ++i) tb.WaitPosedgeA();
-    for (int i = 0; i < 8; ++i) tb.WaitPosedgeB();
+    for (int i = 0; i < 8; ++i) tb.Tick();
     dut.reset = 0;
-    dut.reset_b = 0;
-    tb.WaitPosedgeA();
-    tb.WaitPosedgeB();
+    tb.Tick();
 
     if (!dut.rd64_ready || dut.rd64_valid)
         return Fail("reset state is wrong");
@@ -325,9 +290,11 @@ int main(int argc, char **argv) {
     }
 
     const struct { uint32_t addr; uint8_t len; uint8_t delay; } kBurstRequests[] = {
+        {0x0000'0020u, 0, 0},
         {0x3040'0000u, 4, 0},
         {0x3040'0100u, 2, 3},
         {0x0000'0000u, 8, 1},
+        {0x0000'0100u, 16, 0},
     };
 
     for (const auto &req : kBurstRequests) {
@@ -339,7 +306,7 @@ int main(int argc, char **argv) {
     }
 
     // Regression test for the real hardware-only hang this session found:
-    // sdram_adapter's domain-B sequencer used to pulse sd_sel/sd_rd for
+    // sdram_adapter's sequencer used to pulse sd_sel/sd_rd for
     // exactly one cycle and assume acceptance, which is unsafe whenever
     // the real sdram.sv controller happens to be busy elsewhere (periodic
     // auto-refresh, or the loader's copy-port burst) at that exact
@@ -350,6 +317,30 @@ int main(int argc, char **argv) {
     // long busy window.
     if (!RunOneRequest(tb, 0x3040'0000u, /*mock_delay=*/2, /*busy_hold_cycles=*/9)) {
         return Fail("sdram_adapter request did not survive an sd_ready-silent busy window");
+    }
+
+    // Abort at acceptance, within a sub-word read, and at response time.
+    for (int age : {1, 5, 25, 80}) {
+        dut.rd64_addr = 0x1000;
+        dut.rd64_len = 16;
+        dut.mock_delay = 3;
+        dut.rd64_en = 1;
+        tb.Tick();
+        dut.rd64_en = 0;
+        tb.Ticks(age);
+        dut.reset = 1;
+        tb.Tick();
+        dut.reset = 0;
+        tb.Tick();
+        if (!dut.rd64_ready || dut.rd64_valid)
+            return Fail("reset did not discard the active burst");
+        for (int i = 0; i < 12; ++i) {
+            tb.Tick();
+            if (dut.rd64_valid || dut.sd_accept_probe)
+                return Fail("stale read escaped after reset");
+        }
+        if (!RunOneRequest(tb, 0x2000, 1))
+            return Fail("read failed after mid-burst reset");
     }
 
     std::printf(

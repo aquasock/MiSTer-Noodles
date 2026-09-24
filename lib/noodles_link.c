@@ -5,6 +5,7 @@
 #define _POSIX_C_SOURCE 199309L
 #include "noodles_link.h"
 
+#include <errno.h>
 #include <fcntl.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -23,6 +24,7 @@
 #define NOODLES_OP_PRESENT 4u
 #define NOODLES_OP_SPRITE_BATCH 5u
 #define NOODLES_OP_LOAD_SDRAM 6u
+#define NOODLES_FENCE_MASK 0x7fffffffu
 
 int noodles_link_open(noodles_link_t *link) {
     memset(link, 0, sizeof(*link));
@@ -61,17 +63,52 @@ uint32_t noodles_rgb(uint8_t r, uint8_t g, uint8_t b) {
     return (uint32_t)r | ((uint32_t)g << 8) | ((uint32_t)b << 16);
 }
 
+int noodles_link_fence_reached(const noodles_link_t *link, uint32_t target) {
+    return ((noodles_link_done_count(link) - target) & NOODLES_FENCE_MASK) < 0x40000000u;
+}
+
+static int descriptors_available(noodles_link_t *link) {
+    if (link->batch_pending) {
+        if (!noodles_link_fence_reached(link, link->batch_fence)) {
+            errno = EAGAIN;
+            return 0;
+        }
+        __sync_synchronize();
+        link->batch_pending = 0;
+    }
+    return 1;
+}
+
+static int ring_has_space(const noodles_link_t *link) {
+    if ((link->write_ptr + 1) % NOODLES_RING_SLOTS == link->header[2]) {
+        errno = EAGAIN;
+        return 0;
+    }
+    return 1;
+}
+
 int noodles_push_command(noodles_link_t *link, const uint32_t command[8]) {
-    uint32_t read_ptr = link->header[2];  // +8 bytes = index 2 of a uint32_t array
+    if (!command) {
+        errno = EINVAL;
+        return -1;
+    }
+    int is_batch = (command[0] & 0xffu) == NOODLES_OP_SPRITE_BATCH;
+    // Reap completed ownership on every push, including long runs of non-batch work.
+    int available = descriptors_available(link);
+    if ((is_batch && !available) || !ring_has_space(link)) return -1;
     uint32_t next_write_ptr = (link->write_ptr + 1) % NOODLES_RING_SLOTS;
-    if (next_write_ptr == read_ptr) return -1;  // ring full
 
     volatile uint32_t *slot = link->slots + link->write_ptr * NOODLES_SLOT_WORDS;
     for (unsigned i = 0; i < NOODLES_SLOT_WORDS; ++i) slot[i] = command[i];
 
+    __sync_synchronize();  // descriptor and slot writes must precede publication
     link->header[0] = next_write_ptr;  // publish: FPGA can now see and fetch it
     link->write_ptr = next_write_ptr;
     link->submitted += 1;
+    if (is_batch) {
+        link->batch_fence = (link->done_baseline + link->submitted) & NOODLES_FENCE_MASK;
+        link->batch_pending = 1;
+    }
     return 0;
 }
 
@@ -104,7 +141,11 @@ int noodles_push_blit_copy_key(noodles_link_t *link, uint32_t dst_addr, uint16_t
 int noodles_push_sprite_batch(noodles_link_t *link,
                               const noodles_sprite_descriptor_t *descriptors,
                               uint16_t count) {
-    if (!descriptors || count == 0 || count > NOODLES_SPRITE_DESCRIPTOR_MAX) return -1;
+    if (!descriptors || count == 0 || count > NOODLES_SPRITE_DESCRIPTOR_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (!descriptors_available(link) || !ring_has_space(link)) return -1;
     if (noodles_link_upload(link, NOODLES_SPRITE_DESCRIPTOR_ADDR, descriptors,
                              (size_t)count * sizeof(*descriptors)) != 0) return -1;
     const uint32_t command[8] = {
@@ -158,7 +199,7 @@ int noodles_present_and_wait(noodles_link_t *link) {
     // already been submitted, so timing out here would only make callers
     // report a false failure.
     for (int i = 0; i < 2000; ++i) {
-        if (noodles_link_done_count(link) >= target) {
+        if (noodles_link_fence_reached(link, target)) {
             link->presents_completed += 1;
             return 0;
         }
@@ -173,6 +214,12 @@ uint32_t noodles_link_back_buffer(const noodles_link_t *link) {
 
 int noodles_link_upload(noodles_link_t *link, uint32_t dst_addr, const void *data,
                          size_t size_bytes) {
+    const uint32_t descriptor_end = NOODLES_SPRITE_DESCRIPTOR_ADDR +
+        NOODLES_SPRITE_DESCRIPTOR_MAX * sizeof(noodles_sprite_descriptor_t);
+    if (size_bytes && dst_addr < descriptor_end &&
+        (dst_addr >= NOODLES_SPRITE_DESCRIPTOR_ADDR ||
+         size_bytes > NOODLES_SPRITE_DESCRIPTOR_ADDR - dst_addr) &&
+        !descriptors_available(link)) return -1;
     long page = sysconf(_SC_PAGESIZE);
     uint32_t aligned_addr = dst_addr & ~(uint32_t)(page - 1);
     size_t offset = dst_addr - aligned_addr;
@@ -183,6 +230,7 @@ int noodles_link_upload(noodles_link_t *link, uint32_t dst_addr, const void *dat
     if (map == MAP_FAILED) return -1;
 
     memcpy((char *)map + offset, data, size_bytes);
+    __sync_synchronize();
 
     munmap(map, map_span);
     return 0;

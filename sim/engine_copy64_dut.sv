@@ -23,6 +23,7 @@ module engine_copy64_dut (
     input  logic [31:0]   key_value,
     output logic          busy,
     output logic          done,
+    output logic          adapter_idle,
 
     output logic         DDRAM_CLK,
     input  logic         DDRAM_BUSY,
@@ -45,7 +46,6 @@ module engine_copy64_dut (
     logic [31:0] wr64_addr;
     logic [63:0] wr64_data;
     logic        wr64_en, wr64_ready;
-    logic        adapter_idle;
 
     blit_copy64 copy_i (
         .clk        (clk), .reset(reset),
