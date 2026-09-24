@@ -2618,3 +2618,41 @@ The core-syntax.md audit confirms the six-section format, resolved source hash a
 - [ ] Passed
 
 ---
+
+## 80 COMMIT Unreleased ??? 2026-09-23T18:54:09-07:00
+
+#### Coming From:
+
+Unreleased 141940c
+
+#### Purpose:
+
+Make 800x600 SVGA rendering the next standard framebuffer configuration while retaining the 100MHz GPU and MiSTer scaler.
+
+#### Outcome:
+
+The user approved actual 800x600 landscape rendering, not merely HDMI scaling, and requested the normal proposal, source-publication, build and hardware-acceptance workflow. The planned change updates core and host framebuffer geometry together to 800x600 with a 3200-byte pitch. Each 1920000-byte surface fits within its existing 2MiB slot, so buffer addresses, the command ABI, DDR3 sprite routing, 4:3 aspect ratio and GPU clock remain unchanged. The hardware-accepted c3d04ab 640x480 image remains the fallback until the new configuration is accepted.
+
+#### Next Steps:
+
+Publish this proposal, update geometry and directly related documentation and tests, run host and RTL regressions, then commit and push the source before building from that exact revision. Use the pinned seed5 and unchanged fitter settings with a twenty-minute build limit, run detailed and four-corner timing checks, and report the candidate for hardware testing. Do not mark hardware acceptance until the user supplies results or explicitly accepts the observed test.
+
+#### Files Modified:
+
+- Noodles.sv
+- lib/noodles_link.h
+- tools/load_bmp.c
+- tools/stress_demo.c
+- sim/tb_sprite_batch.cpp
+- sim/tb_sprite_batch_sdram.cpp
+- sim/test_noodles_link.c
+- README.md
+- docs/INTEGRATION.md
+- docs/QUALIFICATION.md
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
