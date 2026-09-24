@@ -141,6 +141,11 @@ It reports complete only after the matching live response arrives. Use
 `noodles_link_drain(device, timeout_ms)` for the last submitted command.
 A zero timeout checks once and faults the handle if not complete; use poll
 for ordinary nonblocking checks. Interrupted sleeps do not restart deadlines.
+Waits sleep between checks with a backoff from 20us to a 0.1ms cap, and drop
+back to 20us whenever a new challenge is issued, so a challenge (normally
+answered within one 10us core poll period) costs about one short sleep rather
+than a full backoff period. Sleeping a flat 1ms per check cost the canonical
+one-batch `blit-bench` about 13% of its measured throughput.
 
 `noodles_push_present(device, &fence)` submits exactly one flip, separately
 from waiting. While that flip is pending, drawing, uploads and another

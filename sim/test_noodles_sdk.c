@@ -22,6 +22,9 @@ static int map_fail, device_fail, complete_on_sleep, interrupt_sleep, clock_fail
 static int maps, unmaps, sleeps;
 static int control_active;
 static uint64_t now_ns;
+static long last_pause_ns, max_pause_ns;
+static int retire_after_sleeps;
+static uint32_t retire_fence;
 static const uint32_t fill[8] = {1, NOODLES_BUFFER_B_ADDR, 3200, 800, 600, 0, 0, 0};
 
 int __real_open(const char *, int, ...);
@@ -79,6 +82,12 @@ int __wrap_nanosleep(const struct timespec *pause, struct timespec *remaining) {
     assert(pause->tv_sec == 0 && pause->tv_nsec > 0 && pause->tv_nsec <= 1000000);
     now_ns += pause->tv_nsec;
     ++sleeps;
+    last_pause_ns = pause->tv_nsec;
+    if (pause->tv_nsec > max_pause_ns) max_pause_ns = pause->tv_nsec;
+    if (retire_after_sleeps > 0 && --retire_after_sleeps == 0) {
+        memory[2] = memory[0];
+        memory[3] = (memory[3] & 0x80000000u) | retire_fence;
+    }
     uint32_t request = memory[12];
     if (!control_active && request == 0x434c414du &&
         (memory[10] != 0 || memory[11] != 0)) {
@@ -197,8 +206,13 @@ int main(void) {
     a = open_device(0);
     assert(noodles_push_command(a, fill) == 0);
     uint64_t start = now_ns;
+    int sleeps_before_drain = sleeps;
+    max_pause_ns = 0;
     assert(noodles_link_drain(a, 3) == -1 && errno == ETIMEDOUT);
     assert(now_ns - start == 3000000);
+    /* Long waits back off from 20us but never sleep past 0.1ms, so a fence
+     * that retires late in a wait is still observed promptly. */
+    assert(max_pause_ns == 100000 && sleeps - sleeps_before_drain > 30);
     before = memory[0];
     assert(noodles_push_command(a, fill) == -1 && errno == ETIMEDOUT && memory[0] == before);
     assert(noodles_link_poll(a, 0, &done) == -1 && errno == ETIMEDOUT);
@@ -369,13 +383,46 @@ int main(void) {
     assert(noodles_push_command(a, fill) == 0);
     memory[2] = memory[0];
     memory[3] = 1;
+    int sleeps_before_ping = sleeps;
     assert(noodles_link_wait(a, 1, 10) == 0);
+    /* The ping is issued without sleeping and answered by the first
+     * minimum-length check, not after a full backoff period. */
+    assert(sleeps == sleeps_before_ping + 1 && last_pause_ns == 20000);
     int sleeps_after_confirmation = sleeps;
     uint32_t confirmed_sequence = memory[12];
     assert(noodles_link_wait(a, 1, 10) == 0);
     assert(sleeps == sleeps_after_confirmation && memory[12] == confirmed_sequence);
     closed(a);
     assert(!control_active && memory[16] == 0);
+
+    /* A raw fence that retires after the backoff has grown still gets a
+     * minimum-length ping check, including across fence wraparound. */
+    memory[0] = memory[2] = 0;
+    memory[3] = 0x7fffffffu;
+    a = open_verified();
+    assert(noodles_push_command(a, fill) == 0);
+    assert(noodles_link_last_fence(a) == 0);
+    complete_on_sleep = 0;
+    retire_after_sleeps = 4;
+    retire_fence = 0;
+    max_pause_ns = 0;
+    assert(noodles_link_wait(a, 0, 10) == 0);
+    assert(max_pause_ns == 100000 && last_pause_ns == 20000);
+    closed(a);
+
+    /* Reset while a ping is outstanding faults the waiter instead of
+     * accepting the reset-cleared fence as completion. */
+    memory[0] = memory[2] = memory[3] = 0;
+    a = open_verified();
+    assert(noodles_push_command(a, fill) == 0);
+    memory[2] = memory[0];
+    memory[3] = 1;
+    assert(noodles_link_poll(a, 1, &done) == 0 && !done);
+    control_active = 0;
+    memory[0] = memory[2] = memory[3] = memory[16] = 0;
+    assert(noodles_link_wait(a, 1, 10) == -1 && errno == ESTALE);
+    assert(noodles_link_close(a, 10) == -1 && errno == ESTALE);
+    seed_identity();
 
     /* An FPGA reset clears the response and faults the stale handle before
      * a reset fence can be accepted as completion. A new live core may then

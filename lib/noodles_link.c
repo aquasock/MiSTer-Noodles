@@ -27,6 +27,12 @@
 #define NOODLES_OP_SPRITE_BATCH 5u
 #define NOODLES_OP_LOAD_SDRAM 6u
 #define NOODLES_FENCE_MASK 0x7fffffffu
+// Wait-loop sleep backoff. The minimum covers link_control's 1024-cycle poll
+// period plus a DDR3 round trip, so a liveness ping is normally answered by
+// the first check after it is issued. The cap matches the pre-SDK tools'
+// 0.1ms fence poll; a flat 1ms sleep cost about 2ms per verified wait.
+#define NOODLES_POLL_MIN_NS 20000u
+#define NOODLES_POLL_MAX_NS 100000u
 #define NOODLES_CONTROL_MAGIC 0x4e444c53u
 #define NOODLES_CONTROL_CLAIM 0x434c414du
 #define NOODLES_REQUIRED_CAPABILITIES 0x0000007eu
@@ -83,12 +89,13 @@ static int monotonic_ns(uint64_t *value) {
     return 0;
 }
 
-static int pause_until(uint64_t deadline) {
+static int pause_until(uint64_t deadline, uint32_t *step) {
     uint64_t now;
     if (monotonic_ns(&now) != 0) return -1;
     if (now >= deadline) return fail(ETIMEDOUT);
     uint64_t remaining = deadline - now;
-    struct timespec pause = {0, remaining < 1000000u ? (long)remaining : 1000000};
+    struct timespec pause = {0, remaining < *step ? (long)remaining : (long)*step};
+    *step = *step >= NOODLES_POLL_MAX_NS / 2 ? NOODLES_POLL_MAX_NS : *step * 2;
     if (nanosleep(&pause, NULL) != 0 && errno != EINTR) return -1;
     return 0;
 }
@@ -118,6 +125,7 @@ static void request_sequence(noodles_link_t *link, uint32_t sequence) {
 }
 
 static int wait_response_until(noodles_link_t *link, uint32_t sequence, uint64_t deadline) {
+    uint32_t step = NOODLES_POLL_MIN_NS;
     for (;;) {
         __sync_synchronize();
         if (link->header[NOODLES_CONTROL_RESPONSE_SEQ_WORD] == sequence &&
@@ -126,7 +134,7 @@ static int wait_response_until(noodles_link_t *link, uint32_t sequence, uint64_t
               link->header[NOODLES_CONTROL_RESPONSE_TOKEN_HI_WORD] == link->token_hi))) {
             return 0;
         }
-        if (pause_until(deadline) != 0) return -1;
+        if (pause_until(deadline, &step) != 0) return -1;
     }
 }
 
@@ -258,14 +266,17 @@ int noodles_link_close(noodles_link_t *link, uint32_t timeout_ms) {
         deadline = start + (uint64_t)timeout_ms * 1000000u;
     }
     if (!error) {
+        uint32_t step = NOODLES_POLL_MIN_NS;
         for (;;) {
             int complete;
+            int pinging = link->ping_pending;
             if (noodles_link_poll(link, noodles_link_last_fence(link), &complete) != 0) {
                 error = errno;
                 break;
             }
             if (complete) break;
-            if (pause_until(deadline) != 0) {
+            if (!pinging && link->ping_pending) step = NOODLES_POLL_MIN_NS;
+            if (pause_until(deadline, &step) != 0) {
                 error = errno;
                 link->fault = error;
                 break;
@@ -365,11 +376,16 @@ int noodles_link_wait(noodles_link_t *link, noodles_fence_t target, uint32_t tim
     uint64_t start;
     if (monotonic_ns(&start) != 0) { link->fault = errno; return -1; }
     uint64_t deadline = start + (uint64_t)timeout_ms * 1000000u;
+    uint32_t step = NOODLES_POLL_MIN_NS;
     for (;;) {
         int complete;
+        int pinging = link->ping_pending;
         if (noodles_link_poll(link, target, &complete) != 0) return -1;
         if (complete) return 0;
-        if (pause_until(deadline) != 0) {
+        // A new ping is answered within microseconds; do not let a long
+        // raw-fence wait's backoff delay observing it.
+        if (!pinging && link->ping_pending) step = NOODLES_POLL_MIN_NS;
+        if (pause_until(deadline, &step) != 0) {
             link->fault = errno;
             return -1;
         }

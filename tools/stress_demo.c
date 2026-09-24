@@ -181,6 +181,19 @@ static int wait_for_fence(noodles_link_t *link, uint32_t target) {
     return -1;
 }
 
+// Diagnostic only: observes the unverified done counter so blit-bench can
+// separate engine execution from SDK wait latency. Completion is still
+// established by wait_for_fence afterwards.
+static int trace_raw_fence(noodles_link_t *link, uint32_t target) {
+    const struct timespec delay = {.tv_sec = 0, .tv_nsec = 20000};
+    const double deadline = now_s() + 2.0;
+    while (((noodles_link_done_count(link) - target) & 0x7fffffffu) >= 0x40000000u) {
+        if (now_s() > deadline) return -1;
+        nanosleep(&delay, NULL);
+    }
+    return 0;
+}
+
 int main(int argc, char **argv) {
     const char *path = (argc > 1) ? argv[1] : "assets/sprite.bmp";
     int count = (argc > 2) ? atoi(argv[2]) : 10;
@@ -431,17 +444,39 @@ int main(int argc, char **argv) {
             descriptors[j].flags = 1;
         }
 
+        // NOODLES_BENCH_TRACE=1 splits each iteration into submission,
+        // engine execution (raw fence observed by a 20us poll) and the
+        // remaining SDK verified wait. The trace poll itself shortens the
+        // raw-fence detection delay, so traced throughput is not comparable
+        // with the canonical untraced run; only the split is.
+        const char *trace_env = getenv("NOODLES_BENCH_TRACE");
+        const int trace = trace_env && strcmp(trace_env, "1") == 0;
+        double t_submit = 0.0, t_engine = 0.0, t_verify = 0.0;
+
         double b_start = now_s();
         long done_batches = 0;
         int bench_failed = 0;
         while (now_s() - b_start < run_seconds) {
             for (int b = 0; b < batches; ++b) {
+                const double t0 = trace ? now_s() : 0.0;
                 if (push_batch_retry(link, descriptors, MAX_SPRITES)) {
                     fprintf(stderr, "blit-bench: batch submission failed\n");
                     bench_failed = 1;
                     break;
                 }
                 const uint32_t target = noodles_link_last_fence(link);
+                if (trace) {
+                    const double t1 = now_s();
+                    if (trace_raw_fence(link, target)) {
+                        fprintf(stderr, "blit-bench: raw fence trace timed out\n");
+                        bench_failed = 1;
+                        break;
+                    }
+                    const double t2 = now_s();
+                    t_submit += t1 - t0;
+                    t_engine += t2 - t1;
+                    t_verify -= t2;
+                }
                 if (wait_for_fence(link, target)) {
                     fprintf(stderr, "blit-bench: batch never retired "
                             "(submitted=%u target=%u done=%u)\n",
@@ -450,6 +485,7 @@ int main(int argc, char **argv) {
                     bench_failed = 1;
                     break;
                 }
+                if (trace) t_verify += now_s();
                 ++done_batches;
             }
             if (bench_failed) break;
@@ -467,6 +503,13 @@ int main(int argc, char **argv) {
         // number (which cannot exceed the 60Hz refresh).
         printf("  equivalent %.1f fps at %d sprites/frame\n",
                (done_batches / b_elapsed) / (double)batches, MAX_SPRITES * batches);
+        if (trace && done_batches > 0) {
+            printf("  trace per batch: submit %.3fms, engine %.3fms, verified wait %.3fms\n",
+                   t_submit * 1e3 / done_batches, t_engine * 1e3 / done_batches,
+                   t_verify * 1e3 / done_batches);
+            printf("  trace engine-only rate %.2f Mpixel/s\n",
+                   (double)MAX_SPRITES * sprite_w * sprite_h * done_batches / t_engine / 1e6);
+        }
         tool_close(link);
         return bench_failed;
     }
