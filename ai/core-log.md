@@ -42,35 +42,6 @@ Wire CMDQ and BLIT into Noodles.sv for real: design and implement the DDRAM writ
 
 ---
 
-## 87 COMMIT Unreleased ??? 2026-09-23T20:09:02-07:00
-
-#### Coming From:
-
-Unreleased 9e06a0f
-
-#### Purpose:
-
-Investigate and close the Stage 2B setup-timing failure under the approved timing-closure scope.
-
-#### Outcome:
-
-The recovery review confirmed that local `main` matches `origin/main` at `bd7ba1d`, and that the corrected Stage 2B source completed Quartus compilation but failed setup timing at -0.185 ns while hold timing passed at +0.180 ns. The user approved inspecting the isolated build at `/tmp/noodles-2b.dal6zF` and making a narrowly scoped placement, seed or RTL change, followed by simulation and a clean Quartus build; the failed image remains prohibited from deployment or hardware acceptance.
-
-#### Next Steps:
-
-Inspect the failing setup paths and their source or constraint causes, implement only the smallest justified timing-closure change, then run the relevant simulations and a clean Quartus build with timing verification. Stop for further direction before deployment or hardware testing if timing remains negative or the change would materially expand scope.
-
-#### Files Modified:
-
-None.
-
-#### Status:
-
-- [ ] Built
-- [ ] Passed
-
----
-
 ## 2 COMMIT Unreleased ecadd93 2026-09-21T23:04:52-07:00
 
 #### Coming From:
@@ -2905,6 +2876,36 @@ Work is stopped at the timing failure for transfer to another agent. Any continu
 - sim/test_noodles_sdk.c
 - sim/test_sdk_install.sh
 - tools/sdk_helpers.h
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
+
+## 87 COMMIT Unreleased 6b9ff63 2026-09-23T20:09:02-07:00
+
+#### Coming From:
+
+Unreleased 9e06a0f
+
+#### Purpose:
+
+Fix concurrent DDR3 read-response ownership so host-driven BLIT_COPY commands cannot stall.
+
+#### Outcome:
+
+Registered link-control DDR3 responses before session-state comparisons and gated the shared scalar read response and ready signals so `blit_copy` receives data only when it owns the read mux. The original seed-13 Stage 2B image had positive timing but reproducibly saturated the command ring during BLIT_COPY; after the fix, full Verilator simulation passed and clean Quartus builds with seeds 5 and 13 passed setup and hold timing, while seed 9 remained short by 0.020 ns. The seed-13 image was deployed to the MiSTer at 10.10.0.22 with RBF SHA-256 `d217d48ed33ea0010f56c31ad1626f99918d306d1a5f2b709ad4d384b4efeaa2`. SDK identity verification and every benchmark group completed successfully, including SOLID_FILL, BLIT_COPY and BLIT_COPY_KEY, with no timeout or recovery required.
+
+#### Next Steps:
+
+Keep the seed-13 image and source commit as the current Stage 2B hardware candidate. Record user visual acceptance separately before marking the milestone passed; do not infer visual acceptance from the automated benchmark alone.
+
+#### Files Modified:
+
+- Noodles.sv
+- rtl/link_control.sv
 
 #### Status:
 
