@@ -3174,3 +3174,32 @@ Obtain user visual acceptance of `tile-cache-demo-waitfix` on the accepted seed-
 - [ ] Passed
 
 ---
+
+## 96 COMMIT Unreleased ??? 2026-09-23T21:33:58-07:00
+
+#### Coming From:
+
+Unreleased 7d4b259
+
+#### Purpose:
+
+Record user visual acceptance of the SDK fence-wait latency fix and promote its host tools to the standard names.
+
+#### Outcome:
+
+The user watched `tile-cache-demo-waitfix` on the accepted Stage 2B seed-13 image and reported that it looked perfect, completing the visual acceptance entry 95 required. Together with entry 95's six canonical `blit-bench` runs averaging 77.41 Mpixel/s and the 60.2fps tile-cache pacing match, this establishes source `7d4b259` as the accepted SDK baseline and closes the entry 94 throughput regression without any RTL or RBF change. On the MiSTer the hash-verified `stress-demo` and `tile-cache-demo` from `7d4b259` now occupy the standard names, with SHA256 prefixes `5fed964f` and `ee6e6efc`, and the previous binaries are preserved as `stress-demo-pre-waitfix` and `tile-cache-demo-pre-waitfix`. Other deployed tools still carry the earlier SDK wait policy until they are next redeployed.
+
+#### Next Steps:
+
+Keep the seed-13 RBF and source `7d4b259` as the accepted baseline, redeploy the remaining host tools from current source when next needed, and scope the next generic 2D rendering capability before changing the accepted hardware image.
+
+#### Files Modified:
+
+None.
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
