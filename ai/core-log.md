@@ -2831,7 +2831,7 @@ Record user visual feedback separately when available and scope stage 2B only af
 
 ---
 
-## 86 COMMIT Unreleased ??? 2026-09-23T19:47:23-07:00
+## 86 COMMIT Unreleased 9e06a0f 2026-09-23T19:47:23-07:00
 
 #### Coming From:
 
@@ -2843,11 +2843,11 @@ Add a live identified host session protocol so the SDK can reject mismatched cor
 
 #### Outcome:
 
-The user approved stage 2B as one hardware cycle without changing the accepted 800x600 geometry, command opcodes or 100MHz clock. The proposed control block publishes magic, protocol version, capabilities and geometry, then accepts a nonzero host-selected session claim only after ring initialization. The command ring remains disabled until that live claim succeeds. A host request/FPGA response challenge proves liveness before a completed fence is trusted; after reset the FPGA clears and disarms the session before accepting commands, so persistent DDR3 identity or a reset fence cannot alone produce verified success. The existing explicit legacy API and binaries remain available for older fallback cores, while migrated tools use a new verified open path. Cooperative process locking remains separate from hardware identity and does not become a security boundary.
+Stage 2B source 9e06a0f implements protocol 1.0 identity, fixed capability and geometry reporting, a random 64-bit host claim, command-ring gating, live completion challenges, clean disarm and ESTALE reset-loss handling. Session claims wait for ring and fence initialization plus an idle DDR3 adapter, preventing persistent identity or reset fence data from producing verified success. SDK 0.2.0 tools use verified open; the explicit legacy API remains for preserved pre-protocol images and refuses a detected protocol-1.0 core. Host lifecycle, installed native C/C++ and ARM consumers, all RTL simulations and the mocked timing-report regression passed. The first isolated build of b0f491d stopped during analysis after 37 seconds because fence readiness was connected to present instead of link_fence; correction 9e06a0f was published before rebuilding. The exact corrected seed7 source then completed Quartus in 271 seconds with zero errors and 62 warnings. It used 11,202 of 41,910 ALMs, 14,564 registers, 362,241 block-memory bits, 60 of 553 RAM blocks and 35 of 112 DSP blocks. Hold passed at +0.180ns, but setup failed at -0.185ns, so the user-directed stop condition was applied: no multi-corner analysis, seed sweep, timing optimization, deployment or hardware test followed. The unqualified RBF SHA256 is 8e90fc735058de6b19efcead8f3245253f9a1371a57dcf57e89ed2fa2ffd9a27 and must not replace an accepted image. The accepted SVGA seed7 core and all fallback artifacts remain untouched.
 
 #### Next Steps:
 
-Publish this proposal, define the exact control-memory layout, implement and simulate initialization, claim, liveness challenge, ring gating and reset-loss behavior, then migrate SDK information and lifecycle handling. Build the exact source revision, run the full RTL and host/package regressions, require the existing four-corner timing gate, and perform hash-verified hardware qualification while preserving all accepted and fallback binaries.
+Work is stopped at the timing failure for transfer to another agent. Any continuation requires reviewing the failing setup path from the isolated build at `/tmp/noodles-2b.dal6zF` and obtaining user direction before changing placement, seed or RTL; do not deploy the failed-timing image or claim stage 2B hardware acceptance.
 
 #### Files Modified:
 
@@ -2858,19 +2858,28 @@ Publish this proposal, define the exact control-memory layout, implement and sim
 - docs/INTEGRATION.md
 - docs/SDK.md
 - examples/sdk_smoke.c
+- files.qip
+- lib/noodles.pc.in
 - lib/noodles_link.c
 - lib/noodles_link.h
 - lib/noodles_link_internal.h
 - rtl/link_control.sv
+- rtl/link_fence.sv
 - rtl/link_ring.sv
+- scripts/deploy.sh
 - sim/link_control_dut.sv
+- sim/link_fence_dut.sv
+- sim/link_ring_dut.sv
 - sim/tb_link_control.cpp
+- sim/tb_link_fence.cpp
+- sim/tb_link_ring.cpp
 - sim/test_noodles_sdk.c
+- sim/test_sdk_install.sh
 - tools/sdk_helpers.h
 
 #### Status:
 
-- [ ] Built
+- [x] Built
 - [ ] Passed
 
 ---
