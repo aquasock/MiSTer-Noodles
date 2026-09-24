@@ -8,14 +8,14 @@ from. The build procedure itself is in [BUILD.md](BUILD.md).
 
 | # | Date | Build | Seed | RBF SHA-256 | Hardware status |
 |---|---|---|---:|---|---|
-| 6 | 2026-09-24 | **Candidate:** protocol 1.5 descriptor ring, 800x600 at 100MHz, four-corner timing pass | 13 | `b79037fc…dd5e56` | Awaiting hardware pixel and MiSTer-GemRB validation |
-| 5 | 2026-09-24 | **Current:** protocol 1.4, 800x600 at 100MHz, four-corner timing pass | 13 | `39c2efa8…7e008f` | Exact pixels, HDMI audio and MiSTer-GemRB accepted |
+| 6 | 2026-09-24 | **Current:** protocol 1.5 descriptor ring, 800x600 at 100MHz, four-corner timing pass | 13 | `b79037fc…dd5e56` | Exact pixels, audio, multi-batch stress and MiSTer-GemRB accepted |
+| 5 | 2026-09-24 | Previous protocol 1.4, 800x600 at 100MHz, four-corner timing pass | 13 | `39c2efa8…7e008f` | Exact pixels, HDMI audio and MiSTer-GemRB accepted |
 | 4 | 2026-09-23 | Previous protocol 1.0 800x600 build, four-corner timing pass | 7 | `a020e304…43a47a` | User visually accepted; independent reproduction waived |
 | 3 | 2026-09-23 | 800x600 candidate, source `37d21c9`; cold-corner setup failure | 5 | `65ca7861…eb5587` | Diagnostic hardware run only; not qualified |
 | 2 | 2026-09-23 | Recovery fallback: 640x480, shared 100MHz clock, registered write ingress and slot enables | 5 | `b76fb924…247b8d` | Accepted; clean-commit reproduction verified |
 | 1 | 2026-09-22 | Historical: SPRITE_BATCH engine, 64-bit DDRAM path, PRESENT retirement-acknowledgement fix | 1 | `25f9d3a1…edba93` | Accepted -- see below |
 
-## Protocol 1.5 descriptor-ring candidate (6)
+## Current protocol 1.5 descriptor-ring build (6)
 
 Source `513f2182b3b0c156c0bd8644e06678cdef0b5f14` publishes protocol
 `0x00010005`, capability mask `0x000003fe` and SDK 0.9. Opcode 5 can select
@@ -51,7 +51,7 @@ four operating corners:
 | 13 | +0.088ns | +0.080ns | PASS | `b79037fce611af71513b7aba9f48ace0a3fa1ffc3f6820c96080be4e60dd5e56` |
 | 7 | +0.260ns | +0.070ns | PASS | `aa517c3a2b3ce41c6e7ae9e8539c1776b5a5984cbc87bbea35a773b3b442f0cc` |
 
-Seed 13 is the pinned candidate. Its per-corner worst slack, in ns, is:
+Seed 13 is the pinned accepted build. Its per-corner worst slack, in ns, is:
 
 | Model at 1.1V | Setup | Hold | Core hold | Min pulse width |
 |---|---:|---:|---:|---:|
@@ -65,10 +65,31 @@ Recovery and removal pass at every corner. The seed-13 fit uses 14,683 ALMs,
 Seed 7 uses 14,686 ALMs and 18,903 registers with the same memory and DSP
 counts. The isolated build's RTL files match source `513f218`; Quartus's
 expanded QSF only repeats the source-file assignments already supplied by
-`files.qip`. Hardware acceptance, exact-pixel validation and the MiSTer-GemRB
-AR4000 comparison remain pending, so build 5 stays the accepted fallback.
+`files.qip`.
 
-## Current protocol 1.4 seed-13 build (5)
+The seed-13 RBF was deployed as `Noodles_descriptor_ring_seed13.rbf` and its
+SHA-256 was verified on the MiSTer. Live identity reported protocol
+`0x00010005`, capability mask `0x000003fe`, 800x600 geometry and 3200-byte
+pitch. SDK 0.9 smoke and readback diagnostics passed 10 blend cases covering
+24,671 pixels, seven blended-fill cases covering 10,607 pixels, and 12 ordered
+rounds containing 576 batched draws and 270,574 checked pixels. Each round
+queued three descriptor tables before readback. A four-batch 256-sprite stress
+run held 60.4fps for five seconds with no command failure. The SDL diagnostic
+retained exact-pixel hash `64d5728e` and drained a one-second tone through the
+MiSTer audio driver.
+
+MiSTer-GemRB source `50cf286` then rebuilt against SDK 0.9. In the same Throne
+of Bhaal AR4000 combat workload, queue time fell from the protocol-1.4
+baseline's 24.1-26.5ms to 14.4-15.2ms per frame. Sprite-batch submission stalls
+were zero and total drains fell from approximately 25-27 per frame to about
+one per frame. Active-combat intervals reached 15.9-17.8fps, compared with the
+previous settled 13.93fps result, while GemRB used 41.8% of one Cortex-A9 core
+in a 15-second sample versus the prior 48-50.5%. The run reached game over
+without a renderer fault. RSS was 371MiB, process swap remained zero and the
+system retained 109MiB available memory. Build 5 remains the protocol-1.4
+recovery fallback.
+
+## Previous protocol 1.4 seed-13 build (5)
 
 The accepted RBF was built from source
 `2dea6a1b0a5a536bba8d497fda2b5480c47600fe` with only the fitter SEED

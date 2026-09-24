@@ -37,8 +37,9 @@ For the current consumer-facing baseline, start with
 layouts, pixel format, ownership and limitations for consumers. It describes
 the core interface; the validated SDL2 renderer lives in MiSTer-GemRB.
 Current source is protocol 1.5 at 800x600 and 100MHz. It adds a bounded
-descriptor-table ring to the timing-qualified, hardware-accepted protocol 1.4
-seed-13 baseline. The older accepted 640x480 image remains a recovery fallback.
+descriptor-table ring and is timing-qualified and hardware-accepted with seed
+13. The protocol 1.4 seed-13 image and older accepted 640x480 image remain
+recovery fallbacks.
 
 ## Host-side API
 

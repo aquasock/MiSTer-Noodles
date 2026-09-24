@@ -64,11 +64,11 @@ and the recorded build date. Matching settings alone is not proof of
 reproducibility; compare the resulting RBF hash against
 [QUALIFICATION.md](QUALIFICATION.md).
 
-The current source is the protocol 1.5 and SDK 0.9 descriptor-ring candidate.
-Its seed-13 and seed-7 builds both pass all four timing corners; seed 13 is the
-pinned hardware-test image. It has not yet replaced the hardware-accepted
-protocol 1.4 image. Use `SOURCE_DATE_EPOCH=1790121600` and compare against the
-protocol 1.5 seed-13 hash in [QUALIFICATION.md](QUALIFICATION.md).
+The current accepted source is protocol 1.5 with SDK 0.9 and the descriptor
+ring. Its seed-13 and seed-7 builds both pass all four timing corners; seed 13
+is the pinned hardware-accepted image. Use `SOURCE_DATE_EPOCH=1790121600` and
+compare against the protocol 1.5 seed-13 hash in
+[QUALIFICATION.md](QUALIFICATION.md).
 
 ```sh
 git checkout --detach 513f2182b3b0c156c0bd8644e06678cdef0b5f14
@@ -78,7 +78,7 @@ quartus_sta -t tools/report_multicorner.tcl
 sha256sum output_files/Noodles.rbf
 ```
 
-The accepted protocol 1.4 fallback remains reproducible from the pinned source
+The previous protocol 1.4 fallback remains reproducible from the pinned source
 below. It passed exact-pixel hardware diagnostics, HDMI audio and the
 MiSTer-GemRB AR4000 workload.
 
