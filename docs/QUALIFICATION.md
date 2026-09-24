@@ -8,7 +8,7 @@ from. The build procedure itself is in [BUILD.md](BUILD.md).
 
 | # | Date | Build | Seed | RBF SHA-256 | Hardware status |
 |---|---|---|---:|---|---|
-| 3 | 2026-09-23 | 800x600 candidate, source `37d21c9`; cold-corner setup failure | 5 | `65ca7861…eb5587` | Not deployed; not qualified |
+| 3 | 2026-09-23 | 800x600 candidate, source `37d21c9`; cold-corner setup failure | 5 | `65ca7861…eb5587` | Diagnostic hardware run only; not qualified |
 | 2 | 2026-09-23 | **Current:** shared 100MHz clock, registered write ingress and slot enables, honest DDR3 constraints | 5 | `b76fb924…247b8d` | Accepted; clean-commit reproduction verified |
 | 1 | 2026-09-22 | Historical: SPRITE_BATCH engine, 64-bit DDRAM path, PRESENT retirement-acknowledgement fix | 1 | `25f9d3a1…edba93` | Accepted -- see below |
 
@@ -23,7 +23,8 @@ RBF SHA-256:
 The default slow +100C check passes, but the explicit four-corner gate
 correctly exits nonzero: slow -40C setup fails at -0.137ns from the
 `vga_out:vga_scaler_out` line-buffer RAM to `y_1r[13]`, on the HDMI PLL
-clock. This candidate is not timing-qualified and has not been deployed.
+clock. This candidate is not timing-qualified. The user subsequently
+authorized loading it explicitly as a diagnostic to measure FPS.
 
 | Model at 1.1V | Overall setup | Overall hold | Core setup | Core hold |
 |---|---:|---:|---:|---:|
@@ -37,6 +38,26 @@ framework unmatched-filter/empty-source warnings remain. Host and ARM/native
 builds and the full RTL suite pass, including the 480000-pixel fill and
 sprite-batch tests with 3200-byte destination pitch. These do not override
 the failing timing gate or establish hardware acceptance.
+
+### Diagnostic hardware measurements
+
+The RBF was uploaded as `Noodles_svga_seed5_diagnostic.rbf` with matching
+`stress-demo-svga`; both uploads were hash-verified by FTP readback. The
+accepted `Noodles_ingress_seed5.rbf` and `stress-demo-ingress` were preserved.
+Four 15-second runs completed without reported command errors/timeouts:
+
+| Workload | SVGA result | Prior 640x480 result |
+|---|---:|---:|
+| 256 sprites, 128x128, four batches, with clear/present | 15.1fps (227 frames) | 15.1fps |
+| Uncapped blit throughput | 75.31 Mpixel/s | 76.18 / 80.11 / 81.16 Mpixel/s |
+| Full-screen clear/present | 60.4fps | 60.3fps |
+| Present-only | 60.3fps | 60.3fps |
+
+These are short-run performance observations, not pixel-readback or visual
+acceptance. One uncapped sample does not establish a persistent regression.
+SVGA has 56.25% more framebuffer pixels, but the fixed sprite workload has
+the same sprite count and dimensions. The timing violation remains unresolved;
+the diagnostic image remains loaded after the run.
 
 ## Current accepted build (2)
 
