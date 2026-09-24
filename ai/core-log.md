@@ -2688,7 +2688,7 @@ Keep the SVGA image classified as diagnostic rather than hardware-accepted or ti
 
 ---
 
-## 82 COMMIT Unreleased ??? 2026-09-23T19:06:02-07:00
+## 82 COMMIT Unreleased 37d21c9 2026-09-23T19:06:02-07:00
 
 #### Coming From:
 
@@ -2700,19 +2700,19 @@ Compare three additional fitter seeds for 800x600 timing closure without changin
 
 #### Outcome:
 
-The user approved three more seeds after the SVGA seed5 build passed the default corner but failed slow -40C setup at -0.137ns. The selected seeds are 4, 6 and 7, each using source 37d21c9 with only its SEED assignment overridden in an isolated build copy. The existing SVGA diagnostic remains loaded and the accepted 640x480 fallback remains untouched.
+Three isolated builds used online source 37d21c9 with only SEED overridden to 4, 6 or 7; the assignment sets were checked for unintended changes. Date, threads, packing, RTL and constraints stayed fixed. All compiled within the twenty-minute limit, with three concurrent builds: seed4 in 9m09s, seed6 in 9m00s and seed7 in 9m03s. The four-corner gate rejects seeds4/6 for slow -40C core setup of -0.081/-0.046ns respectively. Seed7 passes every category at all four corners, with worst setup +0.382ns and worst hold +0.084ns; its RBF SHA256 is a020e304aa6903e06e55c2efdba15d1513fb3aa4db9494840b6028a3ba43a47a. Qualification documentation records the corner table, all three hashes and source-plus-seed provenance. This entry references the common source, not a claim that its seed5 QSF reproduces the seed7 candidate unchanged. No new image was deployed; the seed5 SVGA diagnostic remains loaded and the accepted 640x480 fallback remains untouched. The user reaffirmed fixed 800x600 SVGA as the standard going forward and deferred a runtime VGA/SVGA switcher.
 
 #### Next Steps:
 
-Publish this proposal, run at most three concurrent builds with a twenty-minute timeout each and the same pinned date, thread count and packing settings, then apply detailed timing and the four-corner gate to every completed fit. Record all corners and hashes, select by passing every timing category rather than default setup alone, and retain the source-plus-seed provenance. Do not deploy or mark hardware acceptance as part of this seed comparison.
+Seed7 is the selected timing-qualified SVGA candidate. Hardware qualification and pinning seed7 into a reproducible standard source revision remain next steps, not completed work. Preserve the seed5 diagnostic and 640x480 fallback until a new image is accepted; do not infer hardware acceptance from timing alone.
 
 #### Files Modified:
 
-None.
+- docs/QUALIFICATION.md
 
 #### Status:
 
-- [ ] Built
+- [x] Built
 - [ ] Passed
 
 ---
