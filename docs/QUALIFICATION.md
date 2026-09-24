@@ -67,10 +67,14 @@ blended fills reduced comparable command-queue time from 45.6-47.7ms to
 stalls. Settled combat reached 13.93fps, and the run reached a 19.8fps
 game-over video without a renderer fault.
 
-The first accepted artifact came from the clean seed comparison rather than
-the subsequently pinned QSF revision. The current qualification cycle will
-record an exact clean build of the pinned revision below before calling that
-source-level reproduction complete.
+**Pinned-source reproduction verified.** A fresh online clone checked out at
+source `042b62ce9aefd1d34d167916ccffff930512e8e6` and built with
+`SOURCE_DATE_EPOCH=1790121600` completed its full compile in 5m18s. The
+four-corner gate reproduced every slack value and resource count above, and
+the resulting RBF was byte-identical to the hardware-accepted artifact with
+SHA-256 `39c2efa8b08164eb3daad2d5b62ea6961152727b1f92886f5c4a329d527e008f`.
+No redeployment or repeated hardware run was needed because the generated
+bitstream did not change.
 
 ## Previous protocol 1.0 SVGA build (4)
 

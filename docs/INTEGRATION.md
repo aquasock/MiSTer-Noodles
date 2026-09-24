@@ -16,9 +16,9 @@ Seed 13 passes all four timing corners and the protocol 1.4 core passed
 exact-pixel hardware diagnostics, HDMI audio and the MiSTer-GemRB AR4000
 workload. Its RBF SHA-256 is
 `39c2efa8b08164eb3daad2d5b62ea6961152727b1f92886f5c4a329d527e008f`.
-It was built from `2dea6a1` with only SEED changed to 13; the default QSF now
-pins that setting. See [QUALIFICATION.md](QUALIFICATION.md) for provenance
-and results.
+It was built from `2dea6a1` with only SEED changed to 13; source `042b62c`
+pins that setting in the default QSF and reproduces the accepted RBF byte for
+byte. See [QUALIFICATION.md](QUALIFICATION.md) for provenance and results.
 
 Build the host library/tools from the same source as the loaded core.
 Geometry remains compile-time in FPGA logic, but protocol 1.4 reports and

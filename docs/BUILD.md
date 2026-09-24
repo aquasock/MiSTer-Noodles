@@ -71,6 +71,7 @@ seed without changing RTL, clocks or constraints. Use
 [QUALIFICATION.md](QUALIFICATION.md) when reproducing it.
 
 ```sh
+git checkout --detach 042b62ce9aefd1d34d167916ccffff930512e8e6
 SOURCE_DATE_EPOCH=1790121600 quartus_sh --flow compile Noodles
 quartus_sta -t tools/report_timing.tcl
 quartus_sta -t tools/report_multicorner.tcl
