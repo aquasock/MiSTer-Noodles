@@ -2981,7 +2981,7 @@ Implement host regressions for allocation pressure, coalescing, partial transfer
 
 ---
 
-## 90 COMMIT Unreleased ??? 2026-09-23T21:02:00-07:00
+## 90 COMMIT Unreleased 7e92feb 2026-09-23T21:02:00-07:00
 
 #### Coming From:
 
@@ -2993,7 +2993,7 @@ Implement entry 89's engine-agnostic managed surfaces and fixed-cell texture cac
 
 #### Outcome:
 
-Add SDK 0.3 opaque XRGB8888 surfaces backed by the reserved 224MiB DDR3 arena, with aligned allocation, coalescing, bounded partial transfers, clipped fill/copy/batch operations, raw-access exclusion, and fence-verified deferred reuse. Add a generic fixed-cell LRU atlas whose application-defined keys and batched visible draws do not expose a tilemap-specific ABI, plus a scrolling 64x64 tile demo using 154 visible tiles and a 256-cell cache. Host regressions cover arena pressure, complete coalescing, partial pitched transfers, clipping, in-flight destruction, delayed reuse, atlas eviction, packaging, and sanitizer execution; ARM and native builds must pass before hardware deployment, and no RTL or RBF change is required.
+Added SDK 0.3 opaque XRGB8888 surfaces backed by the reserved 224MiB DDR3 arena, with aligned allocation, coalescing, bounded partial transfers, clipped fill/copy/batch operations, raw-access exclusion, and fence-verified deferred reuse. Added a generic fixed-cell LRU atlas whose application-defined keys and batched visible draws do not expose a tilemap-specific ABI, plus a scrolling 64x64 tile demo using 154 visible tiles and a 256-cell cache. Host regressions passed for arena pressure, complete coalescing, partial pitched transfers, clipping, in-flight destruction, delayed reuse and atlas eviction; native and ARM builds, installed C/C++ consumer checks and AddressSanitizer/UndefinedBehaviorSanitizer execution also passed. No RTL or RBF change was made.
 
 #### Next Steps:
 
