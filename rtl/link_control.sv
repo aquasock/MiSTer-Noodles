@@ -66,6 +66,8 @@ module link_control #(
     logic [31:0] last_request_seq, request_seq;
     logic [31:0] candidate_token_lo, candidate_token_hi;
     logic [31:0] session_token_lo, session_token_hi;
+    logic [31:0] rd_data_q;
+    logic        rd_valid_q;
 
     assign rd_en = state == POLL_SEQ_REQ || state == TOKEN_LO_REQ || state == TOKEN_HI_REQ;
     assign rd_active = state == POLL_SEQ_REQ || state == POLL_SEQ_WAIT ||
@@ -111,8 +113,14 @@ module link_control #(
             candidate_token_hi <= 32'd0;
             session_token_lo <= 32'd0;
             session_token_hi <= 32'd0;
+            rd_data_q <= 32'd0;
+            rd_valid_q <= 1'b0;
             session_active <= 1'b0;
         end else begin
+            // Register DDR3 responses before the session FSM compares them.
+            rd_valid_q <= rd_valid;
+            if (rd_valid)
+                rd_data_q <= rd_data;
             unique case (state)
                 INIT_MAGIC_CLEAR: if (wr_en && wr_ready) state <= INIT_REQUEST_CLEAR;
                 INIT_REQUEST_CLEAR: if (wr_en && wr_ready) state <= INIT_RESPONSE_CLEAR;
@@ -138,18 +146,18 @@ module link_control #(
                 end
                 POLL_SEQ_REQ: if (rd_en && rd_ready) state <= POLL_SEQ_WAIT;
                 POLL_SEQ_WAIT: begin
-                    if (rd_valid) begin
-                        request_seq <= rd_data;
-                        if (rd_data == last_request_seq) begin
+                    if (rd_valid_q) begin
+                        request_seq <= rd_data_q;
+                        if (rd_data_q == last_request_seq) begin
                             state <= IDLE;
-                        end else if (session_active && rd_data == 32'd0) begin
+                        end else if (session_active && rd_data_q == 32'd0) begin
                             session_active <= 1'b0;
                             session_token_lo <= 32'd0;
                             session_token_hi <= 32'd0;
                             last_request_seq <= 32'd0;
                             state <= WRITE_RESPONSE;
-                        end else if (rd_data != 32'd0 &&
-                                     (session_active || (device_initialized && rd_data == CLAIM))) begin
+                        end else if (rd_data_q != 32'd0 &&
+                                     (session_active || (device_initialized && rd_data_q == CLAIM))) begin
                             state <= TOKEN_LO_REQ;
                         end else begin
                             state <= IDLE;
@@ -158,22 +166,22 @@ module link_control #(
                 end
                 TOKEN_LO_REQ: if (rd_en && rd_ready) state <= TOKEN_LO_WAIT;
                 TOKEN_LO_WAIT: begin
-                    if (rd_valid) begin
-                        candidate_token_lo <= rd_data;
+                    if (rd_valid_q) begin
+                        candidate_token_lo <= rd_data_q;
                         state <= TOKEN_HI_REQ;
                     end
                 end
                 TOKEN_HI_REQ: if (rd_en && rd_ready) state <= TOKEN_HI_WAIT;
                 TOKEN_HI_WAIT: begin
-                    if (rd_valid) begin
-                        candidate_token_hi <= rd_data;
+                    if (rd_valid_q) begin
+                        candidate_token_hi <= rd_data_q;
                         if ((!session_active && request_seq == CLAIM &&
-                             (candidate_token_lo != 32'd0 || rd_data != 32'd0)) ||
+                             (candidate_token_lo != 32'd0 || rd_data_q != 32'd0)) ||
                             (session_active && candidate_token_lo == session_token_lo &&
-                             rd_data == session_token_hi && request_seq != CLAIM)) begin
+                             rd_data_q == session_token_hi && request_seq != CLAIM)) begin
                             if (!session_active) begin
                                 session_token_lo <= candidate_token_lo;
-                                session_token_hi <= rd_data;
+                                session_token_hi <= rd_data_q;
                                 session_active <= 1'b1;
                                 state <= WRITE_TOKEN_LO;
                             end else begin

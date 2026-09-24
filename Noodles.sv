@@ -476,6 +476,8 @@ wire        rd_sel_batch64 = rd_sel_batch && batch_rd64_en;
 // would be silently misrouted or dropped for that response.
 wire        rd_sel_loader64 = !rd_sel_control && !rd_sel_link && !rd_sel_batch &&
                               loader_rd64_active;
+wire        rd_sel_copy = !rd_sel_control && !rd_sel_link && !rd_sel_batch &&
+                          !rd_sel_loader64;
 wire [31:0] adapter_rd_addr = rd_sel_control ? control_rd_addr :
                               rd_sel_link ? link_rd_addr :
                               rd_sel_batch ? batch_rd_addr : copy_rd_addr;
@@ -494,7 +496,7 @@ assign control_rd_ready = rd_sel_control ? adapter_rd_ready : 1'b0;
 assign batch_rd_ready = rd_sel_batch ? adapter_rd_ready : 1'b0;
 assign batch_rd64_ready = rd_sel_batch64 ? adapter_rd64_ready : 1'b0;
 assign loader_rd64_ready = rd_sel_loader64 ? adapter_rd64_ready : 1'b0;
-assign copy_rd_ready = (rd_sel_control || rd_sel_link || rd_sel_batch) ? 1'b0 : adapter_rd_ready;
+assign copy_rd_ready = rd_sel_copy ? adapter_rd_ready : 1'b0;
 assign control_rd_data = adapter_rd_data;
 assign control_rd_valid = rd_sel_control ? adapter_rd_valid : 1'b0;
 assign link_rd_data  = adapter_rd_data;
@@ -506,7 +508,7 @@ assign batch_rd64_valid = rd_sel_batch ? adapter_rd64_valid : 1'b0;
 assign loader_rd64_data = adapter_rd64_data;
 assign loader_rd64_valid = rd_sel_loader64 ? adapter_rd64_valid : 1'b0;
 assign copy_rd_data  = adapter_rd_data;
-assign copy_rd_valid = adapter_rd_valid;
+assign copy_rd_valid = rd_sel_copy ? adapter_rd_valid : 1'b0;
 
 ddram_adapter ddram_adapter
 (
