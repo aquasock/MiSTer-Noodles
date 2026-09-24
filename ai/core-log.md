@@ -2658,3 +2658,32 @@ The proposal and source were published before the clean build. Obtain approval f
 - [ ] Passed
 
 ---
+
+## 81 COMMIT Unreleased 37d21c9 2026-09-23T19:01:35-07:00
+
+#### Coming From:
+
+Unreleased 37d21c9
+
+#### Purpose:
+
+Measure SVGA performance on the MiSTer using the timing-failing seed5 image at the user's explicit diagnostic request.
+
+#### Outcome:
+
+After entry 80 rejected timing qualification, the user explicitly requested trying the just-built SVGA core to see FPS. Uploaded Noodles_svga_seed5_diagnostic.rbf and matching stress-demo-svga over FTP, verified both by readback hash, and preserved the accepted 640x480 RBF and tool. The diagnostic RBF matches source 37d21c9's hash 65ca7861f16add6df078287e79ad52e584f20fc3fb4fc6698990a8c156eb5587. Four fifteen-second runs completed without reported command errors or timeouts: 256 sprites at 128x128 in four batches gave 227 frames at 15.1fps, uncapped blits gave 75.31 Mpixel/s, full-screen clear/present gave 60.4fps and present-only gave 60.3fps. The fixed sprite workload matches the prior 640x480 result of 15.1fps despite the larger framebuffer. The single uncapped sample is below prior 80.11/81.16 samples but close to the earlier 76.18 sample, so it does not establish a persistent regression. No visual or pixel-readback acceptance is claimed. The -0.137ns cold-corner setup failure is unchanged, and the diagnostic image remains loaded.
+
+#### Next Steps:
+
+Keep the SVGA image classified as diagnostic rather than hardware-accepted or timing-qualified. Await the user's observations and next timing-closure decision; the preserved 640x480 image and its matching host tool remain available for rollback.
+
+#### Files Modified:
+
+- docs/QUALIFICATION.md
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
