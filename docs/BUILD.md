@@ -56,12 +56,21 @@ reproducibility; compare the resulting RBF hash against
 [QUALIFICATION.md](QUALIFICATION.md).
 
 The current SVGA image was built from `37d21c9` with SEED overridden to 7;
-the current QSF pins that setting. It passes all four timing corners and
+source `4cd38a7207e74771ca94351c6d7b94d307c69211` pins that setting.
+It passes all four timing corners and
 was visually accepted on hardware. An independent clean rebuild of the
 pinned revision was explicitly waived by the user, so byte-identical
 reproduction is not yet verified for SVGA. Use `SOURCE_DATE_EPOCH=1790121600`
 and compare against the seed7 hash in [QUALIFICATION.md](QUALIFICATION.md)
 when reproducing it.
+
+```sh
+git checkout --detach 4cd38a7207e74771ca94351c6d7b94d307c69211
+SOURCE_DATE_EPOCH=1790121600 quartus_sh --flow compile Noodles
+quartus_sta -t tools/report_timing.tcl
+quartus_sta -t tools/report_multicorner.tcl
+sha256sum output_files/Noodles.rbf
+```
 
 For the older accepted 640x480 build, use a clean checkout without prior Quartus
 databases and run:

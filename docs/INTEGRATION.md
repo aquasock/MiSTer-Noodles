@@ -15,8 +15,8 @@ independent: MiSTer's scaler scales this framebuffer to its configured output.
 Seed7 passes all four timing corners and the user accepted its visible
 hardware run. Its RBF SHA-256 is
 `a020e304aa6903e06e55c2efdba15d1513fb3aa4db9494840b6028a3ba43a47a`.
-It was built from `37d21c9` with only SEED changed to 7, now pinned in the
-repository QSF. Independent clean-rebuild verification was waived, not
+It was built from `37d21c9` with only SEED changed to 7, pinned in source
+`4cd38a7207e74771ca94351c6d7b94d307c69211`. Independent clean-rebuild verification was waived, not
 completed. See [QUALIFICATION.md](QUALIFICATION.md) for provenance and results.
 
 Build the host library/tools from the same source as the loaded core.

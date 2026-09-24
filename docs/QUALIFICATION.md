@@ -22,7 +22,8 @@ waived independent clean-rebuild verification. This is visual acceptance
 of the tested workload, not exhaustive pixel-readback validation.
 
 The source is `37d21c9b5535df0a8dff604516a423e3653c7f29` with only SEED
-overridden to 7. The repository now pins seed7 without changing RTL,
+overridden to 7. Source `4cd38a7207e74771ca94351c6d7b94d307c69211`
+pins seed7 without changing RTL,
 constraints, clock frequency or other fitter settings. The RBF SHA-256 is
 `a020e304aa6903e06e55c2efdba15d1513fb3aa4db9494840b6028a3ba43a47a`.
 All four timing corners pass as recorded below. An exact online pinned
