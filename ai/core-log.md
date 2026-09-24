@@ -194,3 +194,37 @@ The timing-qualified seed-7 blend-mode image is loaded on the MiSTer at 10.10.0.
 - [x] Passed
 
 ---
+
+## 5 COMMIT Unreleased ??? 2026-09-24T07:57:47-07:00
+
+#### Coming From:
+
+Unreleased 36a2986
+
+#### Purpose:
+
+Add bounded CPU transfer and fill operations for the current hardware back buffer so SDL consumers can render their default target without an extra full-screen copy.
+
+#### Outcome:
+
+The planned SDK 0.7 operations will read, update and fill clipped regions of the current 800x600 back buffer while preserving pending-present ownership, bounded fence waits, pitch validation and command order. They will use protocol 1.3's existing fixed back buffers and commands, require no RTL or RBF change, and retain managed surfaces for textures and offscreen render targets.
+
+#### Next Steps:
+
+Implement the public back-buffer operations, add host tests for clipping, pitched transfers, buffer-role changes and pending-present refusal, run the complete host, sanitizer and installed-consumer suites, then update MiSTer-GemRB to render its SDL default target directly and verify the existing hardware diagnostic before repeating gameplay timing.
+
+#### Files Modified:
+
+- lib/noodles.pc.in
+- lib/noodles_link.h
+- lib/noodles_surface.c
+- lib/noodles_surface.h
+- sim/test_noodles_sdk.c
+- docs/SDK.md
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
