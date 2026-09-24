@@ -277,3 +277,36 @@ Open a separate approved cycle to pin seed 13 in `Noodles.qsf`, refresh the olde
 - [x] Passed
 
 ---
+
+## 7 COMMIT Unreleased ??? 2026-09-24T09:33:02-07:00
+
+#### Coming From:
+
+Unreleased 2dea6a1
+
+#### Purpose:
+
+Pin the hardware-accepted seed-13 protocol 1.4 image and make its build and qualification record reproducible from the default project settings.
+
+#### Outcome:
+
+The planned source change will replace the obsolete seed-7 fitter assignment with seed 13 and update the consumer, build and qualification documents to identify protocol 1.4, SDK 0.8, the exact accepted RBF hash, its three-seed timing comparison, hardware pixel validation, HDMI audio result and MiSTer-GemRB AR4000 result. No RTL, clock, constraint, protocol or SDK behavior will change.
+
+#### Next Steps:
+
+Commit and publish the pin and documentation first, then build that exact revision from a clean isolated tree with the qualified epoch, Quartus version, thread count and packing settings. Run the four-corner timing gate, compare the RBF against the accepted seed-13 artifact, and repeat hardware identity and exact-pixel diagnostics if any generated bit differs.
+
+#### Files Modified:
+
+- Noodles.qsf
+- README.md
+- docs/BUILD.md
+- docs/INTEGRATION.md
+- docs/QUALIFICATION.md
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
