@@ -191,7 +191,8 @@ wire        blend_wr_en, blend_wr_ready, blend_wr64_en, blend_wr64_ready;
 // and for copies blit_copy64 cannot perform. CMDQ and sprite_batch never
 // launch it at the same time (CMDQ runs one engine per command).
 wire        sb_blend_start, sb_blend_enable, sb_blend_mirror_x, sb_blend_mirror_y;
-wire        sb_blend_key_enable;
+wire        sb_blend_key_enable, sb_blend_mode_en;
+wire [23:0] sb_blend_mode;
 wire [31:0] sb_blend_dst_addr, sb_blend_src_addr, sb_blend_mod, sb_blend_key_value;
 wire [15:0] sb_blend_dst_pitch, sb_blend_src_pitch, sb_blend_width, sb_blend_height;
 
@@ -424,7 +425,8 @@ sprite_batch sprite_batch
 	.blend_width(sb_blend_width), .blend_height(sb_blend_height), .blend_mod(sb_blend_mod),
 	.blend_enable(sb_blend_enable), .blend_mirror_x(sb_blend_mirror_x),
 	.blend_mirror_y(sb_blend_mirror_y), .blend_key_enable(sb_blend_key_enable),
-	.blend_key_value(sb_blend_key_value), .blend_done(blend_done)
+	.blend_key_value(sb_blend_key_value), .blend_mode_en(sb_blend_mode_en),
+	.blend_mode(sb_blend_mode), .blend_done(blend_done)
 );
 
 // Command fields are captured by blit_blend on start, so this mux only needs
@@ -440,6 +442,8 @@ blit_blend blit_blend
 	.height(batch_busy ? sb_blend_height : copy_height),
 	.mod(batch_busy ? sb_blend_mod : {blend_mod, 24'hff_ffff}),
 	.blend(batch_busy ? sb_blend_enable : 1'b1),
+	.mode_en(batch_busy && sb_blend_mode_en),
+	.mode(sb_blend_mode),
 	.mirror_x(batch_busy && sb_blend_mirror_x),
 	.mirror_y(batch_busy && sb_blend_mirror_y),
 	.key_enable(batch_busy && sb_blend_key_enable),
