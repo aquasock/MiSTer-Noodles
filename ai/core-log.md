@@ -3021,3 +3021,32 @@ Commit the SDK source, deploy the ARM tile-cache demo against the accepted Stage
 - [ ] Passed
 
 ---
+
+## 91 COMMIT Unreleased ??? 2026-09-23T20:57:08-07:00
+
+#### Coming From:
+
+Unreleased 7e92feb
+
+#### Purpose:
+
+Record hardware and visual acceptance of SDK 0.3 managed surfaces and the generic texture cache.
+
+#### Outcome:
+
+The hash-verified ARM tile-cache demo ran twice on the accepted Stage 2B seed-13 image, rendering 154 visible 64x64 tiles from a 256-cell managed atlas. The runs completed 868 and 867 frames in 15.0 seconds, both at 57.8fps, without command errors or timeouts. The user reported that the scrolling tilemap looked very smooth and accepted the result; a slight repeated stutter was observed and intentionally deferred rather than treated as an acceptance blocker.
+
+#### Next Steps:
+
+Keep the periodic tile-demo stutter as a deferred profiling item and scope the next generic 2D rendering capability needed by the target engines before changing the accepted hardware baseline.
+
+#### Files Modified:
+
+None.
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
