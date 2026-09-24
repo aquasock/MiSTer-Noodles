@@ -64,15 +64,15 @@ and the recorded build date. Matching settings alone is not proof of
 reproducibility; compare the resulting RBF hash against
 [QUALIFICATION.md](QUALIFICATION.md).
 
-The current source is the protocol 1.6 and SDK 0.10 fill-batch candidate.
-Protocol 1.5 with SDK 0.9 and the descriptor ring remains the accepted image.
-Its seed-13 and seed-7 builds both pass all four timing corners; seed 13 is the
-pinned hardware-accepted image. Use `SOURCE_DATE_EPOCH=1790121600` and compare
-accepted reproductions against the protocol 1.5 seed-13 hash in
+The current accepted source is protocol 1.6 with SDK 0.10 and fill batches.
+Its seed-13 build passes all four timing corners and is the pinned
+hardware-accepted image; seed 7 fails slow -40C setup. Use
+`SOURCE_DATE_EPOCH=1790121600` and compare accepted reproductions against the
+protocol 1.6 seed-13 hash in
 [QUALIFICATION.md](QUALIFICATION.md).
 
 ```sh
-git checkout --detach 513f2182b3b0c156c0bd8644e06678cdef0b5f14
+git checkout --detach d1702b435134b6994b2062353b104e0cde40a7c6
 SOURCE_DATE_EPOCH=1790121600 quartus_sh --flow compile Noodles
 quartus_sta -t tools/report_timing.tcl
 quartus_sta -t tools/report_multicorner.tcl

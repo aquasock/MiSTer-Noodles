@@ -8,7 +8,7 @@ from. The build procedure itself is in [BUILD.md](BUILD.md).
 
 | # | Date | Build | Seed | RBF SHA-256 | Hardware status |
 |---|---|---|---:|---|---|
-| 7 | 2026-09-24 | **Candidate:** protocol 1.6 fill batches, 800x600 at 100MHz | — | — | RTL/SDK regressions pass; timing and hardware pending |
+| 7 | 2026-09-24 | **Accepted:** protocol 1.6 fill batches, 800x600 at 100MHz, four-corner timing pass | 13 | `6b19b4a2…4d82b9` | Exact pixels, audio queue and MiSTer-GemRB accepted |
 | 6 | 2026-09-24 | **Accepted:** protocol 1.5 descriptor ring, 800x600 at 100MHz, four-corner timing pass | 13 | `b79037fc…dd5e56` | Exact pixels, audio, multi-batch stress and MiSTer-GemRB accepted |
 | 5 | 2026-09-24 | Previous protocol 1.4, 800x600 at 100MHz, four-corner timing pass | 13 | `39c2efa8…7e008f` | Exact pixels, HDMI audio and MiSTer-GemRB accepted |
 | 4 | 2026-09-23 | Previous protocol 1.0 800x600 build, four-corner timing pass | 7 | `a020e304…43a47a` | User visually accepted; independent reproduction waived |
@@ -16,7 +16,7 @@ from. The build procedure itself is in [BUILD.md](BUILD.md).
 | 2 | 2026-09-23 | Recovery fallback: 640x480, shared 100MHz clock, registered write ingress and slot enables | 5 | `b76fb924…247b8d` | Accepted; clean-commit reproduction verified |
 | 1 | 2026-09-22 | Historical: SPRITE_BATCH engine, 64-bit DDRAM path, PRESENT retirement-acknowledgement fix | 1 | `25f9d3a1…edba93` | Accepted -- see below |
 
-## Protocol 1.6 fill-batch candidate (7)
+## Accepted protocol 1.6 fill-batch build (7)
 
 Source `d1702b435134b6994b2062353b104e0cde40a7c6` publishes protocol
 `0x00010006`, capability mask `0x000007fe` and SDK 0.10. Opcode 10 selects
@@ -30,8 +30,50 @@ coverage verifies opcode decode and retirement, all 64 descriptors with exact
 pixels and bus stalls, shared sprite/fill table ownership, reserved-word and
 capability rejection, clipping, and a batch containing fully clipped entries.
 The fill engine test completed 64 descriptors with 320 descriptor reads and
-252 pixel writes in 2,429 cycles. Timing, RBF identity and hardware validation
-remain pending.
+252 pixel writes in 2,429 cycles.
+
+Following the user's two-build limit, the exact source was built in two
+isolated directories with Quartus Prime Lite 17.0.2 Build 602,
+`SOURCE_DATE_EPOCH=1790121600`, 16 fitter threads and MEDIUM register packing.
+Seed 13 passes setup, hold, recovery, removal and minimum-pulse checks at all
+four operating corners. Seed 7 fails slow -40C setup and core setup at
+-0.158ns, so it is rejected:
+
+| Seed | Slow -40C setup | Worst hold | Four-corner result | RBF SHA-256 |
+|---:|---:|---:|---|---|
+| 13 | +0.178ns | +0.100ns | PASS | `6b19b4a21e3f5fcfecd46558c9ba49c12f1056d87a5ed44bdfe7468f864d82b9` |
+| 7 | -0.158ns | +0.080ns | FAIL | `dfb9532d4c98ba26369e0c5aaa0b4e2521721161bfa03dd45e03d75157208b0f` |
+
+The accepted seed-13 build's per-corner worst slack, in ns, is:
+
+| Model at 1.1V | Setup | Hold | Recovery | Removal | Core setup | Core hold | Min pulse width |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Slow, +100C | +0.177 | +0.240 | +0.553 | +1.124 | +0.177 | +0.240 | +1.122 |
+| Slow, -40C | +0.178 | +0.160 | +0.575 | +1.036 | +0.261 | +0.233 | +1.122 |
+| Fast, +100C | +3.137 | +0.130 | +4.830 | +0.549 | +4.437 | +0.130 | +1.122 |
+| Fast, -40C | +3.630 | +0.100 | +5.124 | +0.466 | +5.346 | +0.114 | +1.122 |
+
+Seed 13 uses 15,029 ALMs, 19,244 registers, 367,668 block-memory bits,
+77 RAM blocks and 60 DSP blocks. Seed 7 uses 15,040 ALMs and 19,159 registers
+with the same memory and DSP counts.
+
+The accepted image was deployed as `Noodles_fill_batch_seed13.rbf`; its hash
+was verified on the MiSTer and live identity reported protocol `0x00010006`,
+capability mask `0x000007fe`, 800x600 geometry and 3200-byte pitch. The SDL
+diagnostic twice passed its exact-pixel checks with hash `787b0fbd`, including
+70 consecutive opaque fills across the 64-descriptor boundary and mixed
+fill/draw ordering, and its audio queue drained. MiSTer-GemRB then loaded the
+Throne of Bhaal AR4000 save and entered spell-heavy combat without a renderer
+fault or visible rendering regression.
+
+In comparable combat samples, fill submission fell from 11.5-11.9ms per frame
+on protocol 1.5 to 1.25-1.76ms and total command-queue time fell from
+14.2-14.5ms to 3.7-5.0ms. Stable combat reached 19.9fps, while spell-heavy
+intervals remained 10.4-13.4fps because 28.9-62.6ms per frame was outside the
+renderer queue and presentation waits took another 28.7-42.0ms. The fill
+feature therefore removes its measured host bottleneck, but does not remove
+the user-visible spell stutter; that work belongs to the GemRB CPU and
+presentation investigation.
 
 ## Accepted protocol 1.5 descriptor-ring build (6)
 

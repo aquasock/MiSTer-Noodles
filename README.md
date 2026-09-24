@@ -36,11 +36,10 @@ For the current consumer-facing baseline, start with
 [docs/INTEGRATION.md](docs/INTEGRATION.md): memory reservations, command
 layouts, pixel format, ownership and limitations for consumers. It describes
 the core interface; the validated SDL2 renderer lives in MiSTer-GemRB.
-Current source is the protocol 1.6 fill-batch candidate at 800x600 and 100MHz.
+Current source is the accepted protocol 1.6 fill-batch core at 800x600 and 100MHz.
 It reuses the bounded descriptor-table ring to submit up to 64 ordered opaque
-fills with one command. Protocol 1.5 seed 13 remains the hardware-accepted
-image while the candidate is qualified; protocol 1.4 and the older accepted
-640x480 image remain recovery fallbacks.
+fills with one command. Protocol 1.5 seed 13, protocol 1.4 and the older
+accepted 640x480 image remain recovery fallbacks.
 
 ## Host-side API
 

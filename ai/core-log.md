@@ -372,11 +372,11 @@ Replace the measured per-rectangle solid-fill submission bottleneck with ordered
 
 #### Outcome:
 
-Source `d1702b4` publishes protocol 1.6 and SDK 0.10 with a capability-gated `FILL_BATCH` operation that reuses the protocol-1.5 descriptor-table ring and fence ownership, sequences up to 64 validated opaque fills through the existing fill engine, and retains every earlier scalar operation for older consumers. The complete RTL suite, native host tests, installed native/C++/ARM consumer tests, ASan/UBSan and ARMv7 static builds pass; coverage includes exact pixels for all 64 descriptors, bus stalls, shared sprite/fill ownership, clipping and invalid-input rejection. Quartus timing, hardware diagnostics and the SDL consumer remain pending.
+Source `d1702b4` publishes protocol 1.6 and SDK 0.10 with a capability-gated `FILL_BATCH` operation that reuses the protocol-1.5 descriptor-table ring and fence ownership, sequences up to 64 validated opaque fills through the existing fill engine, and retains every earlier scalar operation for older consumers. The complete RTL suite, native host tests, installed native/C++/ARM consumer tests, ASan/UBSan and ARMv7 static builds passed. Under the user's two-build limit, seed 13 passed all four timing corners with +0.177ns worst setup and +0.100ns worst hold while seed 7 failed slow -40C setup at -0.158ns; the accepted seed-13 RBF SHA256 is `6b19b4a21e3f5fcfecd46558c9ba49c12f1056d87a5ed44bdfe7468f864d82b9`. Live hardware reported protocol `0x00010006` and mask `0x7fe`, twice passed the extended SDL diagnostic with exact-pixel hash `787b0fbd` across the 64-fill boundary and mixed fill/draw ordering, and drained its audio queue. In AR4000 combat, fill submission fell from 11.5-11.9ms to 1.25-1.76ms per frame and total queue time fell from 14.2-14.5ms to 3.7-5.0ms, but the user observed similar spell stutter because non-renderer work and presentation now dominate.
 
 #### Next Steps:
 
-Pin MiSTer-GemRB to source `d1702b4`, buffer consecutive opaque fills while preserving every ordering boundary, and pass its exact-pixel diagnostics. Then perform exactly two Quartus fits using seeds 13 and 7, deploy the stronger passing image, repeat exact-pixel and HDMI-audio hardware checks, and compare the same GemRB combat workload against its measured 11.5-11.9ms per-frame fill-submission baseline.
+Keep the accepted seed-13 protocol-1.6 image as the consumer baseline and preserve protocol 1.5 as its recovery fallback. Investigate the spell interval in MiSTer-GemRB before selecting another generic core feature: the remaining cost is outside fill and sprite submission, with bursts of CPU-side animation work, synchronization, texture uploads and readbacks plus presentation waiting.
 
 #### Files Modified:
 
@@ -411,7 +411,7 @@ Pin MiSTer-GemRB to source `d1702b4`, buffer consecutive opaque fills while pres
 
 #### Status:
 
-- [ ] Built
-- [ ] Passed
+- [x] Built
+- [x] Passed
 
 ---
