@@ -2830,3 +2830,47 @@ Record user visual feedback separately when available and scope stage 2B only af
 - [ ] Passed
 
 ---
+
+## 86 COMMIT Unreleased ??? 2026-09-23T19:47:23-07:00
+
+#### Coming From:
+
+Unreleased e461d3e
+
+#### Purpose:
+
+Add a live identified host session protocol so the SDK can reject mismatched cores and detect reset before reporting command completion.
+
+#### Outcome:
+
+The user approved stage 2B as one hardware cycle without changing the accepted 800x600 geometry, command opcodes or 100MHz clock. The proposed control block publishes magic, protocol version, capabilities and geometry, then accepts a nonzero host-selected session claim only after ring initialization. The command ring remains disabled until that live claim succeeds. A host request/FPGA response challenge proves liveness before a completed fence is trusted; after reset the FPGA clears and disarms the session before accepting commands, so persistent DDR3 identity or a reset fence cannot alone produce verified success. The existing explicit legacy API and binaries remain available for older fallback cores, while migrated tools use a new verified open path. Cooperative process locking remains separate from hardware identity and does not become a security boundary.
+
+#### Next Steps:
+
+Publish this proposal, define the exact control-memory layout, implement and simulate initialization, claim, liveness challenge, ring gating and reset-loss behavior, then migrate SDK information and lifecycle handling. Build the exact source revision, run the full RTL and host/package regressions, require the existing four-corner timing gate, and perform hash-verified hardware qualification while preserving all accepted and fallback binaries.
+
+#### Files Modified:
+
+- Makefile
+- Noodles.sv
+- README.md
+- docs/BUILD.md
+- docs/INTEGRATION.md
+- docs/SDK.md
+- examples/sdk_smoke.c
+- lib/noodles_link.c
+- lib/noodles_link.h
+- lib/noodles_link_internal.h
+- rtl/link_control.sv
+- rtl/link_ring.sv
+- sim/link_control_dut.sv
+- sim/tb_link_control.cpp
+- sim/test_noodles_sdk.c
+- tools/sdk_helpers.h
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
