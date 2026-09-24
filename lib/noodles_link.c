@@ -140,6 +140,7 @@ static int initialize_transport(noodles_link_t *link) {
     link->write_ptr = link->header[0];
     uint32_t fence_state = link->header[3];
     link->done_baseline = fence_state & NOODLES_FENCE_MASK;
+    link->confirmed_done = link->done_baseline;
     link->presents_completed = (fence_state >> 31) & 1u;
     if (link->write_ptr >= NOODLES_RING_SLOTS || link->header[2] >= NOODLES_RING_SLOTS)
         return fail(EPROTO);
@@ -317,6 +318,10 @@ int noodles_link_fence_reached(const noodles_link_t *link, uint32_t target) {
     return ((noodles_link_done_count(link) - target) & NOODLES_FENCE_MASK) < 0x40000000u;
 }
 
+static int confirmed_fence_reached(const noodles_link_t *link, uint32_t target) {
+    return ((link->confirmed_done - target) & NOODLES_FENCE_MASK) < 0x40000000u;
+}
+
 noodles_fence_t noodles_link_last_fence(const noodles_link_t *link) {
     return (link->done_baseline + link->submitted) & NOODLES_FENCE_MASK;
 }
@@ -325,19 +330,25 @@ int noodles_link_poll(noodles_link_t *link, noodles_fence_t target, int *complet
     if (noodles_link_check(link) != 0) return -1;
     if (!complete) return fail(EINVAL);
     __sync_synchronize();
-    int reached = noodles_link_fence_reached(link, target);
-    if (reached && link->verified) {
-        if (!link->ping_pending) {
-            do {
-                ++link->ping_seq;
-            } while (link->ping_seq == 0 || link->ping_seq == NOODLES_CONTROL_CLAIM);
-            request_sequence(link, link->ping_seq);
-            link->ping_pending = 1;
-            reached = 0;
-        } else if (link->header[NOODLES_CONTROL_RESPONSE_SEQ_WORD] == link->ping_seq) {
-            link->ping_pending = 0;
-        } else {
-            reached = 0;
+    int reached = confirmed_fence_reached(link, target);
+    if (!reached) {
+        reached = noodles_link_fence_reached(link, target);
+        if (reached && link->verified) {
+            if (!link->ping_pending) {
+                do {
+                    ++link->ping_seq;
+                } while (link->ping_seq == 0 || link->ping_seq == NOODLES_CONTROL_CLAIM);
+                request_sequence(link, link->ping_seq);
+                link->ping_pending = 1;
+                reached = 0;
+            } else if (link->header[NOODLES_CONTROL_RESPONSE_SEQ_WORD] == link->ping_seq) {
+                link->ping_pending = 0;
+                link->confirmed_done = noodles_link_done_count(link);
+            } else {
+                reached = 0;
+            }
+        } else if (reached) {
+            link->confirmed_done = noodles_link_done_count(link);
         }
     }
     *complete = reached;

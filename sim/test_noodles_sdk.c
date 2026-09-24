@@ -370,6 +370,10 @@ int main(void) {
     memory[2] = memory[0];
     memory[3] = 1;
     assert(noodles_link_wait(a, 1, 10) == 0);
+    int sleeps_after_confirmation = sleeps;
+    uint32_t confirmed_sequence = memory[12];
+    assert(noodles_link_wait(a, 1, 10) == 0);
+    assert(sleeps == sleeps_after_confirmation && memory[12] == confirmed_sequence);
     closed(a);
     assert(!control_active && memory[16] == 0);
 
