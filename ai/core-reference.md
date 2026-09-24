@@ -65,7 +65,7 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 
 - component_id: SDR
   name: "SDRAM_* board controller"
-  description: "Drives the framework's real SDRAM_* pins (the optional MiSTer SDRAM daughterboard/onboard chip, GPIO-wired to FPGA fabric only -- confirmed HPS-invisible, distinct from DDR's HPS-shared F2H DDR3 bridge). Owns a dedicated clk_sdram PLL domain separate from clk_sys. Exists to give latency-sensitive, host-write-once/FPGA-read-many data (sprite source bitmaps) a deterministic-latency path DDR3 cannot offer, at the cost of requiring the optional board."
+  description: "Drives the framework's real SDRAM_* pins (the optional MiSTer SDRAM daughterboard/onboard chip, GPIO-wired to FPGA fabric only -- confirmed HPS-invisible, distinct from DDR's HPS-shared F2H DDR3 bridge). Shares the 100MHz clk_sys net under SDR-008. Provides an optional FPGA-owned memory path; production sprite reads remain on DDR3."
 ```
 
 ---
@@ -456,6 +456,24 @@ OUT-005: "OUT-004's single-fresh-vblank-edge PRESENT margin is not reliably suff
   decision: "Every caller before this one fence-waited each pushed command individually before pushing the next -- a real but unstated constraint, not a documented requirement. The user asked for a multi-sprite stress test (tools/stress_demo.c); fence-waiting after each of up to 64 per-frame blits capped throughput on host-side round-trip overhead (measured 10fps at count=64) rather than actual hardware throughput, since LINK-003's dispatch already processes the ring strictly FIFO -- there is no correctness reason to wait between pushes, only LINK-002's 63-outstanding-command ring capacity forces a wait, and only once the ring is actually full. Rewriting stress_demo.c to push commands back-to-back (retrying only on an actual ring-full return) exposed a real bug in noodles_present_and_wait(): it sampled done_count() once before pushing PRESENT, then returned success as soon as done_count() advanced by ANY amount. That is only correct when nothing else is in flight (true for every caller before this one) -- once other commands are pipelined ahead of PRESENT, an ordinary blit's own completion satisfies that check, so the function reports the flip done before PRESENT itself has even been dispatched, let alone completed its vblank-synced flip. Fixed by comparing done_count() against PRESENT's own absolute position in the fence's numbering: noodles_link_t gained a done_baseline field (the fence's value read at noodles_link_open() time), and the target is done_baseline + link->submitted (captured right after the PRESENT push, so it includes PRESENT's own increment) -- this converts the per-handle-relative submitted count into the same absolute space done_count() lives in, matching LINK-005's already-documented contract ('done once done_count() >= the submitted_count() value observed right after push') instead of the weaker delta check the original implementation actually used."
   consequence: "Callers may now pipeline draw commands without fence-waiting each one -- push as many as needed, letting push_command's own ring-full return (-1) be the only reason to block -- and noodles_present_and_wait() correctly waits for the ACTUAL flip regardless of what else is queued around it. Any future code that manually compares noodles_link_submitted_count() against noodles_link_done_count() (bypassing present_and_wait's internal handling) still needs its own baseline adjustment if the handle didn't open at a fresh core load with done_count()==0 -- done_baseline is a noodles_link_t-internal field, not exposed via a public accessor, so a caller doing this comparison itself must either open a fresh handle right after a core load or derive its own baseline the same way. This bug was real but latent for the whole project's history until stress_demo.c became the first caller to pipeline; verified fixed on real hardware (present's own reported success now tracks the true flip), though see OUT-005 for a SEPARATE, deeper timing issue this fix does not resolve."
 
+- record_id: DDR-008
+  kind: ARCHITECTURE
+  component_id: DDR
+  title: "Shared write ingress reserves queue capacity before registered slot commit"
+  status: DECIDED
+  decided_date: 2026-09-23
+  decision: "Scalar and paired DDR3 writes enter one registered payload stage before committing into the write queue using registered one-hot slot enables. The sixteen-write admission limit includes the ingress reservation, and idle remains false until all accepted writes issue and the existing read/busy conditions clear. A pending ingress write cannot issue before queue commit. Consecutive acceptance, commit and issue can overlap at one write per cycle. When both input lanes request simultaneously, paired writes win and scalar ready is deasserted; no unaccepted scalar request is silently discarded."
+  consequence: "Producer arithmetic and scalar/paired selection stop at ingress registers instead of driving wide queue entries directly. Register-to-register slot control replaces binary-tail decode at the queue write enables. First-write latency increases one cycle without increasing accepted capacity or changing ordered retirement, command/fence interfaces, read-response accounting or bridge-busy-independent payload selection."
+
+- record_id: LINK-008
+  kind: INTERFACE
+  component_id: LINK
+  title: "Host library retains fixed sprite-descriptor ownership until completion"
+  status: DECIDED
+  decided_date: 2026-09-23
+  decision: "With one serialized producer/handle opened on a quiescent ring, an accepted SPRITE_BATCH owns the fixed 2KiB descriptor table until its baseline-adjusted completion fence retires. noodles_push_sprite_batch returns -1 with errno EAGAIN before any descriptor upload when that table is busy or the ring is full; invalid pointer/count returns EINVAL and upload failures publish no command. Raw opcode-5 submissions also acquire ownership, and library uploads overlapping the reserved table return EAGAIN while it is owned. Non-batch commands may still pipeline. Completion checks use modulo-2^31 arithmetic excluding front-buffer parity, with targets less than 2^30 completions away. Descriptor and slot writes are ordered before command publication."
+  consequence: "Callers retry EAGAIN without needing their own per-batch wait to prevent descriptor corruption. Explicit waits remain necessary when measuring completed work or reusing other in-flight resources. Open only after prior work drains or a fresh core load, finish work before close, and do not reset the core during a handle's lifetime. Concurrent producers, abandoned in-flight work across reopen, direct-memory writes and commands that overwrite the reserved table are not protected by this host-side contract. No RTL, opcode layout or timing constraints change."
+
 - record_id: OUT-005
   kind: INTERFACE
   component_id: OUT
@@ -539,12 +557,19 @@ OUT-005: "OUT-004's single-fresh-vblank-edge PRESENT margin is not reliably suff
   kind: ARCHITECTURE
   component_id: SDR
   title: "The optional SDRAM board is FPGA-fabric-only; the HPS/Linux side has no path to it"
-  status: DECIDED
+  status: SUPERSEDED
   decided_date: 2026-09-23
   decision: "The MiSTer SDRAM daughterboard (or onboard-soldered equivalent on some clone boards) is wired to GPIO pins that only reach FPGA fabric logic -- there is no HPS/ARM-side address path to it at all, unlike DDRAM_* (DDR component records), which is HPS-owned DDR3 shared with the FPGA over the F2H bridge. rtl/sdram.sv (vendored from MiSTer-devel/NeoGeo_MiSTer's rtl/sdram.sv) is driven entirely from a dedicated ~100MHz clk_sdram PLL domain (see rtl/pll.v's outclk_1) and its own SDRAM_* pins; nothing about it is visible to lib/noodles_link.c or any other host-side code, and it never will be without new FPGA-side bridging logic that does not exist."
   consequence: "Any data this project puts in SDRAM must be written there BY THE FPGA, not by the host -- the host can only ever write into DDR3 (as it already does today). This rules out using SDRAM for anything the host needs to update every frame (e.g. sprite_batch.sv's descriptor table, which the host uploads fresh each frame): that data structurally must stay on DDR3. SDRAM is only useful for host-write-once/FPGA-read-many data, e.g. a sprite source bitmap uploaded once at load time then read every frame thereafter by a copy engine -- the FPGA can copy such data from its one-time DDR3 upload location into SDRAM itself, after which only SDRAM is read for that data going forward. This record scopes entry 61/62's SDRAM plan down to sprite-source-bitmap reads only; the descriptor-table read path stays on DDR3 and gets its own separate improvement path (a staging-buffer bulk read, not a memory-technology change) if pursued."
-
-
+- record_id: SDR-008
+  kind: ARCHITECTURE
+  component_id: SDR
+  title: "Core and FPGA-only SDRAM share one 100MHz clock net"
+  status: DECIDED
+  decided_date: 2026-09-23
+  supersedes: "SDR-001"
+  decision: "The optional board SDRAM remains FPGA-fabric-only and physically separate from HPS-shared DDR3. The core PLL has one 100MHz zero-phase output, clk_sys, driving the GPU, DDRAM adapter, SDRAM controller, read adapter, loader, page buffer and refresh counter. The SDRAM adapter and loader use the common core reset; the controller retains its separate PLL-lock-driven initialization. Per-word reads and per-page handoff use synchronous sequencers without sdram_cdc. Framework HDMI and audio clocks are unchanged."
+  consequence: "No core-to-SDRAM clock-crossing exceptions or secondary reset-domain bridge are needed. Page buffering remains necessary to feed uninterrupted SDRAM copy bursts from variable-latency DDR3 reads. Host code still cannot address board SDRAM directly; OP_LOAD_SDRAM remains the FPGA-mediated load path. Production sprite reads, descriptors and destination writes remain on DDR3; clock unification does not select the optional SDRAM sprite-source path or establish timing closure."
 
 ```yaml
 - record_id: "<COMPONENT>-<NNN>"
