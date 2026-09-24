@@ -3,8 +3,8 @@
 This is the consumer-facing description of the 100MHz core, not
 a new GPU ABI or an SDL implementation. Architecture decisions remain in
 [ai/core-reference.md](../ai/core-reference.md); later records override
-earlier bring-up assumptions. Relevant records include CMDQ-001,
-BLIT-003/004/006, SURF-003/004/006, LINK-002/005/008/011 and SDR-008.
+earlier bring-up assumptions. Relevant records include CMDQ-001, BLIT-003/004/006/007/008/009/010,
+SURF-003/004/006, LINK-002/005/008/011/012/013/014/015 and SDR-008.
 
 ## Standard configuration: 800x600
 
@@ -74,7 +74,7 @@ address it through raw commands, direct `/dev/mem` mappings or legacy tools.
 
 Pixels occupy four bytes, with increasing-address bytes **R, G, B, unused**.
 `noodles_rgb(r,g,b)` produces `r | (g << 8) | (b << 16)` with a zero high byte.
-The high byte is straight (non-premultiplied) alpha for BLIT_BLEND only.
+The high byte is straight (non-premultiplied) alpha for BLIT_BLEND, flagged draws and BLEND_FILL.
 Copies preserve all 32 bits, color-key comparisons compare the entire
 32-bit pixel and scanout ignores the high byte; initialize it consistently,
 and meaningfully for any blended source. Scanout uses `FB_FORMAT=00110`, pitch 3200 bytes in
@@ -120,6 +120,7 @@ limits, not a promise that every representable rectangle is safe.
 | 5 | SPRITE_BATCH | Word 3 is descriptor count, 1-64. Library writes word 1 as `0x30022000`; hardware always fetches from that fixed base, not a relocatable list pointer. Other words zero. |
 | 6 | LOAD_SDRAM | Word 1 is board-SDRAM destination, word 5 byte length, word 6 DDR3 source; others zero. Destination aligned to 1024 bytes; loader copies complete pages, so source/destination backing storage must cover the rounded-up length. |
 | 7 | BLIT_BLEND | As COPY, with alpha modulation in word 5 bits 7:0 and bits 31:8 zero. Straight-alpha source-over per BLIT-007; source and destination must not overlap. Protocol 1.1 cores only (capability bit 7). |
+| 8 | BLEND_FILL | Words 1-4 describe the destination; word 5 is one constant straight-RGBA source colour; word 6 is a validated explicit blend mode; word 7 is zero. Reads the destination but no source surface. Protocol 1.4 cores only (capability bit 8). |
 
 Bytes beyond the requested length in the last SDRAM page are not valid
 copied data; the loader can flush stale page-buffer contents there.
@@ -170,8 +171,8 @@ The stage-2B control block is:
 | Byte offset from `0x30020000` | Writer | Meaning |
 |---|---|---|
 | `+0x10` | FPGA | Magic `0x4e444c53`, published last. |
-| `+0x14` | FPGA | Protocol version `0x00010003` (1.3, LINK-014); `0x00010002`, `0x00010001` or `0x00010000` on older stage-2B images. |
-| `+0x18` | FPGA | Opcode capability mask `0x000000fe` (bit 7 is BLIT_BLEND); `0x0000007e` on older images. |
+| `+0x14` | FPGA | Protocol version `0x00010004` (1.4, LINK-015); `0x00010003`, `0x00010002`, `0x00010001` or `0x00010000` on older stage-2B images. |
+| `+0x18` | FPGA | Opcode capability mask `0x000001fe` (bits 8 and 7 are BLEND_FILL and BLIT_BLEND); `0x000000fe` or `0x0000007e` on older images. |
 | `+0x1c` | FPGA | Width in bits 31:16, height in bits 15:0. |
 | `+0x20` | FPGA | Pitch in bytes. |
 | `+0x28/+0x2c` | Host | Request token low/high. |
@@ -236,10 +237,12 @@ draw-command layouts. Preserve the older 640x480 image and its matching
 stage-2A tools as the recovery fallback while later stages add managed
 surfaces and the drawing operations required by GemRB.
 
-There is currently no SDL renderer, blended fill, primitive or scaling API.
-Source-over blending is available as BLIT_BLEND; batched draws add RGBA
-tint, mirroring, SDL's ADD/MOD/MUL modes and composed factor modes. The new render target is 800x600 and core audio is
-silent. The planned first consumer is GemRB v0.9.5 through SDL2 2.32.10;
-platform video/audio ownership and software fallback synchronization still
-need design work. These are explicit future requirements, not advertised
-capabilities of the accepted core.
+There is currently no SDL renderer, primitive or scaling API. Source-over
+blending is available as BLIT_BLEND; batched draws add RGBA tint, mirroring,
+SDL's standard modes and composed factor modes. Protocol 1.4 adds ordered
+constant-source blended rectangles through BLEND_FILL. The render target is
+800x600. The existing RBF's MiSTer ALSA reader and HDMI output consumed and
+played a paced 48kHz stereo test tone; the protocol-1.4 image still requires
+the same hardware audio check. The planned first consumer is GemRB v0.9.5
+through SDL2 2.32.10; platform video ownership and software fallback
+synchronization still need design work.

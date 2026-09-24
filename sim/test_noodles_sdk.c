@@ -140,7 +140,7 @@ static void closed(noodles_link_t *device) {
 static void seed_identity(void) {
     memory[4] = 0x4e444c53u;
     memory[5] = NOODLES_PROTOCOL_VERSION;
-    memory[6] = 0x7e;
+    memory[6] = 0x1fe;
     memory[7] = (800u << 16) | 600u;
     memory[8] = 3200;
     memory[16] = 0;
@@ -391,7 +391,7 @@ int main(void) {
     assert(memory[16] == 0x434c414du && control_active);
     assert(noodles_link_get_info(a, &info) == 0 && info.hardware_verified);
     assert(info.protocol_version == NOODLES_PROTOCOL_VERSION);
-    assert(info.opcode_mask == 0x7e);
+    assert(info.opcode_mask == 0x1fe);
     assert(noodles_push_command(a, fill) == 0);
     memory[2] = memory[0];
     memory[3] = 1;
@@ -412,6 +412,7 @@ int main(void) {
     memory[0] = memory[2] = memory[3] = 0;
     seed_identity();
     memory[5] = 0x00010000u;
+    memory[6] = 0x7e;
     a = open_verified();
     assert(noodles_link_get_info(a, &info) == 0 && info.protocol_version == 0x00010000u);
     before = memory[0];
@@ -432,6 +433,10 @@ int main(void) {
     assert(published[0] == 7 && published[1] == NOODLES_BUFFER_B_ADDR + 8 &&
            published[2] == 3200 && published[3] == 64 && published[4] == 32 &&
            published[5] == 0x80 && published[6] == 0x31400000u && published[7] == 256);
+    before = memory[0];
+    assert(noodles_push_blend_fill(a, NOODLES_BUFFER_B_ADDR, 3200, 4, 4,
+                                   0x80402010u, NOODLES_DRAW_MODE_ADD) == -1 &&
+           errno == ENOTSUP && memory[0] == before);
 
     /* Overlapping byte spans, out-of-range modulation and empty rectangles
      * are refused; exactly adjacent spans are allowed. */
@@ -634,6 +639,8 @@ int main(void) {
     assert(NOODLES_DRAW_MODE_ADD ==
            noodles_ref_mode(NOODLES_REF_SRC_ALPHA, NOODLES_REF_ONE, NOODLES_REF_ADD,
                             NOODLES_REF_ZERO, NOODLES_REF_ONE, NOODLES_REF_ADD, 0));
+    assert(NOODLES_DRAW_MODE_BLEND == NOODLES_REF_MODE_BLEND);
+    assert(NOODLES_DRAW_MODE_NONE == NOODLES_REF_MODE_NONE);
     memory[0] = memory[2] = memory[3] = 0;
     seed_identity();
     memory[5] = 0x00010002u;
@@ -714,6 +721,29 @@ int main(void) {
     assert(published[0] == 1 && published[1] == NOODLES_BUFFER_B_ADDR &&
            published[2] == NOODLES_BUFFER_PITCH && published[3] == 6 &&
            published[4] == 7 && published[5] == 0x55667788);
+    noodles_rect_t clipped_blend_fill = {-2, 4, 9, 6};
+    slot = memory[0];
+    assert(noodles_back_buffer_blend_fill(a, &clipped_blend_fill, 0x80402010u,
+                                          NOODLES_DRAW_MODE_ADD) == 0);
+    published = &memory[1024 + slot * 8];
+    assert(published[0] == 8 && published[1] == NOODLES_BUFFER_B_ADDR + 4 * 3200 &&
+           published[2] == NOODLES_BUFFER_PITCH && published[3] == 7 &&
+           published[4] == 6 && published[5] == 0x80402010u &&
+           published[6] == NOODLES_DRAW_MODE_ADD && published[7] == 0);
+    before = memory[0];
+    assert(noodles_back_buffer_blend_fill(a, &clipped_blend_fill, 0x80402010u,
+                                          NOODLES_DRAW_BLEND) == -1 && errno == EINVAL &&
+           memory[0] == before);
+    noodles_surface_t *fill_surface = NULL;
+    assert(noodles_surface_create(a, 32, 24, &fill_surface) == 0);
+    noodles_rect_t managed_blend_fill = {28, 20, 10, 10};
+    slot = memory[0];
+    assert(noodles_surface_blend_fill(fill_surface, &managed_blend_fill, 0x40112233u,
+                                      NOODLES_DRAW_MODE_MUL) == 0);
+    published = &memory[1024 + slot * 8];
+    assert(published[0] == 8 && published[3] == 4 && published[4] == 4 &&
+           published[5] == 0x40112233u && published[6] == NOODLES_DRAW_MODE_MUL);
+    assert(noodles_surface_destroy(fill_surface) == 0);
     assert(noodles_push_present(a, &fence) == 0);
     assert(noodles_back_buffer_read(a, &back_rect, back_read, 12, 10) == -1 &&
            errno == EAGAIN);

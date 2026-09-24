@@ -64,6 +64,8 @@ int noodles_back_buffer_read(noodles_link_t *link, const noodles_rect_t *rect,
                              uint32_t timeout_ms);
 int noodles_back_buffer_fill(noodles_link_t *link, const noodles_rect_t *rect,
                              uint32_t color);
+int noodles_back_buffer_blend_fill(noodles_link_t *link, const noodles_rect_t *rect,
+                                   uint32_t color, uint32_t blend_mode);
 
 int noodles_surface_create(noodles_link_t *link, uint32_t width, uint32_t height,
                            noodles_surface_t **out);
@@ -79,6 +81,8 @@ int noodles_surface_read(noodles_surface_t *surface, const noodles_rect_t *rect,
 
 int noodles_surface_fill(noodles_surface_t *destination, const noodles_rect_t *rect,
                          uint32_t color);
+int noodles_surface_blend_fill(noodles_surface_t *destination, const noodles_rect_t *rect,
+                               uint32_t color, uint32_t blend_mode);
 int noodles_surface_blit(noodles_surface_t *destination, int32_t dst_x, int32_t dst_y,
                          const noodles_surface_t *source, const noodles_rect_t *source_rect);
 int noodles_surface_blit_to_back_buffer(noodles_link_t *link, int32_t dst_x, int32_t dst_y,

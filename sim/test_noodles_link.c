@@ -179,6 +179,21 @@ int main(void) {
     descriptors[0].flags = 0;
     descriptors[0].src_pitch = 3;
     rejected(EINVAL, 1);
+
+    reset(0);
+    link.capabilities = 0x1feu;
+    link.protocol = NOODLES_PROTOCOL_VERSION;
+    assert(noodles_push_blend_fill(&link, NOODLES_BUFFER_B_ADDR, 3200, 17, 9,
+                                   0x80402010u, NOODLES_DRAW_MODE_ADD) == 0);
+    assert(slots[0] == 8 && slots[1] == NOODLES_BUFFER_B_ADDR && slots[2] == 3200 &&
+           slots[3] == 17 && slots[4] == 9 && slots[5] == 0x80402010u &&
+           slots[6] == NOODLES_DRAW_MODE_ADD && slots[7] == 0);
+    const uint32_t before_ptr = header[0];
+    assert(noodles_push_blend_fill(&link, NOODLES_BUFFER_B_ADDR, 3200, 17, 9,
+                                   0x80402010u, NOODLES_DRAW_BLEND) == -1 && errno == EINVAL);
+    assert(header[0] == before_ptr);
+
+    reset(0);
     assert(noodles_link_upload(&link, 0xfffffff0u, descriptors, 32) == -1 && errno == EINVAL);
     assert(noodles_link_upload(&link, 0x31400000u, NULL, 32) == -1 && errno == EINVAL);
     assert(noodles_link_upload(&link, 0x31400000u, descriptors, 0) == -1 && errno == EINVAL);

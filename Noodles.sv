@@ -182,6 +182,9 @@ wire        batch_wr64_en, batch_wr64_ready;
 // BLIT_BLEND (BLIT-007) reuses CMDQ's copy_* geometry registers.
 wire        blend_start, blend_busy, blend_done;
 wire [7:0]  blend_mod;
+wire        blend_solid, blend_mode_en;
+wire [31:0] blend_solid_color;
+wire [23:0] blend_mode;
 wire [31:0] blend_rd64_addr, blend_wr_addr, blend_wr_data, blend_wr64_addr;
 wire [63:0] blend_rd64_data, blend_wr64_data;
 wire [7:0]  blend_rd64_len;
@@ -340,6 +343,10 @@ cmdq cmdq
 	.copy_done     (copy_done),
 	.blend_start   (blend_start),
 	.blend_mod     (blend_mod),
+	.blend_solid   (blend_solid),
+	.blend_solid_color(blend_solid_color),
+	.blend_mode_en (blend_mode_en),
+	.blend_mode    (blend_mode),
 	.blend_busy    (blend_busy),
 	.blend_done    (blend_done),
 	.batch_start    (batch_start),
@@ -442,8 +449,10 @@ blit_blend blit_blend
 	.height(batch_busy ? sb_blend_height : copy_height),
 	.mod(batch_busy ? sb_blend_mod : {blend_mod, 24'hff_ffff}),
 	.blend(batch_busy ? sb_blend_enable : 1'b1),
-	.mode_en(batch_busy && sb_blend_mode_en),
-	.mode(sb_blend_mode),
+	.solid(!batch_busy && blend_solid),
+	.solid_color(blend_solid_color),
+	.mode_en(batch_busy ? sb_blend_mode_en : blend_mode_en),
+	.mode(batch_busy ? sb_blend_mode : blend_mode),
 	.mirror_x(batch_busy && sb_blend_mirror_x),
 	.mirror_y(batch_busy && sb_blend_mirror_y),
 	.key_enable(batch_busy && sb_blend_key_enable),

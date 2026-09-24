@@ -5,6 +5,8 @@ module cmdq_batch_dut (
     output logic [15:0] batch_count,
     input logic batch_busy, input logic batch_done,
     output logic blend_start, output logic [7:0] blend_mod,
+    output logic blend_solid, output logic [31:0] blend_solid_color,
+    output logic blend_mode_en, output logic [23:0] blend_mode,
     output logic [31:0] copy_dst_addr, output logic [31:0] copy_src_addr,
     output logic [15:0] copy_width, output logic [15:0] copy_height,
     input logic blend_busy, input logic blend_done
@@ -20,6 +22,8 @@ module cmdq_batch_dut (
         .copy_height(copy_height), .copy_key_enable(),
         .copy_key_value(), .copy_busy(1'b0), .copy_done(1'b0),
         .blend_start(blend_start), .blend_mod(blend_mod),
+        .blend_solid(blend_solid), .blend_solid_color(blend_solid_color),
+        .blend_mode_en(blend_mode_en), .blend_mode(blend_mode),
         .blend_busy(blend_busy), .blend_done(blend_done),
         .batch_start(batch_start), .batch_count(batch_count),
         .batch_busy(batch_busy), .batch_done(batch_done),

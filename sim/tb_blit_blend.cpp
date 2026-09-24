@@ -136,6 +136,8 @@ struct Rect {
     bool key = false;
     uint32_t key_value = 0;
     uint32_t mode_flags = 0;   // BLIT-009 flags word with bit 4, or 0 for blend/store
+    bool solid = false;         // BLIT-010: constant source, no source reads
+    uint32_t solid_color = 0;
 };
 
 // A random valid BLIT-009 mode (descriptor flags with bit 4).
@@ -157,6 +159,7 @@ uint64_t Run(Testbench &tb, AvalonMemory &mem, const Rect &r) {
     dut.width = r.width; dut.height = r.height;
     dut.mod = r.mod;
     dut.blend = r.blend; dut.mirror_x = r.mirror_x; dut.mirror_y = r.mirror_y;
+    dut.solid = r.solid; dut.solid_color = r.solid_color;
     dut.key_enable = r.key; dut.key_value = r.key_value;
     dut.mode_en = (r.mode_flags & 0x10u) != 0; dut.mode = r.mode_flags >> 8;
     tb.Tick(mem);
@@ -194,12 +197,14 @@ void CheckCase(Testbench &tb, AvalonMemory &mem, const Rect &r, const char *labe
         }
     }
     std::unordered_map<uint32_t, uint32_t> source;
-    for (uint32_t y = 0; y < r.height; ++y) {
-        for (uint32_t x = 0; x < r.width; ++x) {
-            const uint32_t addr = r.src + y * r.src_pitch + x * 4;
-            const uint32_t value = (r.key && Rand(3) == 0) ? r.key_value : RandomPixel();
-            mem.Write32(addr, value);
-            source[addr] = value;
+    if (!r.solid) {
+        for (uint32_t y = 0; y < r.height; ++y) {
+            for (uint32_t x = 0; x < r.width; ++x) {
+                const uint32_t addr = r.src + y * r.src_pitch + x * 4;
+                const uint32_t value = (r.key && Rand(3) == 0) ? r.key_value : RandomPixel();
+                mem.Write32(addr, value);
+                source[addr] = value;
+            }
         }
     }
     for (uint32_t y = 0; y < r.height; ++y) {
@@ -207,7 +212,8 @@ void CheckCase(Testbench &tb, AvalonMemory &mem, const Rect &r, const char *labe
             const uint32_t d = r.dst + y * r.dst_pitch + x * 4;
             const uint32_t sx = r.mirror_x ? r.width - 1 - x : x;
             const uint32_t sy = r.mirror_y ? r.height - 1 - y : y;
-            const uint32_t sp = source[r.src + sy * r.src_pitch + sx * 4];
+            const uint32_t sp = r.solid ? r.solid_color
+                                        : source[r.src + sy * r.src_pitch + sx * 4];
             if (!(r.key && sp == r.key_value))
                 expect[d] = noodles_mode_ref(sp, expect[d], r.mod,
                                              r.mode_flags ? r.mode_flags : (r.blend ? 0x2u : 0u));
@@ -261,6 +267,8 @@ int main(int argc, char **argv) {
 
     dut.reset = 1;
     dut.start = 0;
+    dut.solid = 0;
+    dut.solid_color = 0;
     for (int i = 0; i < 4; ++i) tb.Tick(mem);
     dut.reset = 0;
     tb.Tick(mem);
@@ -306,6 +314,40 @@ int main(int argc, char **argv) {
                 r.mirror_y = mirror & 2;
                 CheckCase(tb, mem, r, "alignment");
             }
+
+    // BLIT-010 constant-source fills cover alignment, explicit blend modes,
+    // arbitrary colour/alpha and omit all source-memory reads.
+    for (int i = 0; i < 1000; ++i) {
+        Rect r;
+        r.width = uint16_t(1 + Rand(70));
+        r.height = uint16_t(1 + Rand(8));
+        r.dst_pitch = uint16_t((r.width + Rand(7)) * 4);
+        r.dst = 0x31500000u + Rand(64) * 4;
+        r.src = 0x35000000u;
+        r.src_pitch = 4;
+        r.mod = 0xffffffffu;
+        r.mode_flags = RandomMode();
+        r.solid = true;
+        r.solid_color = RandomPixel();
+        CheckCase(tb, mem, r, "solid");
+        ++cases;
+    }
+
+    // An aligned 64x4 constant fill reads exactly its 128 destination
+    // words. Any source request would increase this count.
+    {
+        Rect r{0x31600000u, 64 * 4, 0x35000000u, 64 * 4, 64, 4, 0xffffffffu};
+        r.solid = true;
+        r.solid_color = 0x80402010u;
+        r.mode_flags = NOODLES_REF_MODE_BLEND;
+        const size_t reads = mem.reads();
+        CheckCase(tb, mem, r, "solid-read-count");
+        if (mem.reads() - reads != 128) {
+            std::fprintf(stderr, "FAIL: solid fill issued %zu reads, expected 128 destination reads\n",
+                         mem.reads() - reads);
+            return 1;
+        }
+    }
 
     // Fully transparent source: no DDRAM writes at all.
     tb.SetBusy(false);
@@ -376,7 +418,7 @@ int main(int argc, char **argv) {
         cost = Run(tb, mem, r);
     }
 
-    std::printf("PASS: blit_blend %d randomized rects + alignment/transparent/opaque/zero-size cases; "
+    std::printf("PASS: blit_blend %d randomized sprite/solid rects + alignment/transparent/opaque/zero-size cases; "
                 "128x16 blend in %llu cycles (%.2f px/cycle)\n",
                 cases, static_cast<unsigned long long>(cost), 128.0 * 16 / double(cost));
     return 0;

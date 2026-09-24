@@ -11,7 +11,7 @@ for target in host arm; do
         cd "$work"
         export PKG_CONFIG_LIBDIR="$stage/usr/lib/pkgconfig"
         export PKG_CONFIG_SYSROOT_DIR="$stage"
-        test "$(pkg-config --modversion noodles)" = 0.7.0
+        test "$(pkg-config --modversion noodles)" = 0.8.0
         if [ "$target" = host ]; then
             cc="${HOSTCC:-cc}"
             link_flags=

@@ -89,6 +89,7 @@ module engine_sprite_batch_dut (
         .src_addr(blend_src_addr), .src_pitch(blend_src_pitch),
         .width(blend_width), .height(blend_height), .mod(blend_mod),
         .blend(blend_enable), .mirror_x(blend_mirror_x), .mirror_y(blend_mirror_y),
+        .solid(1'b0), .solid_color(32'd0),
         .key_enable(blend_key_enable), .key_value(blend_key_value),
         .mode_en(blend_mode_en), .mode(blend_mode),
         .busy(blend_busy), .done(blend_done),

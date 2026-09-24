@@ -5,6 +5,6 @@ includedir=${prefix}/include
 
 Name: noodles
 Description: MiSTer Noodles managed 2D GPU SDK
-Version: 0.7.0
+Version: 0.8.0
 Libs: -L${libdir} -lnoodles
 Cflags: -I${includedir}

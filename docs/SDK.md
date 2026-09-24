@@ -1,12 +1,12 @@
 # Host SDK
 
 `libnoodles.a` is a C99 static library with C++-compatible public headers
-`noodles_link.h` and `noodles_surface.h`. SDK 0.7.0 uses hardware protocol 1.x to identify the live
+`noodles_link.h` and `noodles_surface.h`. SDK 0.8.0 uses hardware protocol 1.x to identify the live
 800x600 core, claim one host session and detect reset before accepting a
-fence as completed. Protocol 1.1 cores add opcode 7, BLIT_BLEND, and 1.2 cores add flagged
-batch draws (blend, mirroring and RGBA modulation per draw) and 1.3 cores
-explicit blend modes per draw; framebuffer
-geometry and the 100MHz core clock are unchanged.
+fence as completed. Protocol 1.1 cores add opcode 7, BLIT_BLEND; 1.2 cores add
+flagged batch draws (blend, mirroring and RGBA modulation per draw); 1.3 cores
+add explicit blend modes per draw; and 1.4 cores add opcode 8, BLEND_FILL.
+Framebuffer geometry and the 100MHz core clock are unchanged.
 
 Use `noodles_link_open()` for the stage-2B core. The explicit
 `noodles_link_open_legacy()` entry point remains for older unverified images;
@@ -57,8 +57,8 @@ little-endian 32-bit words.
 | Address | Owner | Meaning |
 |---|---|---|
 | `0x30020010` | FPGA | Magic `0x4e444c53`. Published last during initialization. |
-| `0x30020014` | FPGA | Protocol version, major in bits 31:16 and minor in 15:0; `0x00010003` with explicit blend modes, `0x00010002` with flagged batch draws, `0x00010001` with BLIT_BLEND only, `0x00010000` before. |
-| `0x30020018` | FPGA | Capability bits; bit N advertises opcode N: `0x000000fe` with BLIT_BLEND, `0x0000007e` before it. |
+| `0x30020014` | FPGA | Protocol version, major in bits 31:16 and minor in 15:0; `0x00010004` with BLEND_FILL, `0x00010003` with explicit blend modes, `0x00010002` with flagged batch draws, `0x00010001` with BLIT_BLEND only, `0x00010000` before. |
+| `0x30020018` | FPGA | Capability bits; bit N advertises opcode N: `0x000001fe` with BLEND_FILL, `0x000000fe` with BLIT_BLEND, `0x0000007e` before it. |
 | `0x3002001c` | FPGA | Width in bits 31:16, height in bits 15:0. |
 | `0x30020020` | FPGA | Framebuffer pitch in bytes. |
 | `0x30020028/2c` | Host | 64-bit request token, low word then high word. |
@@ -86,7 +86,7 @@ after checking magic, protocol major version 1 (any minor revision),
 required opcode capabilities 1 through 6, 800x600 geometry and 3200-byte
 pitch, then completing the live claim. Unexpected identity fails before the
 SDK publishes commands. Minor revisions only add capabilities (LINK-012);
-optional operations such as BLIT_BLEND check their capability bit on every
+optional operations such as BLIT_BLEND and BLEND_FILL check their capability bit on every
 submission and fail with `ENOTSUP` without publishing when it is absent.
 
 Calls must be serialized by the application. A nonblocking `flock` on
@@ -194,7 +194,8 @@ memory and the managed arena `[0x32000000, 0x40000000)`. Upload alone may write 
 subject to its existing ownership protection. Board-SDRAM loads require
 page-aligned destinations and 8-byte-aligned DDR3 sources with rounded-up
 page backing storage. BLIT_BLEND additionally requires modulation in word 5 bits 7:0 only and
-disjoint source and destination byte spans. These checks are **not allocation or isolation**:
+disjoint source and destination byte spans. BLEND_FILL requires a valid
+explicit blend mode without mirror bits and a zero reserved word 7. These checks are **not allocation or isolation**:
 the caller must still own every byte, respect scanout ownership, avoid
 overlapping copies and retain all source data until completion.
 
@@ -236,7 +237,15 @@ pitches and resolve the buffer role only after the wait. This makes regional
 software fallbacks coherent without exposing `/dev/mem` or a managed-surface
 handle for the framework-owned buffers. `noodles_back_buffer_fill()` clips a
 signed rectangle and submits the existing solid-fill command to that same
-current buffer.
+current buffer. `noodles_back_buffer_blend_fill()` clips identically and
+submits BLEND_FILL with one constant straight-RGBA source colour and a
+validated explicit blend mode.
+
+`noodles_surface_blend_fill()` clips a signed rectangle to a managed
+surface and submits the same BLEND_FILL operation. BLEND_FILL is ordered with
+all other commands and reads only the destination; it requires protocol 1.4
+and `NOODLES_CAP_BLEND_FILL`. The raw `noodles_push_blend_fill()` variant
+accepts an already validated physical rectangle.
 
 `noodles_surface_blend()` and `noodles_surface_blend_to_back_buffer()` clip
 exactly like the copy calls, then submit BLIT_BLEND (BLIT-007): each source
@@ -266,7 +275,7 @@ with an explicit mode built by `NOODLES_DRAW_BLEND_MODE(color_src, color_dst,
 color_op, alpha_src, alpha_dst, alpha_op)` from `NOODLES_BLENDFACTOR_*` and
 `NOODLES_BLENDOP_*`, which use SDL's `SDL_BlendFactor`/`SDL_BlendOperation`
 numbering so `SDL_ComposeCustomBlendMode()` descriptions map across
-unchanged. `NOODLES_DRAW_MODE_ADD`, `_MOD` and `_MUL` reproduce SDL 2.32.10's
+unchanged. `NOODLES_DRAW_MODE_BLEND`, `_NONE`, `_ADD`, `_MOD` and `_MUL` reproduce SDL 2.32.10's
 software modes bit-exactly (MUL adds `NOODLES_DRAW_SINGLE_ROUNDING`), and
 `NOODLES_DRAW_MODE_STENCIL_ALPHA` keeps the destination colour while scaling
 its alpha by one minus the source alpha, GemRB's wall-occlusion pass.
@@ -295,10 +304,11 @@ stable shared-library ABI promise in this static-only pre-1.0 SDK.
 
 No SDL code, runtime resolution switch or automatic core reload is included.
 Managed surfaces and the texture cache are host-SDK facilities that work
-over protocol 1.0 through 1.3; SDK 0.4 added BLIT_BLEND for protocol 1.1
-cores, SDK 0.5 flagged batch draws for protocol 1.2 cores and SDK 0.6
-explicit blend modes for protocol 1.3 cores. SDK 0.7 adds synchronized CPU
-transfers and fill for the current back buffer without changing the protocol.
+over protocol 1.0 through 1.4; SDK 0.4 added BLIT_BLEND for protocol 1.1
+cores, SDK 0.5 flagged batch draws for protocol 1.2 cores, SDK 0.6 added
+explicit blend modes for protocol 1.3 cores, and SDK 0.7 added synchronized
+CPU transfers and fill for the current back buffer. SDK 0.8 adds constant
+source blended fills for protocol 1.4 cores.
 
 ## Stage-2A hardware execution
 

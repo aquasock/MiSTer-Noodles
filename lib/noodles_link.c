@@ -27,6 +27,7 @@
 #define NOODLES_OP_SPRITE_BATCH 5u
 #define NOODLES_OP_LOAD_SDRAM 6u
 #define NOODLES_OP_BLIT_BLEND 7u
+#define NOODLES_OP_BLEND_FILL 8u
 #define NOODLES_FENCE_MASK 0x7fffffffu
 // Wait-loop sleep backoff. The minimum covers link_control's 1024-cycle poll
 // period plus a DDR3 round trip, so a liveness ping is normally answered by
@@ -435,6 +436,8 @@ static uint64_t rect_end(uint32_t address, uint32_t pitch, uint32_t width, uint3
     return (uint64_t)address + (uint64_t)(height - 1) * pitch + (uint64_t)width * 4;
 }
 
+static int valid_mode(uint32_t f);
+
 static int valid_command(const uint32_t *c, int allow_managed) {
     if (!c) return 0;
     switch (c[0]) {
@@ -453,6 +456,9 @@ static int valid_command(const uint32_t *c, int allow_managed) {
             valid_rect(c[6], c[7], c[3], c[4], allow_managed) &&
             (rect_end(c[1], c[2], c[3], c[4]) <= c[6] ||
              rect_end(c[6], c[7], c[3], c[4]) <= c[1]);
+    case NOODLES_OP_BLEND_FILL:
+        return !c[7] && !(c[6] & (NOODLES_DRAW_MIRROR_X | NOODLES_DRAW_MIRROR_Y)) &&
+            valid_mode(c[6]) && valid_rect(c[1], c[2], c[3], c[4], allow_managed);
     case NOODLES_OP_PRESENT:
         return !(c[1] | c[2] | c[3] | c[4] | c[5] | c[6] | c[7]);
     case NOODLES_OP_SPRITE_BATCH:
@@ -601,6 +607,15 @@ int noodles_push_blit_blend(noodles_link_t *link, uint32_t dst_addr, uint16_t ds
                             uint16_t height, uint8_t alpha_mod) {
     const uint32_t command[8] = {
         NOODLES_OP_BLIT_BLEND, dst_addr, dst_pitch, width, height, alpha_mod, src_addr, src_pitch,
+    };
+    return noodles_push_command(link, command);
+}
+
+int noodles_push_blend_fill(noodles_link_t *link, uint32_t dst_addr, uint16_t dst_pitch,
+                            uint16_t width, uint16_t height, uint32_t color,
+                            uint32_t blend_mode) {
+    const uint32_t command[8] = {
+        NOODLES_OP_BLEND_FILL, dst_addr, dst_pitch, width, height, color, blend_mode, 0,
     };
     return noodles_push_command(link, command);
 }

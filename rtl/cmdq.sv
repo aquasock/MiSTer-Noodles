@@ -2,7 +2,7 @@
 // presented on a simple valid/ready front end, and dispatches it to BLIT
 // (SOLID_FILL), blit_copy (BLIT_COPY / BLIT_COPY_KEY -- both dispatch to
 // the same engine, differing only in whether colorkey transparency is on),
-// blit_blend (BLIT_BLEND -- BLIT-007), or present (PRESENT, the
+// blit_blend (BLIT_BLEND / BLEND_FILL -- BLIT-007/BLIT-010), or present (PRESENT, the
 // double-buffer flip -- OUT-004).
 //
 // ai/core-reference.md CMDQ-001 defines the command slot layout this module
@@ -44,9 +44,13 @@ module cmdq #(
     input  logic                  copy_busy,
     input  logic                  copy_done,
 
-    // BLIT_BLEND shares the copy_* geometry registers above.
+    // BLIT_BLEND and BLEND_FILL share the copy_* destination geometry above.
     output logic                  blend_start,
     output logic [7:0]            blend_mod,
+    output logic                  blend_solid,
+    output logic [DATA_WIDTH-1:0] blend_solid_color,
+    output logic                  blend_mode_en,
+    output logic [23:0]           blend_mode,
     input  logic                  blend_busy,
     input  logic                  blend_done,
 
@@ -76,8 +80,10 @@ module cmdq #(
     //   [191:160] color                          (SOLID_FILL only)
     //                                             (BLIT_COPY_KEY: colorkey value)
     //                                             (BLIT_BLEND: [7:0] alpha modulation)
+    //                                             (BLEND_FILL: constant RGBA source)
     //   [223:192] src_addr                       (BLIT_COPY/BLIT_COPY_KEY only)
     //                                             (LOAD_SDRAM: DDR3 source addr)
+    //                                             (BLEND_FILL: explicit mode flags)
     //   [255:224] src_pitch (only [15:0] used)    (BLIT_COPY/BLIT_COPY_KEY only)
     // LOAD_SDRAM (SDR-003) repurposes dst_addr as the SDRAM destination
     // byte address (must be page-aligned, see sdram_loader.sv's header)
@@ -90,6 +96,7 @@ module cmdq #(
     localparam logic [7:0] OP_SPRITE_BATCH  = 8'h05;
     localparam logic [7:0] OP_LOAD_SDRAM    = 8'h06;
     localparam logic [7:0] OP_BLIT_BLEND    = 8'h07;
+    localparam logic [7:0] OP_BLEND_FILL    = 8'h08;
 
     wire [7:0]  op          = cmd_data[7:0];
     wire [31:0] c_dst_addr  = cmd_data[63:32];
@@ -140,6 +147,10 @@ module cmdq #(
             copy_key_value <= '0;
             blend_start    <= 1'b0;
             blend_mod      <= '0;
+            blend_solid    <= 1'b0;
+            blend_solid_color <= '0;
+            blend_mode_en  <= 1'b0;
+            blend_mode     <= '0;
             batch_start    <= 1'b0;
             batch_count    <= '0;
             present_start  <= 1'b0;
@@ -188,6 +199,20 @@ module cmdq #(
                             copy_src_addr  <= c_src_addr;
                             copy_src_pitch <= c_src_pitch;
                             blend_mod      <= c_color[7:0];
+                            blend_solid    <= 1'b0;
+                            blend_mode_en  <= 1'b0;
+                            blend_start    <= 1'b1;
+                            active_engine  <= ENGINE_BLEND;
+                            state          <= WAIT_DONE;
+                        end else if (op == OP_BLEND_FILL) begin
+                            copy_dst_addr  <= c_dst_addr;
+                            copy_dst_pitch <= c_dst_pitch;
+                            copy_width     <= c_width;
+                            copy_height    <= c_height;
+                            blend_solid_color <= c_color;
+                            blend_solid    <= 1'b1;
+                            blend_mode_en  <= 1'b1;
+                            blend_mode     <= c_src_addr[31:8];
                             blend_start    <= 1'b1;
                             active_engine  <= ENGINE_BLEND;
                             state          <= WAIT_DONE;

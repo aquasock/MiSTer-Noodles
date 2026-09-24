@@ -12,6 +12,7 @@
 #define NOODLES_OP_SOLID_FILL 1u
 #define NOODLES_OP_BLIT_COPY 2u
 #define NOODLES_OP_BLIT_BLEND 7u
+#define NOODLES_OP_BLEND_FILL 8u
 
 struct texture_slot {
     uint64_t key, age;
@@ -301,6 +302,25 @@ int noodles_back_buffer_fill(noodles_link_t *link, const noodles_rect_t *rect,
                                    (uint16_t)(bottom - top), color);
 }
 
+int noodles_back_buffer_blend_fill(noodles_link_t *link, const noodles_rect_t *rect,
+                                   uint32_t color, uint32_t blend_mode) {
+    if (!link || !rect || !rect->width || !rect->height) return fail(EINVAL);
+    int64_t left = rect->x, top = rect->y;
+    int64_t right = left + rect->width, bottom = top + rect->height;
+    if (right <= 0 || bottom <= 0 || left >= NOODLES_BUFFER_WIDTH ||
+        top >= NOODLES_BUFFER_HEIGHT)
+        return 0;
+    if (left < 0) left = 0;
+    if (top < 0) top = 0;
+    if (right > NOODLES_BUFFER_WIDTH) right = NOODLES_BUFFER_WIDTH;
+    if (bottom > NOODLES_BUFFER_HEIGHT) bottom = NOODLES_BUFFER_HEIGHT;
+    uint32_t address = noodles_link_back_buffer(link) +
+        (uint32_t)top * NOODLES_BUFFER_PITCH + (uint32_t)left * 4;
+    return noodles_push_blend_fill(link, address, NOODLES_BUFFER_PITCH,
+                                   (uint16_t)(right - left),
+                                   (uint16_t)(bottom - top), color, blend_mode);
+}
+
 static int clip_rect(const noodles_surface_t *surface, const noodles_rect_t *requested,
                      int32_t *x, int32_t *y, uint32_t *width, uint32_t *height) {
     if (!active_surface(surface) || !requested || !requested->width || !requested->height)
@@ -337,6 +357,22 @@ int noodles_surface_fill(noodles_surface_t *destination, const noodles_rect_t *r
         NOODLES_OP_SOLID_FILL,
         destination->address + (uint32_t)y * destination->pitch + (uint32_t)x * 4,
         destination->pitch, width, height, color, 0, 0
+    };
+    if (noodles_link_push_command_managed(destination->link, command) != 0) return -1;
+    mark_used(destination);
+    return 0;
+}
+
+int noodles_surface_blend_fill(noodles_surface_t *destination, const noodles_rect_t *rect,
+                               uint32_t color, uint32_t blend_mode) {
+    int32_t x, y;
+    uint32_t width, height;
+    int clipped = clip_rect(destination, rect, &x, &y, &width, &height);
+    if (clipped <= 0) return clipped;
+    uint32_t command[8] = {
+        NOODLES_OP_BLEND_FILL,
+        destination->address + (uint32_t)y * destination->pitch + (uint32_t)x * 4,
+        destination->pitch, width, height, color, blend_mode, 0
     };
     if (noodles_link_push_command_managed(destination->link, command) != 0) return -1;
     mark_used(destination);

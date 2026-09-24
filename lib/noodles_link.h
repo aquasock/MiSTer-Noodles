@@ -8,12 +8,13 @@
 extern "C" {
 #endif
 
-#define NOODLES_SDK_VERSION "0.7.0"
+#define NOODLES_SDK_VERSION "0.8.0"
 /* Newest protocol this SDK knows. Verified open accepts any 1.x core;
  * optional operations are gated by capability bits and minor revision
  * (LINK-013). */
-#define NOODLES_PROTOCOL_VERSION 0x00010003u
+#define NOODLES_PROTOCOL_VERSION 0x00010004u
 #define NOODLES_CAP_BLIT_BLEND (1u << 7)
+#define NOODLES_CAP_BLEND_FILL (1u << 8)
 
 /* Sprite descriptor flags (BLIT-006, BLIT-008). BLEND/MIRROR_X/MIRROR_Y make
  * a flagged draw: its colorkey field is then an RGBA modulation (R in bits
@@ -60,6 +61,15 @@ enum {
      (uint32_t)(color_op) << 18 | (uint32_t)(alpha_src) << 21 | (uint32_t)(alpha_dst) << 25 |     \
      (uint32_t)(alpha_op) << 29)
 /* SDL 2.32.10 software-renderer modes, bit-exact. */
+#define NOODLES_DRAW_MODE_BLEND                                                                \
+    NOODLES_DRAW_BLEND_MODE(NOODLES_BLENDFACTOR_SRC_ALPHA,                                     \
+                            NOODLES_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, NOODLES_BLENDOP_ADD,       \
+                            NOODLES_BLENDFACTOR_ONE,                                            \
+                            NOODLES_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, NOODLES_BLENDOP_ADD)
+#define NOODLES_DRAW_MODE_NONE                                                                 \
+    NOODLES_DRAW_BLEND_MODE(NOODLES_BLENDFACTOR_ONE, NOODLES_BLENDFACTOR_ZERO,                 \
+                            NOODLES_BLENDOP_ADD, NOODLES_BLENDFACTOR_ONE,                       \
+                            NOODLES_BLENDFACTOR_ZERO, NOODLES_BLENDOP_ADD)
 #define NOODLES_DRAW_MODE_ADD                                                                  \
     NOODLES_DRAW_BLEND_MODE(NOODLES_BLENDFACTOR_SRC_ALPHA, NOODLES_BLENDFACTOR_ONE,             \
                             NOODLES_BLENDOP_ADD, NOODLES_BLENDFACTOR_ZERO,                     \
@@ -152,6 +162,11 @@ int noodles_push_blit_copy_key(noodles_link_t *link, uint32_t dst_addr, uint16_t
 int noodles_push_blit_blend(noodles_link_t *link, uint32_t dst_addr, uint16_t dst_pitch,
                             uint32_t src_addr, uint16_t src_pitch, uint16_t width,
                             uint16_t height, uint8_t alpha_mod);
+/* BLEND_FILL (BLIT-010): blend one constant RGBA source over a destination
+ * rectangle using a validated NOODLES_DRAW_MODE_* value. */
+int noodles_push_blend_fill(noodles_link_t *link, uint32_t dst_addr, uint16_t dst_pitch,
+                            uint16_t width, uint16_t height, uint32_t color,
+                            uint32_t blend_mode);
 int noodles_push_sprite_batch(noodles_link_t *link,
                               const noodles_sprite_descriptor_t *descriptors, uint16_t count);
 

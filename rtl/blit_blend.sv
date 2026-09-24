@@ -1,5 +1,5 @@
-// Flagged-draw engine: BLIT_BLEND (opcode 7, BLIT-007) and flagged
-// SPRITE_BATCH descriptors (BLIT-008). Applies RGBA modulation, then stores
+// Flagged-draw engine: BLIT_BLEND (opcode 7, BLIT-007), BLEND_FILL
+// (opcode 8, BLIT-010), and flagged SPRITE_BATCH descriptors (BLIT-008). Applies RGBA modulation, then stores
 // or straight-alpha blends a source rectangle onto a destination rectangle,
 // optionally mirrored on either axis, over the burst-capable 64-bit DDRAM
 // read port. sprite_batch also sends it unflagged copies that blit_copy64
@@ -53,6 +53,10 @@ module blit_blend #(
     input  logic [15:0] height,
     input  logic [31:0] mod,
     input  logic        blend,
+    // BLEND_FILL supplies one constant source pixel for the whole rectangle
+    // and therefore forms destination bursts only.
+    input  logic        solid,
+    input  logic [31:0] solid_color,
     // BLIT-009: explicit blend mode (descriptor flags 31:8) when mode_en,
     // otherwise BLEND or a plain store as selected by `blend`.
     input  logic        mode_en,
@@ -95,10 +99,10 @@ module blit_blend #(
     // ---------------------------------------------------------------
     // Command capture. The mirrored source base needs a multiply, so the
     // walkers start three cycles after the command is accepted.
-    logic [31:0] dst_r, src_r, src_base_r, mod_r;
+    logic [31:0] dst_r, src_r, src_base_r, mod_r, solid_color_r;
     logic [31:0] src_span_r;
     logic [15:0] dst_pitch_r, src_pitch_r, width_r, height_r;
-    logic        mirror_x_r, mirror_y_r, key_enable_r;
+    logic        mirror_x_r, mirror_y_r, key_enable_r, solid_r;
     logic [23:0] mode_r;
     logic [31:0] key_r;
     logic [1:0]  prep;
@@ -146,16 +150,18 @@ module blit_blend #(
     logic [TAG_W:0] tag_count;
 
     // Registered request.
-    logic        req_valid, req_is_dst, req_lo, req_hi;
+    logic        req_valid;
     logic [4:0]  req_len;
-    logic [5:0]  req_px;
-    logic [PX_W-1:0] req_px_base;
     logic [31:0] req_addr;
     logic        prefer_dst;
 
-    wire s_ok = s_valid && ({1'b0, px_res} + (PX_W+2)'(s_px) <= (PX_W+2)'(PX_DEPTH));
+    wire s_ok = !solid_r && s_valid &&
+                ({1'b0, px_res} + (PX_W+2)'(s_px) <= (PX_W+2)'(PX_DEPTH));
     wire d_ok = d_valid && ({1'b0, dst_res} + (DST_W+2)'(d_len) <= (DST_W+2)'(DST_DEPTH));
-    wire can_form = busy && !req_valid && (tag_count < (TAG_W+1)'(TAG_DEPTH));
+    // Do not observe a walker's state from the preceding command while the
+    // new command's registered setup and walk_start are still in flight.
+    wire can_form = busy && prep == 2'd0 && !walk_start && !req_valid &&
+                    (tag_count < (TAG_W+1)'(TAG_DEPTH));
     assign d_form = can_form && d_ok && (!s_ok || prefer_dst);
     assign s_form = can_form && s_ok && !d_form;
 
@@ -165,7 +171,9 @@ module blit_blend #(
     wire req_fire = req_valid && rd64_ready;
 
     // ---------------------------------------------------------------
-    // Tag FIFO: one entry per accepted burst, in adapter response order.
+    // Tag FIFO: one entry per formed burst, in adapter response order. A tag
+    // is reserved before its registered request can reach the shared adapter;
+    // this keeps adapter ready/arbitration off the tag-count timing path.
     // Kept in registers: as block RAM its unregistered read feeds the slot
     // arithmetic below and set the 100MHz critical path.
     (* ramstyle = "logic" *) logic [TAG_DEPTH-1:0] tag_is_dst, tag_lo, tag_hi;
@@ -226,10 +234,11 @@ module blit_blend #(
     wire       head_hi = dw_hi[dw_rp];
     wire [1:0] pop_n = {1'b0, head_lo} + {1'b0, head_hi};
 
-    wire launch = (dw_count != 0) && ({1'b0, px_count} >= (PX_W+2)'(pop_n)) &&
+    wire launch = (dw_count != 0) &&
+                  (solid_r || ({1'b0, px_count} >= (PX_W+2)'(pop_n))) &&
                   (out_res < (OUT_W+1)'(OUT_DEPTH));
-    wire [31:0] lane_src_lo = px0;
-    wire [31:0] lane_src_hi = head_lo ? px1 : px0;
+    wire [31:0] lane_src_lo = solid_r ? solid_color_r : px0;
+    wire [31:0] lane_src_hi = solid_r ? solid_color_r : (head_lo ? px1 : px0);
 
     // ---------------------------------------------------------------
     // Pixel lanes and sideband.
@@ -281,20 +290,20 @@ module blit_blend #(
     assign wr_data = of_hi[of_rp] ? of_data[of_rp][63:32] : of_data[of_rp][31:0];
     wire wr_fire = (wr64_en && wr64_ready) || (wr_en && wr_ready);
 
-    wire finished = busy && prep == 2'd0 && !walk_start && s_finished && d_finished &&
+    wire finished = busy && prep == 2'd0 && !walk_start && (solid_r || s_finished) && d_finished &&
                     !req_valid && (tag_count == 0) && !r_src && !r_dst && (dw_count == 0) &&
                     (out_res == 0);
 
     // ---------------------------------------------------------------
     always_ff @(posedge clk) begin
-        if (req_fire) begin
-            tag_is_dst[tag_tail] <= req_is_dst;
-            tag_lo[tag_tail] <= req_lo;
-            tag_hi[tag_tail] <= req_hi;
-            tag_len[tag_tail] <= req_len;
-            tag_px[tag_tail] <= req_px;
-            tag_px_base[tag_tail] <= req_px_base;
-            tag_word[tag_tail] <= req_addr[31:3];
+        if (s_form || d_form) begin
+            tag_is_dst[tag_tail] <= d_form;
+            tag_lo[tag_tail] <= d_form ? d_lo : s_lo;
+            tag_hi[tag_tail] <= d_form ? d_hi : s_hi;
+            tag_len[tag_tail] <= d_form ? d_len : s_len;
+            tag_px[tag_tail] <= s_px;
+            tag_px_base[tag_tail] <= px_wp;
+            tag_word[tag_tail] <= d_form ? d_addr[31:3] : s_addr[31:3];
         end
         r_data <= rd64_data;
         r_slot_lo <= slot_lo;
@@ -342,13 +351,13 @@ module blit_blend #(
             prep <= '0;
             walk_start <= 1'b0;
             dst_r <= '0; src_r <= '0; src_base_r <= '0; mod_r <= '0;
+            solid_r <= 1'b0; solid_color_r <= '0;
             dst_pitch_r <= '0; src_pitch_r <= '0;
             width_r <= '0; height_r <= '0;
             mode_r <= MODE_NONE; mirror_x_r <= 1'b0; mirror_y_r <= 1'b0;
             key_enable_r <= 1'b0; key_r <= '0;
             req_valid <= 1'b0;
-            req_is_dst <= 1'b0; req_lo <= 1'b0; req_hi <= 1'b0;
-            req_len <= '0; req_px <= '0; req_px_base <= '0; req_addr <= '0;
+            req_len <= '0; req_addr <= '0;
             prefer_dst <= 1'b1;
             px_res <= '0; dst_res <= '0; out_res <= '0;
             tag_count <= '0; tag_head <= '0; tag_tail <= '0; beat <= '0; burst_px <= '0;
@@ -366,6 +375,8 @@ module blit_blend #(
                 dst_pitch_r <= dst_pitch; src_pitch_r <= src_pitch;
                 width_r <= width; height_r <= height;
                 mod_r <= mod;
+                solid_r <= solid;
+                solid_color_r <= solid_color;
                 mode_r <= mode_en ? mode : blend ? MODE_BLEND : MODE_NONE;
                 mirror_x_r <= mirror_x; mirror_y_r <= mirror_y;
                 key_enable_r <= key_enable; key_r <= key_value;
@@ -384,19 +395,14 @@ module blit_blend #(
 
             if (s_form || d_form) begin
                 req_valid <= 1'b1;
-                req_is_dst <= d_form;
                 req_addr <= d_form ? d_addr : s_addr;
                 req_len <= d_form ? d_len : s_len;
-                req_lo <= d_form ? d_lo : s_lo;
-                req_hi <= d_form ? d_hi : s_hi;
-                req_px <= s_px;
-                req_px_base <= px_wp;
                 prefer_dst <= !d_form;
             end else if (req_fire) begin
                 req_valid <= 1'b0;
             end
 
-            if (req_fire) tag_tail <= tag_tail + 1'b1;
+            if (s_form || d_form) tag_tail <= tag_tail + 1'b1;
             if (rd64_valid) begin
                 if (h_last) begin
                     beat <= '0;
@@ -407,7 +413,7 @@ module blit_blend #(
                     burst_px <= burst_px + 6'(push_n);
                 end
             end
-            tag_count <= tag_count + (req_fire ? (TAG_W+1)'(1) : '0)
+            tag_count <= tag_count + ((s_form || d_form) ? (TAG_W+1)'(1) : '0)
                                    - ((rd64_valid && h_last) ? (TAG_W+1)'(1) : '0);
 
             r_src <= src_beat;
@@ -417,11 +423,11 @@ module blit_blend #(
             r_publish <= src_beat && h_last;
 
             if (s_form) px_wp <= px_wp + PX_W'(s_px);
-            if (launch) px_rp <= px_rp + PX_W'(pop_n);
+            if (launch && !solid_r) px_rp <= px_rp + PX_W'(pop_n);
             px_count <= px_count + (r_publish ? (PX_W+1)'(r_px) : '0)
-                                 - (launch ? (PX_W+1)'(pop_n) : '0);
+                                 - ((launch && !solid_r) ? (PX_W+1)'(pop_n) : '0);
             px_res <= px_res + (s_form ? (PX_W+1)'(s_px) : '0)
-                             - (launch ? (PX_W+1)'(pop_n) : '0);
+                             - ((launch && !solid_r) ? (PX_W+1)'(pop_n) : '0);
 
             if (r_dst) dw_wp <= dw_wp + 1'b1;
             if (launch) dw_rp <= dw_rp + 1'b1;
