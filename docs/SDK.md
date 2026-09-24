@@ -1,10 +1,10 @@
 # Host SDK
 
 `libnoodles.a` is a C99 static library with C++-compatible public headers
-`noodles_link.h` and `noodles_surface.h`. SDK 0.3.0 uses hardware protocol 1.0 to identify the live
+`noodles_link.h` and `noodles_surface.h`. SDK 0.4.0 uses hardware protocol 1.x to identify the live
 800x600 core, claim one host session and detect reset before accepting a
-fence as completed. The command opcodes, framebuffer geometry and 100MHz
-core clock are unchanged.
+fence as completed. Protocol 1.1 cores add opcode 7, BLIT_BLEND; framebuffer
+geometry and the 100MHz core clock are unchanged.
 
 Use `noodles_link_open()` for the stage-2B core. The explicit
 `noodles_link_open_legacy()` entry point remains for older unverified images;
@@ -55,8 +55,8 @@ little-endian 32-bit words.
 | Address | Owner | Meaning |
 |---|---|---|
 | `0x30020010` | FPGA | Magic `0x4e444c53`. Published last during initialization. |
-| `0x30020014` | FPGA | Protocol version, major in bits 31:16 and minor in 15:0; currently `0x00010000`. |
-| `0x30020018` | FPGA | Capability bits; bit N advertises opcode N, currently `0x0000007e`. |
+| `0x30020014` | FPGA | Protocol version, major in bits 31:16 and minor in 15:0; `0x00010001` on cores with BLIT_BLEND, `0x00010000` before it. |
+| `0x30020018` | FPGA | Capability bits; bit N advertises opcode N: `0x000000fe` with BLIT_BLEND, `0x0000007e` before it. |
 | `0x3002001c` | FPGA | Width in bits 31:16, height in bits 15:0. |
 | `0x30020020` | FPGA | Framebuffer pitch in bytes. |
 | `0x30020028/2c` | Host | 64-bit request token, low word then high word. |
@@ -80,9 +80,12 @@ authentication or security boundary.
 ## Verified lifecycle
 
 `noodles_link_open(&device)` returns an opaque heap-allocated handle only
-after checking magic, exact protocol version, required opcode capabilities,
-800x600 geometry and 3200-byte pitch, then completing the live claim.
-Unexpected identity fails before the SDK publishes commands.
+after checking magic, protocol major version 1 (any minor revision),
+required opcode capabilities 1 through 6, 800x600 geometry and 3200-byte
+pitch, then completing the live claim. Unexpected identity fails before the
+SDK publishes commands. Minor revisions only add capabilities (LINK-012);
+optional operations such as BLIT_BLEND check their capability bit on every
+submission and fail with `ENOTSUP` without publishing when it is absent.
 
 Calls must be serialized by the application. A nonblocking `flock` on
 `/run/noodles.lock` excludes other cooperating SDK clients, including
@@ -172,7 +175,7 @@ a valid live handle; they are observations, not health checks.
 | `ESTALE` | The verified hardware session was lost, normally by FPGA reset/reload. |
 | `ENODEV` | The stage-2B identity magic is absent. |
 | `EPROTONOSUPPORT` | Hardware protocol version is incompatible, or legacy open was attempted on the current protocol. |
-| `ENOTSUP` | Required capabilities or fixed geometry do not match this SDK. |
+| `ENOTSUP` | Required capabilities or fixed geometry do not match this SDK, or the attached core lacks an optional operation's capability bit. |
 | `ETIMEDOUT` | Deadline expired; handle faulted, work not cancelled. |
 | `EINVAL` | Invalid argument, unsupported command encoding, rectangle/alignment or address span. |
 | `EPROTO` | Invalid ring index at attachment; do not write to that presumed device. |
@@ -188,7 +191,8 @@ The SDK conservatively permits DDR3 spans only in
 memory and the managed arena `[0x32000000, 0x40000000)`. Upload alone may write wholly inside the fixed descriptor table,
 subject to its existing ownership protection. Board-SDRAM loads require
 page-aligned destinations and 8-byte-aligned DDR3 sources with rounded-up
-page backing storage. These checks are **not allocation or isolation**:
+page backing storage. BLIT_BLEND additionally requires modulation in word 5 bits 7:0 only and
+disjoint source and destination byte spans. These checks are **not allocation or isolation**:
 the caller must still own every byte, respect scanout ownership, avoid
 overlapping copies and retain all source data until completion.
 
@@ -222,6 +226,17 @@ frees; allocation also collects opportunistically. Closing the link drains
 the command stream and releases all allocator metadata, but applications
 must not retain surface or cache pointers after close.
 
+`noodles_surface_blend()` and `noodles_surface_blend_to_back_buffer()` clip
+exactly like the copy calls, then submit BLIT_BLEND (BLIT-007): each source
+pixel's high byte is straight alpha, scaled by the call's `alpha_mod`
+(255 leaves it unchanged), composited source-over with SDL 2.32.10's generic
+truncating arithmetic. Pixels with zero effective alpha leave the
+destination unchanged, and destination alpha is updated as `a + (255-a)dA/255`.
+Upload blended sources with a meaningful high byte; `noodles_rgb()` leaves it
+zero, which is fully transparent. `noodles_texture_cache_blend_to_back_buffer()`
+submits one blended cached cell per call; blending inside `SPRITE_BATCH` is
+not yet available.
+
 The fixed-cell `noodles_texture_cache` packs same-sized images into one
 managed atlas and addresses them with application-defined 64-bit keys.
 Uploads replace the least-recently-used cell when full and wait only if that
@@ -239,9 +254,9 @@ information now includes the hardware protocol version and
 `hardware_verified=1`. Repository draw tools use verified open. There is no
 stable shared-library ABI promise in this static-only pre-1.0 SDK.
 
-No SDL code, runtime resolution switch, automatic core reload or new RTL
-drawing operations are included. Managed surfaces and the texture cache are
-host-SDK facilities over protocol 1.0.
+No SDL code, runtime resolution switch or automatic core reload is included.
+Managed surfaces and the texture cache are host-SDK facilities that work
+over protocol 1.0 and 1.1; SDK 0.4 adds BLIT_BLEND for protocol 1.1 cores.
 
 ## Stage-2A hardware execution
 

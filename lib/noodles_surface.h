@@ -52,6 +52,14 @@ int noodles_surface_blit(noodles_surface_t *destination, int32_t dst_x, int32_t 
 int noodles_surface_blit_to_back_buffer(noodles_link_t *link, int32_t dst_x, int32_t dst_y,
                                         const noodles_surface_t *source,
                                         const noodles_rect_t *source_rect);
+/* BLIT_BLEND variants (BLIT-007): source alpha scaled by alpha_mod,
+ * source-over onto the destination. ENOTSUP without NOODLES_CAP_BLIT_BLEND. */
+int noodles_surface_blend(noodles_surface_t *destination, int32_t dst_x, int32_t dst_y,
+                          const noodles_surface_t *source, const noodles_rect_t *source_rect,
+                          uint8_t alpha_mod);
+int noodles_surface_blend_to_back_buffer(noodles_link_t *link, int32_t dst_x, int32_t dst_y,
+                                         const noodles_surface_t *source,
+                                         const noodles_rect_t *source_rect, uint8_t alpha_mod);
 int noodles_surface_batch_to_back_buffer(noodles_link_t *link,
                                          const noodles_surface_blit_t *blits,
                                          size_t count);
@@ -72,6 +80,10 @@ int noodles_texture_cache_contains(const noodles_texture_cache_t *cache, uint64_
 int noodles_texture_cache_batch_to_back_buffer(noodles_texture_cache_t *cache,
                                                const noodles_texture_blit_t *blits,
                                                size_t count);
+/* One blended draw per call; batch blending is not yet available. */
+int noodles_texture_cache_blend_to_back_buffer(noodles_texture_cache_t *cache,
+                                               const noodles_texture_blit_t *blit,
+                                               uint8_t alpha_mod);
 int noodles_texture_cache_destroy(noodles_texture_cache_t *cache, uint32_t timeout_ms);
 
 #ifdef __cplusplus

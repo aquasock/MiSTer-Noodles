@@ -33,8 +33,8 @@ module link_control #(
 );
 
     localparam logic [31:0] MAGIC = 32'h4e44_4c53;
-    localparam logic [31:0] PROTOCOL = 32'h0001_0000;
-    localparam logic [31:0] CAPABILITIES = 32'h0000_007e;
+    localparam logic [31:0] PROTOCOL = 32'h0001_0001;       // LINK-012
+    localparam logic [31:0] CAPABILITIES = 32'h0000_00fe;   // opcodes 1-7
     localparam logic [31:0] GEOMETRY = {16'd800, 16'd600};
     localparam logic [31:0] PITCH = 32'd3200;
     localparam logic [31:0] CLAIM = 32'h434c_414d;

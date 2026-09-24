@@ -32,6 +32,7 @@ ARMSPRITE   := build/arm/sprite-demo
 ARMLOADBMP  := build/arm/load-bmp
 ARMSTRESS   := build/arm/stress-demo
 ARMTILECACHE:= build/arm/tile-cache-demo
+ARMBLEND    := build/arm/blend-demo
 ARMPRESENTPROBE := build/arm/present-probe-dump
 HOSTLINK    := build/host/link-push
 HOSTSLOTDUMP:= build/host/link-slot-dump
@@ -45,6 +46,7 @@ HOSTSPRITE  := build/host/sprite-demo
 HOSTLOADBMP := build/host/load-bmp
 HOSTSTRESS  := build/host/stress-demo
 HOSTTILECACHE:= build/host/tile-cache-demo
+HOSTBLEND   := build/host/blend-demo
 HOSTPRESENTPROBE := build/host/present-probe-dump
 HOSTLINKTEST := build/host/test-noodles-link
 
@@ -69,10 +71,13 @@ SPRITE_BATCH_SIM  := $(SIM_DIR)/sprite_batch/Vengine_sprite_batch_dut
 SDRAM_ADAPTER_SIM := $(SIM_DIR)/sdram_adapter/Vsdram_adapter_dut
 SDRAM_LOADER_SIM := $(SIM_DIR)/sdram_loader/Vsdram_loader_dut
 SPRITE_BATCH_SDRAM_SIM := $(SIM_DIR)/sprite_batch_sdram/Vengine_sprite_batch_sdram_dut
+BLEND_PX_SIM      := $(SIM_DIR)/blend_px/Vblend_px
+BLIT_BLEND_SIM    := $(SIM_DIR)/blit_blend/Vengine_blend_dut
+BLEND_RTL         := rtl/blend_px.sv rtl/blend_walk.sv rtl/blit_blend.sv
 
 .PHONY: all host deploy sim test-host test-timing test-sdk-install sdk sdk-host install-sdk clean
 
-all: sdk $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS) $(ARMTILECACHE) $(ARMPRESENTPROBE)
+all: sdk $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS) $(ARMTILECACHE) $(ARMBLEND) $(ARMPRESENTPROBE)
 
 sdk: build/arm/libnoodles.a build/arm/sdk-smoke
 sdk-host: build/host/libnoodles.a build/host/sdk-smoke
@@ -127,7 +132,7 @@ $(HOSTLINKTEST): sim/test_noodles_link.c lib/noodles_link.c lib/noodles_surface.
 	$(HOSTCC) $(CPPFLAGS) $(CFLAGS) -o $@ sim/test_noodles_link.c lib/noodles_link.c lib/noodles_surface.c \
 		-Wl,--wrap=mmap -Wl,--wrap=munmap
 
-sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(DDRAM_INGRESS_SIM) $(BLIT_COPY_SIM) $(BLIT_COPY64_SIM) $(BLIT_COPY64_PIPELINE_SIM) $(LINK_RING_SIM) $(LINK_FENCE_SIM) $(LINK_CONTROL_SIM) $(PRESENT_SIM) $(BATCH_CMDQ_SIM) $(SPRITE_BATCH_SIM) $(SDRAM_ADAPTER_SIM) $(SDRAM_LOADER_SIM) $(SPRITE_BATCH_SDRAM_SIM)
+sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(DDRAM_INGRESS_SIM) $(BLIT_COPY_SIM) $(BLIT_COPY64_SIM) $(BLIT_COPY64_PIPELINE_SIM) $(LINK_RING_SIM) $(LINK_FENCE_SIM) $(LINK_CONTROL_SIM) $(PRESENT_SIM) $(BATCH_CMDQ_SIM) $(SPRITE_BATCH_SIM) $(SDRAM_ADAPTER_SIM) $(SDRAM_LOADER_SIM) $(SPRITE_BATCH_SDRAM_SIM) $(BLEND_PX_SIM) $(BLIT_BLEND_SIM)
 	$(SOLID_FILL_SIM)
 	$(DDRAM_ADAPTER_SIM)
 	$(DDRAM_INGRESS_SIM)
@@ -143,6 +148,20 @@ sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(DDRAM_INGRESS_SIM) $(BLIT_COPY_SIM
 	$(SDRAM_ADAPTER_SIM)
 	$(SDRAM_LOADER_SIM)
 	$(SPRITE_BATCH_SDRAM_SIM)
+	$(BLEND_PX_SIM)
+	$(BLIT_BLEND_SIM)
+
+$(BLEND_PX_SIM): rtl/blend_px.sv sim/tb_blend_px.cpp sim/blend_ref.h
+	@mkdir -p $(dir $@)
+	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module blend_px \
+		--Wall --Wno-fatal -O3 \
+		rtl/blend_px.sv sim/tb_blend_px.cpp -o $(notdir $@)
+
+$(BLIT_BLEND_SIM): $(BLEND_RTL) rtl/ddram_adapter.sv sim/engine_blend_dut.sv sim/tb_blit_blend.cpp sim/blend_ref.h
+	@mkdir -p $(dir $@)
+	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module engine_blend_dut \
+		--Wall --Wno-fatal -Wno-DECLFILENAME -CFLAGS -std=c++17 \
+		$(BLEND_RTL) rtl/ddram_adapter.sv sim/engine_blend_dut.sv sim/tb_blit_blend.cpp -o $(notdir $@)
 
 $(BATCH_CMDQ_SIM): rtl/cmdq.sv sim/cmdq_batch_dut.sv sim/tb_cmdq_batch.cpp
 	@mkdir -p $(dir $@)
@@ -273,7 +292,10 @@ $(ARMSTRESS): tools/stress_demo.c tools/bmp_loader.h build/arm/libnoodles.a lib/
 $(ARMTILECACHE): tools/tile_cache_demo.c build/arm/libnoodles.a lib/noodles_link.h lib/noodles_surface.h tools/sdk_helpers.h | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CPPFLAGS) $(CFLAGS) -static -o $@ tools/tile_cache_demo.c build/arm/libnoodles.a
 
-host: sdk-host $(HOSTLINK) $(HOSTSLOTDUMP) $(HOSTMEMSCAN) $(HOSTCOPYPUSH) $(HOSTFILLPUSH) $(HOSTKEYPUSH) $(HOSTBENCH) $(HOSTPRESENT) $(HOSTSPRITE) $(HOSTLOADBMP) $(HOSTSTRESS) $(HOSTTILECACHE) $(HOSTPRESENTPROBE)
+$(ARMBLEND): tools/blend_demo.c sim/blend_ref.h build/arm/libnoodles.a lib/noodles_link.h lib/noodles_surface.h tools/sdk_helpers.h | build/arm
+	$(ARMCC) $(ARMFLAGS) $(CPPFLAGS) $(CFLAGS) -static -o $@ tools/blend_demo.c build/arm/libnoodles.a -lm
+
+host: sdk-host $(HOSTLINK) $(HOSTSLOTDUMP) $(HOSTMEMSCAN) $(HOSTCOPYPUSH) $(HOSTFILLPUSH) $(HOSTKEYPUSH) $(HOSTBENCH) $(HOSTPRESENT) $(HOSTSPRITE) $(HOSTLOADBMP) $(HOSTSTRESS) $(HOSTTILECACHE) $(HOSTBLEND) $(HOSTPRESENTPROBE)
 
 $(HOSTLINK): tools/link_push.c build/host/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/host
 	$(HOSTCC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/link_push.c build/host/libnoodles.a
@@ -314,10 +336,13 @@ $(HOSTSTRESS): tools/stress_demo.c tools/bmp_loader.h build/host/libnoodles.a li
 $(HOSTTILECACHE): tools/tile_cache_demo.c build/host/libnoodles.a lib/noodles_link.h lib/noodles_surface.h tools/sdk_helpers.h | build/host
 	$(HOSTCC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/tile_cache_demo.c build/host/libnoodles.a
 
+$(HOSTBLEND): tools/blend_demo.c sim/blend_ref.h build/host/libnoodles.a lib/noodles_link.h lib/noodles_surface.h tools/sdk_helpers.h | build/host
+	$(HOSTCC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/blend_demo.c build/host/libnoodles.a -lm
+
 build/arm build/host:
 	mkdir -p $@
 
-deploy: sdk $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS) $(ARMTILECACHE) $(ARMPRESENTPROBE)
+deploy: sdk $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS) $(ARMTILECACHE) $(ARMBLEND) $(ARMPRESENTPROBE)
 	scripts/deploy.sh $(HOST)
 
 clean:

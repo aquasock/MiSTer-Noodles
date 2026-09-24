@@ -8,8 +8,11 @@
 extern "C" {
 #endif
 
-#define NOODLES_SDK_VERSION "0.3.0"
-#define NOODLES_PROTOCOL_VERSION 0x00010000u
+#define NOODLES_SDK_VERSION "0.4.0"
+/* Newest protocol this SDK knows. Verified open accepts any 1.x core;
+ * optional operations are gated by capability bits (LINK-012). */
+#define NOODLES_PROTOCOL_VERSION 0x00010001u
+#define NOODLES_CAP_BLIT_BLEND (1u << 7)
 #define NOODLES_BUFFER_A_ADDR 0x31000000u
 #define NOODLES_BUFFER_B_ADDR 0x31200000u
 #define NOODLES_BUFFER_PITCH 3200u
@@ -76,6 +79,13 @@ int noodles_push_blit_copy(noodles_link_t *link, uint32_t dst_addr, uint16_t dst
 int noodles_push_blit_copy_key(noodles_link_t *link, uint32_t dst_addr, uint16_t dst_pitch,
                                uint32_t src_addr, uint16_t src_pitch, uint16_t width,
                                uint16_t height, uint32_t colorkey);
+/* BLIT_BLEND (BLIT-007): straight-alpha source-over using each source
+ * pixel's high byte as alpha, scaled by alpha_mod (255 = unmodulated).
+ * Byte spans of source and destination must not overlap. ENOTSUP on cores
+ * without NOODLES_CAP_BLIT_BLEND, including every legacy attachment. */
+int noodles_push_blit_blend(noodles_link_t *link, uint32_t dst_addr, uint16_t dst_pitch,
+                            uint32_t src_addr, uint16_t src_pitch, uint16_t width,
+                            uint16_t height, uint8_t alpha_mod);
 int noodles_push_sprite_batch(noodles_link_t *link,
                               const noodles_sprite_descriptor_t *descriptors, uint16_t count);
 

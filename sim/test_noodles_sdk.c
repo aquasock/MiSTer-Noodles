@@ -395,6 +395,72 @@ int main(void) {
     closed(a);
     assert(!control_active && memory[16] == 0);
 
+    /* Protocol 1.0 cores remain attachable; BLIT_BLEND is refused without
+     * publishing anything when capability bit 7 is absent (LINK-012). */
+    memory[0] = memory[2] = memory[3] = 0;
+    seed_identity();
+    memory[5] = 0x00010000u;
+    a = open_verified();
+    assert(noodles_link_get_info(a, &info) == 0 && info.protocol_version == 0x00010000u);
+    before = memory[0];
+    assert(noodles_push_blit_blend(a, NOODLES_BUFFER_B_ADDR, 3200, 0x31400000u, 256,
+                                   64, 64, 255) == -1 && errno == ENOTSUP);
+    assert(memory[0] == before);
+    closed(a);
+
+    /* A 1.1 core advertising BLIT_BLEND receives opcode 7 verbatim. */
+    seed_identity();
+    memory[6] = 0xfe;
+    a = open_verified();
+    assert(noodles_link_get_info(a, &info) == 0 && (info.opcode_mask & NOODLES_CAP_BLIT_BLEND));
+    slot = memory[0];
+    assert(noodles_push_blit_blend(a, NOODLES_BUFFER_B_ADDR + 8, 3200, 0x31400000u, 256,
+                                   64, 32, 0x80) == 0);
+    published = &memory[1024 + slot * 8];
+    assert(published[0] == 7 && published[1] == NOODLES_BUFFER_B_ADDR + 8 &&
+           published[2] == 3200 && published[3] == 64 && published[4] == 32 &&
+           published[5] == 0x80 && published[6] == 0x31400000u && published[7] == 256);
+
+    /* Overlapping byte spans, out-of-range modulation and empty rectangles
+     * are refused; exactly adjacent spans are allowed. */
+    before = memory[0];
+    assert(noodles_push_blit_blend(a, NOODLES_BUFFER_B_ADDR, 3200,
+                                   NOODLES_BUFFER_B_ADDR + 3200 * 10, 3200, 64, 32, 255) == -1 &&
+           errno == EINVAL);
+    uint32_t raw_blend[8] = {7, NOODLES_BUFFER_B_ADDR, 3200, 4, 4, 0x100, 0x31400000u, 16};
+    assert(noodles_push_command(a, raw_blend) == -1 && errno == EINVAL);
+    assert(noodles_push_blit_blend(a, NOODLES_BUFFER_B_ADDR, 3200, 0x31400000u, 16,
+                                   0, 4, 255) == -1 && errno == EINVAL);
+    assert(memory[0] == before);
+    assert(noodles_push_blit_blend(a, NOODLES_BUFFER_B_ADDR, 3200,
+                                   NOODLES_BUFFER_B_ADDR + 3200 * 31 + 256, 256,
+                                   64, 32, 255) == 0);
+
+    /* Managed surfaces and cached textures clip, then publish BLIT_BLEND. */
+    noodles_surface_t *blend_surface = NULL;
+    assert(noodles_surface_create(a, 64, 64, &blend_surface) == 0);
+    slot = memory[0];
+    noodles_rect_t blend_rect = {0, 0, 66, 66};
+    assert(noodles_surface_blend_to_back_buffer(a, -2, -2, blend_surface, &blend_rect, 200) == 0);
+    published = &memory[1024 + slot * 8];
+    assert(published[0] == 7 && published[3] == 62 && published[4] == 62 &&
+           published[5] == 200 && published[1] == noodles_link_back_buffer(a));
+    noodles_texture_cache_t *blend_cache = NULL;
+    assert(noodles_texture_cache_create(a, 64, 64, 2, 1, &blend_cache) == 0);
+    assert(noodles_texture_cache_upload(blend_cache, 9, tile_pixels, 256, 10) == 0);
+    noodles_texture_blit_t blend_tile = {9, {0, 0, 64, 64}, 100, 50};
+    slot = memory[0];
+    assert(noodles_texture_cache_blend_to_back_buffer(blend_cache, &blend_tile, 255) == 0);
+    published = &memory[1024 + slot * 8];
+    assert(published[0] == 7 && published[3] == 64 && published[5] == 255 &&
+           published[1] == noodles_link_back_buffer(a) + 50 * 3200 + 100 * 4);
+    blend_tile.key = 10;
+    assert(noodles_texture_cache_blend_to_back_buffer(blend_cache, &blend_tile, 255) == -1 &&
+           errno == ENOENT);
+    assert(noodles_texture_cache_destroy(blend_cache, 10) == 0);
+    assert(noodles_surface_destroy(blend_surface) == 0);
+    closed(a);
+
     /* A raw fence that retires after the backoff has grown still gets a
      * minimum-length ping check, including across fence wraparound. */
     memory[0] = memory[2] = 0;

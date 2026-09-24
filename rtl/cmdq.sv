@@ -2,10 +2,11 @@
 // presented on a simple valid/ready front end, and dispatches it to BLIT
 // (SOLID_FILL), blit_copy (BLIT_COPY / BLIT_COPY_KEY -- both dispatch to
 // the same engine, differing only in whether colorkey transparency is on),
-// or present (PRESENT, the double-buffer flip -- OUT-004).
+// blit_blend (BLIT_BLEND -- BLIT-007), or present (PRESENT, the
+// double-buffer flip -- OUT-004).
 //
 // ai/core-reference.md CMDQ-001 defines the command slot layout this module
-// decodes; BLIT-002/BLIT-003/BLIT-006 define what each BLIT opcode's fields
+// decodes; BLIT-002/BLIT-003/BLIT-006/BLIT-007 define what each BLIT opcode's fields
 // mean; OUT-004 defines PRESENT's.
 
 module cmdq #(
@@ -43,6 +44,12 @@ module cmdq #(
     input  logic                  copy_busy,
     input  logic                  copy_done,
 
+    // BLIT_BLEND shares the copy_* geometry registers above.
+    output logic                  blend_start,
+    output logic [7:0]            blend_mod,
+    input  logic                  blend_busy,
+    input  logic                  blend_done,
+
     output logic                  batch_start,
     output logic [15:0]           batch_count,
     input  logic                  batch_busy,
@@ -68,6 +75,7 @@ module cmdq #(
     //   [159:128] height    (only [15:0] used)
     //   [191:160] color                          (SOLID_FILL only)
     //                                             (BLIT_COPY_KEY: colorkey value)
+    //                                             (BLIT_BLEND: [7:0] alpha modulation)
     //   [223:192] src_addr                       (BLIT_COPY/BLIT_COPY_KEY only)
     //                                             (LOAD_SDRAM: DDR3 source addr)
     //   [255:224] src_pitch (only [15:0] used)    (BLIT_COPY/BLIT_COPY_KEY only)
@@ -81,6 +89,7 @@ module cmdq #(
     localparam logic [7:0] OP_PRESENT       = 8'h04;
     localparam logic [7:0] OP_SPRITE_BATCH  = 8'h05;
     localparam logic [7:0] OP_LOAD_SDRAM    = 8'h06;
+    localparam logic [7:0] OP_BLIT_BLEND    = 8'h07;
 
     wire [7:0]  op          = cmd_data[7:0];
     wire [31:0] c_dst_addr  = cmd_data[63:32];
@@ -94,17 +103,20 @@ module cmdq #(
     typedef enum logic {IDLE, WAIT_DONE} state_t;
     state_t state;
 
-    typedef enum logic [2:0] {ENGINE_BLIT, ENGINE_COPY, ENGINE_PRESENT, ENGINE_BATCH, ENGINE_LOAD} engine_t;
+    typedef enum logic [2:0] {ENGINE_BLIT, ENGINE_COPY, ENGINE_PRESENT, ENGINE_BATCH, ENGINE_LOAD,
+                              ENGINE_BLEND} engine_t;
     engine_t active_engine;
     logic engine_done_seen;
     wire engine_busy = (active_engine == ENGINE_COPY)    ? copy_busy :
                         (active_engine == ENGINE_PRESENT) ? present_busy :
                         (active_engine == ENGINE_BATCH) ? batch_busy :
-                        (active_engine == ENGINE_LOAD) ? loader_busy : blit_busy;
+                        (active_engine == ENGINE_LOAD) ? loader_busy :
+                        (active_engine == ENGINE_BLEND) ? blend_busy : blit_busy;
     wire engine_done = (active_engine == ENGINE_COPY)    ? copy_done :
                         (active_engine == ENGINE_PRESENT) ? present_done :
                         (active_engine == ENGINE_BATCH) ? batch_done :
-                        (active_engine == ENGINE_LOAD) ? loader_done : blit_done;
+                        (active_engine == ENGINE_LOAD) ? loader_done :
+                        (active_engine == ENGINE_BLEND) ? blend_done : blit_done;
 
     always_ff @(posedge clk or posedge reset) begin
         if (reset) begin
@@ -126,6 +138,8 @@ module cmdq #(
             copy_height    <= '0;
             copy_key_enable<= 1'b0;
             copy_key_value <= '0;
+            blend_start    <= 1'b0;
+            blend_mod      <= '0;
             batch_start    <= 1'b0;
             batch_count    <= '0;
             present_start  <= 1'b0;
@@ -136,6 +150,7 @@ module cmdq #(
         end else begin
             blit_start    <= 1'b0;
             copy_start    <= 1'b0;
+            blend_start   <= 1'b0;
             present_start <= 1'b0;
             batch_start    <= 1'b0;
             loader_start   <= 1'b0;
@@ -143,7 +158,7 @@ module cmdq #(
             unique case (state)
                 IDLE: begin
                     // Unknown opcodes are accepted and dropped.
-                    if (cmd_valid && !blit_busy && !copy_busy && !present_busy) begin
+                    if (cmd_valid && !blit_busy && !copy_busy && !present_busy && !blend_busy) begin
                         if (op == OP_SOLID_FILL) begin
                             blit_dst_addr  <= c_dst_addr;
                             blit_dst_pitch <= c_dst_pitch;
@@ -164,6 +179,17 @@ module cmdq #(
                             copy_key_value <= c_color;
                             copy_start     <= 1'b1;
                             active_engine  <= ENGINE_COPY;
+                            state          <= WAIT_DONE;
+                        end else if (op == OP_BLIT_BLEND) begin
+                            copy_dst_addr  <= c_dst_addr;
+                            copy_dst_pitch <= c_dst_pitch;
+                            copy_width     <= c_width;
+                            copy_height    <= c_height;
+                            copy_src_addr  <= c_src_addr;
+                            copy_src_pitch <= c_src_pitch;
+                            blend_mod      <= c_color[7:0];
+                            blend_start    <= 1'b1;
+                            active_engine  <= ENGINE_BLEND;
                             state          <= WAIT_DONE;
                         end else if (op == OP_PRESENT) begin
                             present_start <= 1'b1;

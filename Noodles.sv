@@ -179,6 +179,14 @@ wire [63:0] batch_rd64_data, batch_wr64_data;
 wire        batch_rd64_en, batch_rd64_ready, batch_rd64_valid;
 wire [7:0]  batch_rd64_len;
 wire        batch_wr64_en, batch_wr64_ready;
+// BLIT_BLEND (BLIT-007) reuses CMDQ's copy_* geometry registers.
+wire        blend_start, blend_busy, blend_done;
+wire [7:0]  blend_mod;
+wire [31:0] blend_rd64_addr, blend_wr_addr, blend_wr_data, blend_wr64_addr;
+wire [63:0] blend_rd64_data, blend_wr64_data;
+wire [7:0]  blend_rd64_len;
+wire        blend_rd64_en, blend_rd64_ready, blend_rd64_valid;
+wire        blend_wr_en, blend_wr_ready, blend_wr64_en, blend_wr64_ready;
 
 // LINK-001/LINK-002/LINK-003: the real host-driven command path.
 // tools/link_push.c writes commands and write_ptr directly into shared
@@ -274,7 +282,8 @@ present #(
 // internally executes many descriptor copies.  Omitting it leaves the host
 // fence unchanged, so sprite-demo's one-descriptor diagnostic waits forever
 // and a following PRESENT can never retire.
-wire cmd_done_pulse = blit_done || copy_done || batch_done || present_done || loader_done;
+wire cmd_done_pulse = blit_done || copy_done || batch_done || present_done || loader_done ||
+                      blend_done;
 
 wire [31:0] fence_wr_addr, fence_wr_data;
 wire        fence_wr_en, fence_wr_ready;
@@ -319,6 +328,10 @@ cmdq cmdq
 	.copy_key_value(copy_key_value),
 	.copy_busy     (copy_busy),
 	.copy_done     (copy_done),
+	.blend_start   (blend_start),
+	.blend_mod     (blend_mod),
+	.blend_busy    (blend_busy),
+	.blend_done    (blend_done),
 	.batch_start    (batch_start),
 	.batch_count    (batch_count),
 	.batch_busy     (batch_busy),
@@ -397,7 +410,22 @@ sprite_batch sprite_batch
 	.wr64_en(batch_wr64_en), .wr64_ready(batch_wr64_ready)
 );
 
-// Priority mux into the DDRAM adapter's write port: batch/copy, link_ring,
+blit_blend blit_blend
+(
+	.clk(clk_sys), .reset(reset), .start(blend_start),
+	.dst_addr(copy_dst_addr), .dst_pitch(copy_dst_pitch),
+	.src_addr(copy_src_addr), .src_pitch(copy_src_pitch),
+	.width(copy_width), .height(copy_height), .mod(blend_mod),
+	.busy(blend_busy), .done(blend_done),
+	.rd64_addr(blend_rd64_addr), .rd64_en(blend_rd64_en), .rd64_len(blend_rd64_len),
+	.rd64_ready(blend_rd64_ready), .rd64_data(blend_rd64_data), .rd64_valid(blend_rd64_valid),
+	.wr_addr(blend_wr_addr), .wr_data(blend_wr_data), .wr_en(blend_wr_en),
+	.wr_ready(blend_wr_ready),
+	.wr64_addr(blend_wr64_addr), .wr64_data(blend_wr64_data),
+	.wr64_en(blend_wr64_en), .wr64_ready(blend_wr64_ready)
+);
+
+// Priority mux into the DDRAM adapter's write port: batch/blend/copy, link_ring,
 // link_control, fill, and link_fence. None
 // can ever be simultaneously active by construction of CMDQ's own
 // single-engine dispatch (blit and blit_copy) and link_ring only writing
@@ -408,38 +436,47 @@ sprite_batch sprite_batch
 // particular cycle), and by the time it wants to write, the engine that
 // just triggered it (blit/blit_copy) has already stopped writing.
 wire        wr_sel_batch  = batch_busy;
-wire        wr_sel_copy   = !wr_sel_batch && copy_busy;
-wire        wr_sel_link   = !wr_sel_batch && !wr_sel_copy && link_wr_en;
-wire        wr_sel_control = !wr_sel_batch && !wr_sel_copy && !wr_sel_link &&
+wire        wr_sel_blend  = !wr_sel_batch && blend_busy;
+wire        wr_sel_copy   = !wr_sel_batch && !wr_sel_blend && copy_busy;
+wire        wr_sel_link   = !wr_sel_batch && !wr_sel_blend && !wr_sel_copy && link_wr_en;
+wire        wr_sel_control = !wr_sel_batch && !wr_sel_blend && !wr_sel_copy && !wr_sel_link &&
                              control_wr_en;
-wire        wr_sel_engine = !wr_sel_batch && !wr_sel_copy && !wr_sel_link && !wr_sel_control &&
-                            blit_busy;
-wire        wr_sel_fence  = !wr_sel_batch && !wr_sel_copy && !wr_sel_link &&
+wire        wr_sel_engine = !wr_sel_batch && !wr_sel_blend && !wr_sel_copy && !wr_sel_link &&
+                            !wr_sel_control && blit_busy;
+wire        wr_sel_fence  = !wr_sel_batch && !wr_sel_blend && !wr_sel_copy && !wr_sel_link &&
                             !wr_sel_control && !wr_sel_engine && fence_wr_en;
-wire [31:0] adapter_wr_addr = wr_sel_batch ? batch_wr_addr : wr_sel_copy ? copy_wr_addr :
+wire [31:0] adapter_wr_addr = wr_sel_batch ? batch_wr_addr : wr_sel_blend ? blend_wr_addr :
+                              wr_sel_copy ? copy_wr_addr :
                               wr_sel_link ? link_wr_addr : wr_sel_control ? control_wr_addr :
                               wr_sel_engine ? engine_wr_addr : fence_wr_addr;
-wire [31:0] adapter_wr_data = wr_sel_batch ? batch_wr_data : wr_sel_copy ? copy_wr_data :
+wire [31:0] adapter_wr_data = wr_sel_batch ? batch_wr_data : wr_sel_blend ? blend_wr_data :
+                              wr_sel_copy ? copy_wr_data :
                               wr_sel_link ? link_wr_data : wr_sel_control ? control_wr_data :
                               wr_sel_engine ? engine_wr_data : fence_wr_data;
-wire        adapter_wr_en   = wr_sel_batch ? batch_wr_en : wr_sel_copy ? copy_wr_en :
+wire        adapter_wr_en   = wr_sel_batch ? batch_wr_en : wr_sel_blend ? blend_wr_en :
+                              wr_sel_copy ? copy_wr_en :
                               wr_sel_link ? link_wr_en : wr_sel_control ? control_wr_en :
                               wr_sel_engine ? engine_wr_en : fence_wr_en;
 assign batch_wr_ready  = wr_sel_batch ? adapter_wr_ready : 1'b0;
 wire        adapter_wr_ready;
+assign blend_wr_ready  = wr_sel_blend  ? adapter_wr_ready : 1'b0;
 assign copy_wr_ready   = wr_sel_copy   ? adapter_wr_ready : 1'b0;
 assign link_wr_ready   = wr_sel_link   ? adapter_wr_ready : 1'b0;
 assign control_wr_ready = wr_sel_control ? adapter_wr_ready : 1'b0;
 assign engine_wr_ready = wr_sel_engine ? adapter_wr_ready : 1'b0;
 assign fence_wr_ready  = wr_sel_fence  ? adapter_wr_ready : 1'b0;
 wire adapter_wr64_en = (wr_sel_engine && engine_wr64_en) ||
-                       (wr_sel_batch && batch_wr64_en);
+                       (wr_sel_batch && batch_wr64_en) ||
+                       (wr_sel_blend && blend_wr64_en);
 wire        adapter_wr64_ready;
 assign engine_wr64_ready = adapter_wr64_en ? adapter_wr64_ready : 1'b0;
 wire adapter_batch_wr64_en = wr_sel_batch && batch_wr64_en;
 assign batch_wr64_ready = adapter_batch_wr64_en ? adapter_wr64_ready : 1'b0;
-wire [31:0] adapter_wr64_addr = wr_sel_batch ? batch_wr64_addr : engine_wr64_addr;
-wire [63:0] adapter_wr64_data = wr_sel_batch ? batch_wr64_data : engine_wr64_data;
+assign blend_wr64_ready = (wr_sel_blend && blend_wr64_en) ? adapter_wr64_ready : 1'b0;
+wire [31:0] adapter_wr64_addr = wr_sel_batch ? batch_wr64_addr :
+                                wr_sel_blend ? blend_wr64_addr : engine_wr64_addr;
+wire [63:0] adapter_wr64_data = wr_sel_batch ? batch_wr64_data :
+                                wr_sel_blend ? blend_wr64_data : engine_wr64_data;
 
 // Priority mux into the DDRAM adapter's read port: link_control, link_ring,
 // batch, then blit_copy. LINK-003's cmd_ready gating keeps these from
@@ -463,6 +500,10 @@ wire        rd_sel_batch = !rd_sel_control && !rd_sel_link && batch_rd_active;
 // removes the SDRAM CDC overhead without changing this routing choice;
 // the optional SDRAM path still performs four 16-bit reads per pair.
 wire        rd_sel_batch64 = rd_sel_batch && batch_rd64_en;
+// blit_blend holds busy until every requested beat has returned, so busy
+// spans all of its REQ+WAIT windows (DDR-005).
+wire        rd_sel_blend = !rd_sel_control && !rd_sel_link && !rd_sel_batch && blend_busy;
+wire        rd_sel_blend64 = rd_sel_blend && blend_rd64_en;
 // SDR-003 (step 5a): sdram_loader's fill side is a rd64-only client (it
 // never uses the 32-bit rd/rd_addr path at all), given lowest priority
 // since it only ever runs in isolation from batch/link per cmdq.sv's
@@ -475,18 +516,22 @@ wire        rd_sel_batch64 = rd_sel_batch && batch_rd64_en;
 // rd64_valid, and if the mux fell through then, adapter_rd64_valid/data
 // would be silently misrouted or dropped for that response.
 wire        rd_sel_loader64 = !rd_sel_control && !rd_sel_link && !rd_sel_batch &&
-                              loader_rd64_active;
+                              !rd_sel_blend && loader_rd64_active;
 wire        rd_sel_copy = !rd_sel_control && !rd_sel_link && !rd_sel_batch &&
-                          !rd_sel_loader64;
+                          !rd_sel_blend && !rd_sel_loader64;
 wire [31:0] adapter_rd_addr = rd_sel_control ? control_rd_addr :
                               rd_sel_link ? link_rd_addr :
                               rd_sel_batch ? batch_rd_addr : copy_rd_addr;
-wire [31:0] adapter_rd64_addr = rd_sel_batch64 ? batch_rd64_addr : rd_sel_loader64 ? loader_rd64_addr : 32'b0;
-wire [7:0]  adapter_rd64_len = rd_sel_batch64 ? batch_rd64_len : rd_sel_loader64 ? loader_rd64_len : 8'd1;
+wire [31:0] adapter_rd64_addr = rd_sel_batch64 ? batch_rd64_addr :
+                                rd_sel_blend64 ? blend_rd64_addr :
+                                rd_sel_loader64 ? loader_rd64_addr : 32'b0;
+wire [7:0]  adapter_rd64_len = rd_sel_batch64 ? batch_rd64_len :
+                               rd_sel_blend64 ? blend_rd64_len :
+                               rd_sel_loader64 ? loader_rd64_len : 8'd1;
 wire        adapter_rd_en   = rd_sel_control ? control_rd_en :
                               rd_sel_link ? link_rd_en :
                               (rd_sel_batch ? batch_rd_en : copy_rd_en);
-wire        adapter_rd64_en = rd_sel_batch64 || rd_sel_loader64;
+wire        adapter_rd64_en = rd_sel_batch64 || rd_sel_blend64 || rd_sel_loader64;
 wire        adapter_rd_ready, adapter_rd_valid;
 wire [31:0] adapter_rd_data;
 wire        adapter_rd64_ready, adapter_rd64_valid;
@@ -496,6 +541,7 @@ assign control_rd_ready = rd_sel_control ? adapter_rd_ready : 1'b0;
 assign batch_rd_ready = rd_sel_batch ? adapter_rd_ready : 1'b0;
 assign batch_rd64_ready = rd_sel_batch64 ? adapter_rd64_ready : 1'b0;
 assign loader_rd64_ready = rd_sel_loader64 ? adapter_rd64_ready : 1'b0;
+assign blend_rd64_ready = rd_sel_blend64 ? adapter_rd64_ready : 1'b0;
 assign copy_rd_ready = rd_sel_copy ? adapter_rd_ready : 1'b0;
 assign control_rd_data = adapter_rd_data;
 assign control_rd_valid = rd_sel_control ? adapter_rd_valid : 1'b0;
@@ -506,6 +552,8 @@ assign batch_rd_valid = adapter_rd_valid;
 assign batch_rd64_data = adapter_rd64_data;
 assign batch_rd64_valid = rd_sel_batch ? adapter_rd64_valid : 1'b0;
 assign loader_rd64_data = adapter_rd64_data;
+assign blend_rd64_data = adapter_rd64_data;
+assign blend_rd64_valid = rd_sel_blend ? adapter_rd64_valid : 1'b0;
 assign loader_rd64_valid = rd_sel_loader64 ? adapter_rd64_valid : 1'b0;
 assign copy_rd_data  = adapter_rd_data;
 assign copy_rd_valid = rd_sel_copy ? adapter_rd_valid : 1'b0;

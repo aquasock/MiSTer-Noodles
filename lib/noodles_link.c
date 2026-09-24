@@ -26,6 +26,7 @@
 #define NOODLES_OP_PRESENT 4u
 #define NOODLES_OP_SPRITE_BATCH 5u
 #define NOODLES_OP_LOAD_SDRAM 6u
+#define NOODLES_OP_BLIT_BLEND 7u
 #define NOODLES_FENCE_MASK 0x7fffffffu
 // Wait-loop sleep backoff. The minimum covers link_control's 1024-cycle poll
 // period plus a DDR3 round trip, so a liveness ping is normally answered by
@@ -198,7 +199,8 @@ static int open_common(noodles_link_t **out, int verified, int ack_reload) {
             errno = ENODEV;
             goto failed;
         }
-        if (link->header[NOODLES_CONTROL_PROTOCOL_WORD] != NOODLES_PROTOCOL_VERSION) {
+        if ((link->header[NOODLES_CONTROL_PROTOCOL_WORD] >> 16) !=
+            (NOODLES_PROTOCOL_VERSION >> 16)) {
             errno = EPROTONOSUPPORT;
             goto failed;
         }
@@ -211,6 +213,7 @@ static int open_common(noodles_link_t **out, int verified, int ack_reload) {
             errno = ENOTSUP;
             goto failed;
         }
+        link->capabilities = link->header[NOODLES_CONTROL_CAPABILITIES_WORD];
         uint32_t response = link->header[NOODLES_CONTROL_RESPONSE_SEQ_WORD];
         if (response != 0) {
             errno = dirty ? EOWNERDEAD : EBUSY;
@@ -224,9 +227,12 @@ static int open_common(noodles_link_t **out, int verified, int ack_reload) {
         if (wait_response(link, NOODLES_CONTROL_CLAIM, NOODLES_DEFAULT_TIMEOUT_MS) != 0)
             goto failed;
     } else if (link->header[NOODLES_CONTROL_MAGIC_WORD] == NOODLES_CONTROL_MAGIC &&
-               link->header[NOODLES_CONTROL_PROTOCOL_WORD] == NOODLES_PROTOCOL_VERSION) {
+               (link->header[NOODLES_CONTROL_PROTOCOL_WORD] >> 16) ==
+                   (NOODLES_PROTOCOL_VERSION >> 16)) {
         errno = EPROTONOSUPPORT;
         goto failed;
+    } else {
+        link->capabilities = NOODLES_REQUIRED_CAPABILITIES;
     }
 
     if (initialize_transport(link) != 0) goto failed;
@@ -424,6 +430,10 @@ static int valid_rect(uint32_t address, uint32_t pitch, uint32_t width, uint32_t
                    allow_managed);
 }
 
+static uint64_t rect_end(uint32_t address, uint32_t pitch, uint32_t width, uint32_t height) {
+    return (uint64_t)address + (uint64_t)(height - 1) * pitch + (uint64_t)width * 4;
+}
+
 static int valid_command(const uint32_t *c, int allow_managed) {
     if (!c) return 0;
     switch (c[0]) {
@@ -434,6 +444,14 @@ static int valid_command(const uint32_t *c, int allow_managed) {
         return (c[0] != NOODLES_OP_BLIT_COPY || !c[5]) &&
             valid_rect(c[1], c[2], c[3], c[4], allow_managed) &&
             valid_rect(c[6], c[7], c[3], c[4], allow_managed);
+    case NOODLES_OP_BLIT_BLEND:
+        /* Byte spans, not just pixels, must be disjoint: stricter than
+         * BLIT-007 but checkable without per-row arithmetic. */
+        return c[5] <= 0xffu &&
+            valid_rect(c[1], c[2], c[3], c[4], allow_managed) &&
+            valid_rect(c[6], c[7], c[3], c[4], allow_managed) &&
+            (rect_end(c[1], c[2], c[3], c[4]) <= c[6] ||
+             rect_end(c[6], c[7], c[3], c[4]) <= c[1]);
     case NOODLES_OP_PRESENT:
         return !(c[1] | c[2] | c[3] | c[4] | c[5] | c[6] | c[7]);
     case NOODLES_OP_SPRITE_BATCH:
@@ -481,6 +499,8 @@ static int push_command(noodles_link_t *link, const uint32_t command[8], int all
         errno = EINVAL;
         return -1;
     }
+    if (command[0] < 32 && !(link->capabilities & (1u << command[0])))
+        return fail(ENOTSUP);
     int is_batch = (command[0] & 0xffu) == NOODLES_OP_SPRITE_BATCH;
     // Reap completed ownership on every push, including long runs of non-batch work.
     int available = descriptors_available(link);
@@ -536,6 +556,15 @@ int noodles_push_blit_copy_key(noodles_link_t *link, uint32_t dst_addr, uint16_t
                                 uint16_t height, uint32_t colorkey) {
     const uint32_t command[8] = {
         NOODLES_OP_BLIT_COPY_KEY, dst_addr, dst_pitch, width, height, colorkey, src_addr, src_pitch,
+    };
+    return noodles_push_command(link, command);
+}
+
+int noodles_push_blit_blend(noodles_link_t *link, uint32_t dst_addr, uint16_t dst_pitch,
+                            uint32_t src_addr, uint16_t src_pitch, uint16_t width,
+                            uint16_t height, uint8_t alpha_mod) {
+    const uint32_t command[8] = {
+        NOODLES_OP_BLIT_BLEND, dst_addr, dst_pitch, width, height, alpha_mod, src_addr, src_pitch,
     };
     return noodles_push_command(link, command);
 }

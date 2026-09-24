@@ -74,9 +74,10 @@ address it through raw commands, direct `/dev/mem` mappings or legacy tools.
 
 Pixels occupy four bytes, with increasing-address bytes **R, G, B, unused**.
 `noodles_rgb(r,g,b)` produces `r | (g << 8) | (b << 16)` with a zero high byte.
-This is not yet an RGBA blending contract. Copies preserve all 32 bits and
-color-key comparisons compare the entire 32-bit pixel; initialize the high
-byte consistently. Scanout uses `FB_FORMAT=00110`, pitch 3200 bytes in
+The high byte is straight (non-premultiplied) alpha for BLIT_BLEND only.
+Copies preserve all 32 bits, color-key comparisons compare the entire
+32-bit pixel and scanout ignores the high byte; initialize it consistently,
+and meaningfully for any blended source. Scanout uses `FB_FORMAT=00110`, pitch 3200 bytes in
 the SVGA configuration (2560 in the accepted 640x480 fallback).
 
 Addresses and row pitches for pixel operations must be four-byte aligned.
@@ -118,6 +119,7 @@ limits, not a promise that every representable rectangle is safe.
 | 4 | PRESENT | Words 1-7 zero; flips the two fixed buffers at vblank and waits for scanout retirement. |
 | 5 | SPRITE_BATCH | Word 3 is descriptor count, 1-64. Library writes word 1 as `0x30022000`; hardware always fetches from that fixed base, not a relocatable list pointer. Other words zero. |
 | 6 | LOAD_SDRAM | Word 1 is board-SDRAM destination, word 5 byte length, word 6 DDR3 source; others zero. Destination aligned to 1024 bytes; loader copies complete pages, so source/destination backing storage must cover the rounded-up length. |
+| 7 | BLIT_BLEND | As COPY, with alpha modulation in word 5 bits 7:0 and bits 31:8 zero. Straight-alpha source-over per BLIT-007; source and destination must not overlap. Protocol 1.1 cores only (capability bit 7). |
 
 Bytes beyond the requested length in the last SDRAM page are not valid
 copied data; the loader can flush stale page-buffer contents there.
@@ -154,8 +156,8 @@ The stage-2B control block is:
 | Byte offset from `0x30020000` | Writer | Meaning |
 |---|---|---|
 | `+0x10` | FPGA | Magic `0x4e444c53`, published last. |
-| `+0x14` | FPGA | Protocol version `0x00010000`. |
-| `+0x18` | FPGA | Opcode capability mask `0x0000007e`. |
+| `+0x14` | FPGA | Protocol version `0x00010001` (1.1, LINK-012); `0x00010000` on older stage-2B images. |
+| `+0x18` | FPGA | Opcode capability mask `0x000000fe` (bit 7 is BLIT_BLEND); `0x0000007e` on older images. |
 | `+0x1c` | FPGA | Width in bits 31:16, height in bits 15:0. |
 | `+0x20` | FPGA | Pitch in bytes. |
 | `+0x28/+0x2c` | Host | Request token low/high. |
@@ -220,8 +222,8 @@ draw-command layouts. Preserve the older 640x480 image and its matching
 stage-2A tools as the recovery fallback while later stages add managed
 surfaces and the drawing operations required by GemRB.
 
-There is currently no SDL renderer, alpha blending,
-tint, scaling or flipping API. The new render target is 800x600 and core audio is
+There is currently no SDL renderer, batched or additive/modulate blending,
+tint, scaling or flipping API; single-command BLIT_BLEND source-over is available. The new render target is 800x600 and core audio is
 silent. The planned first consumer is GemRB v0.9.5 through SDL2 2.32.10;
 platform video/audio ownership and software fallback synchronization still
 need design work. These are explicit future requirements, not advertised

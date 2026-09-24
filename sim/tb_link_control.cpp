@@ -69,7 +69,7 @@ int main(int argc, char **argv) {
     tb.dut->reset = 0;
     if (!tb.RunUntil(kBase, kMagic)) return Fail("identity initialization did not finish");
     if (tb.memory[kReqSeq] || tb.memory[kRspSeq]) return Fail("reset did not clear sequence words");
-    if (tb.memory[kBase + 4] != 0x00010000 || tb.memory[kBase + 8] != 0x7e ||
+    if (tb.memory[kBase + 4] != 0x00010001 || tb.memory[kBase + 8] != 0xfe ||
         tb.memory[kBase + 0xc] != ((800u << 16) | 600u) || tb.memory[kBase + 0x10] != 3200) {
         return Fail("identity fields do not match protocol");
     }

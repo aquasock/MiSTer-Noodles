@@ -71,6 +71,12 @@ module engine_copy_dut (
         .copy_busy      (copy_busy),
         .copy_done      (copy_done),
         /* verilator lint_off PINCONNECTEMPTY */
+        .blend_start    (),
+        .blend_mod      (),
+        /* verilator lint_on PINCONNECTEMPTY */
+        .blend_busy     (1'b0),
+        .blend_done     (1'b0),
+        /* verilator lint_off PINCONNECTEMPTY */
         .present_start  (),
         /* verilator lint_on PINCONNECTEMPTY */
         .present_busy   (1'b0),

@@ -51,6 +51,7 @@ static void reset(uint32_t baseline) {
     link.header = header;
     link.slots = slots;
     link.done_baseline = baseline & 0x7fffffffu;
+    link.capabilities = 0x7eu;  /* legacy opcode set: no BLIT_BLEND */
 }
 
 static void rejected(int expected_errno, uint16_t count) {

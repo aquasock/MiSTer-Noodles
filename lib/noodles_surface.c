@@ -11,6 +11,7 @@
 #define PITCH_ALIGNMENT 64u
 #define NOODLES_OP_SOLID_FILL 1u
 #define NOODLES_OP_BLIT_COPY 2u
+#define NOODLES_OP_BLIT_BLEND 7u
 
 struct texture_slot {
     uint64_t key, age;
@@ -309,39 +310,67 @@ static int clipped_blit(const noodles_surface_t *destination, uint32_t destinati
     return 1;
 }
 
-int noodles_surface_blit(noodles_surface_t *destination, int32_t dst_x, int32_t dst_y,
-                         const noodles_surface_t *source, const noodles_rect_t *source_rect) {
+static int push_descriptor(noodles_link_t *link, uint32_t op, uint32_t word5,
+                           const noodles_sprite_descriptor_t *d) {
+    uint32_t command[8] = {
+        op, d->dst_addr, d->dst_pitch, d->width, d->height, word5, d->src_addr, d->src_pitch
+    };
+    return noodles_link_push_command_managed(link, command);
+}
+
+static int surface_to_surface(noodles_surface_t *destination, int32_t dst_x, int32_t dst_y,
+                              const noodles_surface_t *source, const noodles_rect_t *source_rect,
+                              uint32_t op, uint32_t word5) {
     if (!active_surface(destination) || destination == source) return fail(EINVAL);
     noodles_sprite_descriptor_t descriptor;
     int clipped = clipped_blit(destination, destination->address, destination->width,
                                destination->height, dst_x, dst_y, source, source_rect, &descriptor);
     if (clipped <= 0) return clipped;
-    uint32_t command[8] = {
-        NOODLES_OP_BLIT_COPY, descriptor.dst_addr, descriptor.dst_pitch,
-        descriptor.width, descriptor.height, 0, descriptor.src_addr, descriptor.src_pitch
-    };
-    if (noodles_link_push_command_managed(destination->link, command) != 0) return -1;
+    if (push_descriptor(destination->link, op, word5, &descriptor) != 0) return -1;
     mark_used((noodles_surface_t *)source);
     mark_used(destination);
     return 0;
 }
 
-int noodles_surface_blit_to_back_buffer(noodles_link_t *link, int32_t dst_x, int32_t dst_y,
-                                        const noodles_surface_t *source,
-                                        const noodles_rect_t *source_rect) {
+static int surface_to_back_buffer(noodles_link_t *link, int32_t dst_x, int32_t dst_y,
+                                  const noodles_surface_t *source,
+                                  const noodles_rect_t *source_rect, uint32_t op, uint32_t word5) {
     if (!link || !active_surface(source) || source->link != link) return fail(EINVAL);
     noodles_sprite_descriptor_t descriptor;
     int clipped = clipped_blit(NULL, noodles_link_back_buffer(link), NOODLES_BUFFER_WIDTH,
                                NOODLES_BUFFER_HEIGHT, dst_x, dst_y, source, source_rect,
                                &descriptor);
     if (clipped <= 0) return clipped;
-    uint32_t command[8] = {
-        NOODLES_OP_BLIT_COPY, descriptor.dst_addr, descriptor.dst_pitch,
-        descriptor.width, descriptor.height, 0, descriptor.src_addr, descriptor.src_pitch
-    };
-    if (noodles_link_push_command_managed(link, command) != 0) return -1;
+    if (push_descriptor(link, op, word5, &descriptor) != 0) return -1;
     mark_used((noodles_surface_t *)source);
     return 0;
+}
+
+int noodles_surface_blit(noodles_surface_t *destination, int32_t dst_x, int32_t dst_y,
+                         const noodles_surface_t *source, const noodles_rect_t *source_rect) {
+    return surface_to_surface(destination, dst_x, dst_y, source, source_rect,
+                              NOODLES_OP_BLIT_COPY, 0);
+}
+
+int noodles_surface_blit_to_back_buffer(noodles_link_t *link, int32_t dst_x, int32_t dst_y,
+                                        const noodles_surface_t *source,
+                                        const noodles_rect_t *source_rect) {
+    return surface_to_back_buffer(link, dst_x, dst_y, source, source_rect,
+                                  NOODLES_OP_BLIT_COPY, 0);
+}
+
+int noodles_surface_blend(noodles_surface_t *destination, int32_t dst_x, int32_t dst_y,
+                          const noodles_surface_t *source, const noodles_rect_t *source_rect,
+                          uint8_t alpha_mod) {
+    return surface_to_surface(destination, dst_x, dst_y, source, source_rect,
+                              NOODLES_OP_BLIT_BLEND, alpha_mod);
+}
+
+int noodles_surface_blend_to_back_buffer(noodles_link_t *link, int32_t dst_x, int32_t dst_y,
+                                         const noodles_surface_t *source,
+                                         const noodles_rect_t *source_rect, uint8_t alpha_mod) {
+    return surface_to_back_buffer(link, dst_x, dst_y, source, source_rect,
+                                  NOODLES_OP_BLIT_BLEND, alpha_mod);
 }
 
 int noodles_surface_batch_to_back_buffer(noodles_link_t *link,
@@ -530,6 +559,28 @@ int noodles_texture_cache_batch_to_back_buffer(noodles_texture_cache_t *cache,
         slot->used = 1;
         slot->age = ++cache->age;
     }
+    return 0;
+}
+
+int noodles_texture_cache_blend_to_back_buffer(noodles_texture_cache_t *cache,
+                                               const noodles_texture_blit_t *blit,
+                                               uint8_t alpha_mod) {
+    if (!cache || !blit) return fail(EINVAL);
+    int index = find_key(cache, blit->key);
+    if (index < 0) return fail(ENOENT);
+    noodles_surface_t view;
+    cache_slot_view(cache, (uint32_t)index, &view);
+    noodles_sprite_descriptor_t descriptor;
+    int clipped = clipped_blit(NULL, noodles_link_back_buffer(cache->link),
+                               NOODLES_BUFFER_WIDTH, NOODLES_BUFFER_HEIGHT,
+                               blit->dst_x, blit->dst_y, &view, &blit->source_rect, &descriptor);
+    if (clipped <= 0) return clipped;
+    if (push_descriptor(cache->link, NOODLES_OP_BLIT_BLEND, alpha_mod, &descriptor) != 0)
+        return -1;
+    struct texture_slot *slot = &cache->slots[index];
+    slot->last_fence = noodles_link_last_fence(cache->link);
+    slot->used = 1;
+    slot->age = ++cache->age;
     return 0;
 }
 
