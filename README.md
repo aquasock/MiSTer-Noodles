@@ -34,10 +34,11 @@ got there.
 
 For the current consumer-facing baseline, start with
 [docs/INTEGRATION.md](docs/INTEGRATION.md): memory reservations, command
-layouts, pixel format, ownership and limitations for the planned GemRB
-integration. It describes today's interface, not an implemented SDL renderer.
-The standard configuration is 800x600 at 100MHz, using hardware-accepted
-seed7. The older accepted 640x480 image remains a recovery fallback.
+layouts, pixel format, ownership and limitations for consumers. It describes
+the core interface; the validated SDL2 renderer lives in MiSTer-GemRB.
+The standard configuration is protocol 1.4 at 800x600 and 100MHz, using the
+timing-qualified and hardware-accepted seed-13 image. The older accepted
+640x480 image remains a recovery fallback.
 
 ## Host-side API
 

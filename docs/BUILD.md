@@ -16,7 +16,7 @@ quartus_sta -t tools/report_timing.tcl
 quartus_sta -t tools/report_multicorner.tcl  # required post-fit timing gate
 ```
 
-`Noodles.qsf` pins the fitter settings for the accepted SVGA seed-7 build
+`Noodles.qsf` pins the fitter settings for the accepted protocol 1.4 seed-13 build
 (see below); the Quartus project is named
 `Noodles`, so a full build writes `output_files/Noodles.rbf`.
 
@@ -50,7 +50,7 @@ Three settings must match for a build to reproduce a previously validated
 result -- all three are already pinned in `Noodles.qsf`, committed to source
 control, so an ordinary clone and build reproduces them automatically:
 
-- `SEED` (currently `7`) -- Quartus's fitter uses its seed as the starting
+- `SEED` (currently `13`) -- Quartus's fitter uses its seed as the starting
   point for placement search; a different seed can produce meaningfully
   different placement, routing and timing closure on the *same* source.
 - `NUM_PARALLEL_PROCESSORS` (currently `16`) -- fitter thread count. This
@@ -63,17 +63,14 @@ and the recorded build date. Matching settings alone is not proof of
 reproducibility; compare the resulting RBF hash against
 [QUALIFICATION.md](QUALIFICATION.md).
 
-The current SVGA image was built from `37d21c9` with SEED overridden to 7;
-source `4cd38a7207e74771ca94351c6d7b94d307c69211` pins that setting.
-It passes all four timing corners and
-was visually accepted on hardware. An independent clean rebuild of the
-pinned revision was explicitly waived by the user, so byte-identical
-reproduction is not yet verified for SVGA. Use `SOURCE_DATE_EPOCH=1790121600`
-and compare against the seed7 hash in [QUALIFICATION.md](QUALIFICATION.md)
-when reproducing it.
+The current protocol 1.4 image was built from `2dea6a1` with SEED overridden
+to 13. It passes all four timing corners, exact-pixel hardware diagnostics,
+HDMI audio and the MiSTer-GemRB AR4000 workload. The project now pins that
+seed without changing RTL, clocks or constraints. Use
+`SOURCE_DATE_EPOCH=1790121600` and compare against the seed-13 hash in
+[QUALIFICATION.md](QUALIFICATION.md) when reproducing it.
 
 ```sh
-git checkout --detach 4cd38a7207e74771ca94351c6d7b94d307c69211
 SOURCE_DATE_EPOCH=1790121600 quartus_sh --flow compile Noodles
 quartus_sta -t tools/report_timing.tcl
 quartus_sta -t tools/report_multicorner.tcl

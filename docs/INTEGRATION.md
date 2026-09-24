@@ -12,15 +12,16 @@ Current source renders 800x600 with a 3200-byte pitch (SURF-006), retaining
 the 100MHz GPU, 4:3 aspect ratio and existing buffer addresses. Each buffer
 uses 1920000 bytes and still fits its reserved 2MiB slot. The HDMI mode is
 independent: MiSTer's scaler scales this framebuffer to its configured output.
-Seed7 passes all four timing corners and the user accepted its visible
-hardware run. Its RBF SHA-256 is
-`a020e304aa6903e06e55c2efdba15d1513fb3aa4db9494840b6028a3ba43a47a`.
-It was built from `37d21c9` with only SEED changed to 7, pinned in source
-`4cd38a7207e74771ca94351c6d7b94d307c69211`. Independent clean-rebuild verification was waived, not
-completed. See [QUALIFICATION.md](QUALIFICATION.md) for provenance and results.
+Seed 13 passes all four timing corners and the protocol 1.4 core passed
+exact-pixel hardware diagnostics, HDMI audio and the MiSTer-GemRB AR4000
+workload. Its RBF SHA-256 is
+`39c2efa8b08164eb3daad2d5b62ea6961152727b1f92886f5c4a329d527e008f`.
+It was built from `2dea6a1` with only SEED changed to 13; the default QSF now
+pins that setting. See [QUALIFICATION.md](QUALIFICATION.md) for provenance
+and results.
 
 Build the host library/tools from the same source as the loaded core.
-Geometry remains compile-time in FPGA logic, but protocol 1.0 reports and
+Geometry remains compile-time in FPGA logic, but protocol 1.4 reports and
 verifies the fixed 800x600 values at attachment. The fallback 640x480 image
 has no protocol block and must use its preserved legacy tools.
 
@@ -237,7 +238,8 @@ draw-command layouts. Preserve the older 640x480 image and its matching
 stage-2A tools as the recovery fallback while later stages add managed
 surfaces and the drawing operations required by GemRB.
 
-There is currently no SDL renderer, primitive or scaling API. Source-over
+This repository does not ship an SDL renderer or scaling API; MiSTer-GemRB
+has validated an external SDL2 renderer against this interface. Source-over
 blending is available as BLIT_BLEND; batched draws add RGBA tint, mirroring,
 SDL's standard modes and composed factor modes. Protocol 1.4 adds ordered
 constant-source blended rectangles through BLEND_FILL. The render target is

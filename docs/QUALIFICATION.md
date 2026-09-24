@@ -8,12 +8,71 @@ from. The build procedure itself is in [BUILD.md](BUILD.md).
 
 | # | Date | Build | Seed | RBF SHA-256 | Hardware status |
 |---|---|---|---:|---|---|
-| 4 | 2026-09-23 | **Current:** 800x600 at 100MHz, four-corner timing pass | 7 | `a020e304…43a47a` | User visually accepted; independent reproduction waived |
+| 5 | 2026-09-24 | **Current:** protocol 1.4, 800x600 at 100MHz, four-corner timing pass | 13 | `39c2efa8…7e008f` | Exact pixels, HDMI audio and MiSTer-GemRB accepted |
+| 4 | 2026-09-23 | Previous protocol 1.0 800x600 build, four-corner timing pass | 7 | `a020e304…43a47a` | User visually accepted; independent reproduction waived |
 | 3 | 2026-09-23 | 800x600 candidate, source `37d21c9`; cold-corner setup failure | 5 | `65ca7861…eb5587` | Diagnostic hardware run only; not qualified |
 | 2 | 2026-09-23 | Recovery fallback: 640x480, shared 100MHz clock, registered write ingress and slot enables | 5 | `b76fb924…247b8d` | Accepted; clean-commit reproduction verified |
 | 1 | 2026-09-22 | Historical: SPRITE_BATCH engine, 64-bit DDRAM path, PRESENT retirement-acknowledgement fix | 1 | `25f9d3a1…edba93` | Accepted -- see below |
 
-## Current SVGA build (4)
+## Current protocol 1.4 seed-13 build (5)
+
+The accepted RBF was built from source
+`2dea6a1b0a5a536bba8d497fda2b5480c47600fe` with only the fitter SEED
+overridden to 13. `Noodles.qsf` now pins seed 13 without changing RTL,
+clocks, constraints, thread count or register-packing effort. The build used
+Quartus Prime Lite 17.0.2 Build 602, device `5CSEBA6U23I7`, 16 fitter
+threads, MEDIUM register packing and `SOURCE_DATE_EPOCH=1790121600`. Its RBF
+SHA-256 is
+`39c2efa8b08164eb3daad2d5b62ea6961152727b1f92886f5c4a329d527e008f`.
+
+Three isolated clean builds held source, epoch and settings constant while
+changing only the seed. Seed 13 reproduced the independent prepublication
+fit byte for byte and was the only seed to pass every timing corner:
+
+| Seed | Slow -40C setup | Worst hold | Four-corner result | RBF SHA-256 |
+|---:|---:|---:|---|---|
+| 5 | -0.064ns | +0.080ns | FAIL | `39c0c66985dc7cbe7b1e440f086fcbeec146a8c32eaf6941be109373116faee2` |
+| 7 | -0.009ns | +0.080ns | FAIL | `e3c7d5dac7f807d5e57b82f2b6d93b9432d1dfd222adc6c00ad450f5729669f5` |
+| 13 | +0.250ns | +0.108ns | PASS | `39c2efa8b08164eb3daad2d5b62ea6961152727b1f92886f5c4a329d527e008f` |
+
+Seed 13 per-corner worst slack, in ns:
+
+| Model at 1.1V | Setup | Hold | Core setup | Core hold | Recovery | Removal | Min pulse width |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Slow, +100C | +0.399 | +0.226 | +0.399 | +0.245 | +0.571 | +1.010 | +1.122 |
+| Slow, -40C | +0.250 | +0.112 | +0.250 | +0.146 | +0.559 | +0.950 | +1.122 |
+| Fast, +100C | +3.154 | +0.131 | +4.241 | +0.131 | +5.070 | +0.498 | +1.122 |
+| Fast, -40C | +3.589 | +0.108 | +5.249 | +0.108 | +5.338 | +0.431 | +1.122 |
+
+The fitted image uses 14,687 ALMs, 18,983 registers, 367,668 block-memory
+bits, 77 RAM blocks and 60 DSP blocks. All recovery, removal and pulse-width
+checks pass. The same twelve framework constraint warnings remain covered by
+the audit later in this document.
+
+The image was deployed as `Noodles_blend_fill_seed13.rbf` and its upload was
+hash-verified. The live identity reported protocol `0x00010004`, capability
+mask `0x000001fe`, 800x600 geometry and 3200-byte pitch. Hardware readback was
+bit-exact for 10 existing blend cases covering 24,671 pixels, seven
+constant-source blended fills covering 10,607 pixels, and 12 ordered batch
+rounds containing 576 draws and 270,574 checked pixels. Clipping and pixels
+surrounding every blended fill remained unchanged.
+
+A deterministic 384,000-byte 48 kHz stereo S16 tone was consumed completely
+through `/dev/MrAudio`, and the user heard it over HDMI. MiSTer-GemRB source
+`7eb7efd` passed its managed- and default-target exact-pixel diagnostic with
+hash `64d5728e`, drained a second tone through SDL's `mister` audio driver and
+played audible menu music. In the Throne of Bhaal AR4000 workload, hardware
+blended fills reduced comparable command-queue time from 45.6-47.7ms to
+24.1-26.5ms per frame with zero CPU blended fills, readbacks or blended-fill
+stalls. Settled combat reached 13.93fps, and the run reached a 19.8fps
+game-over video without a renderer fault.
+
+The first accepted artifact came from the clean seed comparison rather than
+the subsequently pinned QSF revision. The current qualification cycle will
+record an exact clean build of the pinned revision below before calling that
+source-level reproduction complete.
+
+## Previous protocol 1.0 SVGA build (4)
 
 The seed7 RBF from the additional seed comparison below was uploaded as
 `Noodles_svga_seed7.rbf`, verified by FTP readback and loaded with matching
@@ -30,8 +89,9 @@ All four timing corners pass as recorded below. An exact online pinned
 revision has not been independently rebuilt to prove a byte-identical RBF;
 do not confuse the verified 640x480 reproduction with this SVGA build.
 
-The SVGA seed5 diagnostic and accepted 640x480 image remain preserved.
-Seed7 is the loaded standard image; a runtime resolution switcher is deferred.
+The SVGA seed5 diagnostic and accepted 640x480 image remain preserved. Seed 7
+was the standard image until the protocol 1.4 seed-13 build superseded it; a
+runtime resolution switcher remains deferred.
 
 Hardware measurements using the matching SVGA tool:
 
@@ -142,7 +202,7 @@ the diagnostic image remained loaded after that run, until seed7 superseded it.
 ## Accepted 640x480 recovery build (2)
 
 This remains the accepted recovery fallback. Current source targets 800x600
-with a 3200-byte pitch and seed7, qualified separately above. Do not pair
+with a 3200-byte pitch and seed 13, qualified separately above. Do not pair
 the new host tools with this 640x480 image.
 
 Quartus Prime Lite 17.0.2 Build 602, Cyclone V `5CSEBA6U23I7`,
