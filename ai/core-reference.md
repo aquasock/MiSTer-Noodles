@@ -102,6 +102,8 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 | How do I pack an R,G,B color into SOLID_FILL's color field? | BLIT component records | BLIT-004 |
 | Why doesn't the engine have a third (noise-fill) op? | BLIT component records | BLIT-005 |
 | How do I composite a sprite over a background without a bounding box? | BLIT component records | BLIT-006 |
+| How does alpha blending work, and what exact arithmetic does it use? | BLIT component records | BLIT-007 |
+| Which protocol version and capability bits does the core publish? | LINK component records | LINK-012 |
 | What's the real host-side API for pushing commands, and does it tell me when a draw finished? | LINK component records | LINK-004 |
 | How does the host know a specific command has actually finished, not just been dispatched? | LINK component records | LINK-005 |
 | How does real image/asset data (not a SOLID_FILL rect) get into a surface? | LINK component records | LINK-006 |
@@ -142,6 +144,8 @@ DDR-005: "A shared read-port mux must select on a REQ+WAIT-spanning signal (link
 BLIT-004: "SOLID_FILL's color field is packed R | (G<<8) | (B<<16) -- R in the LOW byte -- matching FB_FORMAT's RGB memory order, not the 0xRRGGBB hex-literal reading"
 BLIT-005: "BLIT-001's milestone met with 2 ops (SOLID_FILL, BLIT_COPY) -- the Menu-static noise-fill op dropped after abandoning the menu-integration concept, not deferred"
 BLIT-006: "BLIT_COPY_KEY (opcode 3): colorkey transparency for sprite compositing -- skips source pixels matching a caller-chosen key, same blit_copy.sv engine as plain BLIT_COPY"
+BLIT-007: "BLIT_BLEND (opcode 7): straight-alpha source-over with 8-bit alpha modulation in word 5, bit-exact to SDL 2.32.10's generic truncating /255 blend path"
+LINK-012: "Protocol 1.1 (0x00010001) adds capability bit 7 for BLIT_BLEND; minor revisions are additive; supersedes LINK-011's fixed version/mask values only"
 LINK-002: "64-slot ring buffer at phys 0x30020000 (header: write_ptr +0, read_ptr +8) / 0x30021000 (slots), reusing CMDQ-001's 32-byte slot format"
 LINK-003: "link_ring.sv polls write_ptr only while CMDQ is idle (cmd_ready), fetches via 8 sequential reads, dispatches to CMDQ, writes back read_ptr"
 LINK-004: "lib/noodles_link.{h,c} is the real host-side API (open/close, noodles_rgb, push_command/solid_fill/blit_copy) -- fire-and-forget, no completion signal by deliberate choice"
@@ -603,10 +607,29 @@ OUT-005: "OUT-004's single-fresh-vblank-edge PRESENT margin is not reliably suff
   kind: INTERFACE
   component_id: LINK
   title: "Live protocol identity and reset-disarming host sessions"
-  status: DECIDED
+  status: SUPERSEDED
   decided_date: 2026-09-23
   decision: "Protocol 1.0 reserves little-endian 32-bit control words at 0x30020010 through 0x30020040. FPGA-owned words publish magic 0x4e444c53 at +0x10, protocol 0x00010000 at +0x14, opcode capability mask 0x0000007e at +0x18, width:height 800:600 at +0x1c and pitch 3200 at +0x20. Host-owned request token low/high words are +0x28/+0x2c and request sequence is +0x30; FPGA response token low/high words are +0x38/+0x3c and response sequence is +0x40. Reset disables link_ring, clears request/response sequences, initializes ring pointers and publishes magic last. A nonzero 64-bit token with claim sequence 0x434c414d is accepted only after ring initialization; exact token/sequence echo enables the ring. While active, only changed nonzero non-claim sequences carrying the claimed token are echoed. Request sequence zero disarms the session and clears the response sequence."
   consequence: "Static DDR3 contents cannot identify a live instance because DDR3 survives FPGA reload. SDK 0.2 noodles_link_open validates the fixed protocol/capabilities/geometry and requires the live claim; a reached fence is reported complete only after a subsequent challenge echo. Reset clears and disarms the response so a stale handle fails with ESTALE instead of trusting the reset fence. The ring cannot consume host commands until a verified claim and cannot be rearmed by a stale post-reset ping. Cooperative flock and the dirty marker remain separate non-security mechanisms. noodles_link_open_legacy remains an explicitly unverified API for preserved pre-protocol cores and is not accepted on a detected protocol-1.0 core. Draw opcodes, ring slots, fence encoding, framebuffer addresses and clocks are unchanged."
+
+- record_id: BLIT-007
+  kind: INTERFACE
+  component_id: BLIT
+  title: "BLIT_BLEND (opcode 7): straight-alpha source-over blending with per-command alpha modulation"
+  status: DECIDED
+  decided_date: 2026-09-23
+  decision: "Opcode 7 uses BLIT_COPY's fields (dst_addr word 1, dst_pitch word 2, width word 3, height word 4, src_addr word 6, src_pitch word 7) and carries an 8-bit alpha modulation m in word 5 bits 7:0, with word 5 bits 31:8 zero. Pixels are four bytes at increasing addresses R, G, B, A, i.e. bits 7:0 R, 15:8 G, 23:16 B, 31:24 A, with A being straight (non-premultiplied) coverage. Every division below is truncating integer division, D(x) = floor(x / 255), matching SDL 2.32.10's generic SDL_COPY_BLEND path (SDL_blit_auto.c and SDL_blit_slow.c with SDL_COPY_MODULATE_ALPHA). For each pixel: a = D(srcA * m); for each colour channel c' = D(srcC * a); outC = c' + D((255 - a) * dstC); outA = a + D((255 - a) * dstA). The source and destination rectangles must not overlap. A pixel whose effective alpha a is zero leaves the destination unchanged, which the formula itself guarantees, and the engine may skip that pixel's write."
+  consequence: "Blending is bit-exact against a C reference model of this formula, so SDL2 ports get SDL's own generic-path arithmetic; SDL's unmodulated BlitRGBtoRGBPixelAlpha fast path uses a >>8 approximation and may differ from it by rounding. a = 255 reproduces a straight copy including outA = 255, and m = 255 disables modulation exactly. Hosts must now initialize the A byte meaningfully for blended sources; noodles_rgb's zero high byte is fully transparent under BLIT_BLEND, while BLIT_COPY, BLIT_COPY_KEY and scanout are unaffected. The blend reads the destination, so its DDR3 traffic per pixel exceeds a copy's. Additive, modulate and multiply modes, colour modulation, blending inside SPRITE_BATCH and destination-read skipping are not part of this record."
+
+- record_id: LINK-012
+  kind: INTERFACE
+  component_id: LINK
+  title: "Protocol 1.1 adds the BLIT_BLEND capability"
+  status: DECIDED
+  decided_date: 2026-09-23
+  decision: "A core implementing BLIT-007 publishes protocol 0x00010001 and opcode capability mask 0x000000fe, where bit N advertises opcode N and bit 7 is BLIT_BLEND. Every other LINK-011 control word, address, claim, challenge and disarm rule is unchanged. Minor protocol revisions are additive: a host accepting protocol major 1 requires minor at least 0, requires capability bits 1 through 6, and enables optional operations only when their capability bit is set."
+  consequence: "The SDK attaches to protocol 1.0 and 1.1 cores alike and fails a blend request on a core without capability bit 7 with ENOTSUP before publishing anything. A future major version, not a minor one, is needed for any incompatible control-block change."
+  supersedes: "LINK-011"
 
 ```yaml
 - record_id: "<COMPONENT>-<NNN>"
