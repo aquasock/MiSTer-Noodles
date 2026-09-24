@@ -2514,3 +2514,71 @@ Rebuild with the 3-seed workflow using both entry 76's RTL fix and this SDC fix 
 - [ ] Passed
 
 ---
+
+## 78 COMMIT Unreleased c3d04ab 2026-09-23T17:01:01-07:00
+
+#### Coming From:
+
+Unreleased 01c8dd1
+
+#### Purpose:
+
+Harden the baseline through honest timing constraints, registered FIFO-head staging, DDRAM payload isolation, a shared core/SDRAM clock and host descriptor ownership.
+
+#### Outcome:
+
+The accepted registered-ingress seed5 is loaded on the MiSTer, with RBF SHA256 b76fb924c43cb25b9c516e216f247dacb576ec72ab6ef408b1a275d9bc247b8d verified by FTP readback. Core setup/hold is +0.541/+0.252ns; seeds 4/6 also pass at +0.319/+0.071ns setup. All reported timing categories have zero TNS. Ingress-to-queue margins exceed 4ns and registered slot-enable margins exceed 2ns across all three seeds. These are whole-design improvements over the unified-clock baseline -0.147/-0.126/-0.082ns. The shared write ingress reserves capacity within the existing sixteen-write limit, delays first issue one cycle, preserves full throughput and ordered idle/fence retirement, and grants paired writes priority without falsely acknowledging the scalar lane. Its regression covers capacity, 256 consecutive writes, backpressure, wrap, reset and read contention. On hardware, two short sprite runs and the user-observed 60-second run measured 15.1fps (905 frames in the long run); the user reported perfect visual output. Key-checker, clear and present checks completed near 60fps; uncapped throughput samples were 76.18/80.11/81.16 Mpixel/s, without a consistent regression. Earlier unified seed6 was diagnostic only and has been superseded by this accepted seed5. Host descriptor ownership now returns EAGAIN before overwriting in-flight tables, including raw batch commands and overlapping uploads, with wrap-safe fences and publication barriers; the demo relies on library exclusion rather than its own safety waits. Host tests, ARM/native builds and RTL regressions pass. Concurrent producers, abandoned work across reopen and reset recovery remain outside the host contract.
+
+Core and SDRAM now share the PLL's sole 100MHz output, with HDMI/audio unchanged. Both sdram_cdc instances, the obsolete module/test target and the secondary reset bridge were removed; synchronous request/completion handshakes retain the existing SDRAM read and page-flush protocols. The single-clock page buffer retains synchronous read latency and RAM inference. All SDRAM mocks share the core clock; zero-length, multi-word/page, controller-busy and reset-during-operation cases are covered. Production sprite routing remains DDR3. The earlier SDRAM integration test used a 5:1 clock ratio, so its cycle count cannot be compared directly to the new equal-clock test. Production sprite_batch still takes 295809 simulation cycles. All build rounds observed the three-concurrent-build and twenty-minute limits.
+
+Entry 77's claim that f2sdram and its safe terminators are dead tie-offs was incorrect: sys/sys_top.v connects the core's DDRAM port to sysmem_lite ram1, and sys/f2sdram_safe_terminator.sv explicitly passes live traffic and completes transactions during reset. The broad exceptions have been removed. The prior three builds reported setup slack of -0.509/-0.213/-0.174ns with those exceptions; those numbers do not establish full timing coverage. The FIFO-head pipeline now separates address/data muxing from key/alignment decisions, supports simultaneous consumption/refill, and waits for staged writes to drain before completion. Directed backpressure and reset regressions pass, including 64 consecutive paired writes without bubbles. A retained placement's detailed report identifies a real bridge-ready to ddram_adapter read-selection/address-mux to bridge-command path, not dead internal bridge logic. The user approved extending the fix to select DDRAM payload independently of busy while retaining busy-gated command strobes and queue advancement. Payload-independence checks and the full simulation suite pass after this change. FIFO-only seed 4/5/6 builds reported clk_sys setup +0.003/-0.223/-0.155ns; seed 4 passed all reported timing categories with minimum hold +0.245ns, but that marginal pass does not represent the later adapter change. Combined builds reported setup -0.503/-0.954/-0.269ns and clk_sys hold +0.249/+0.248/+0.245ns. The ten worst reported bridge-to-bridge paths passed in every combined build (+0.241/+0.494/+0.212ns), while overall setup failures now end in the adapter write queue, driven by blit col or wr_tail. All six compilations completed within the twenty-minute limit, with no more than three simultaneous builds. Those six builds predate clock unification; their unmatched SDRAM CDC constraints have since been removed with the obsolete crossing logic. Framework RTL is unchanged.
+
+#### Next Steps:
+
+The user authorized publication and reproduction verification. Source c3d04ab was pushed with seed5, 16 fitter threads and MEDIUM packing; sys/build_id.tcl accepts SOURCE_DATE_EPOCH while preserving legacy behavior when unset. A fresh clone fetched from GitHub and checked out at c3d04ab68dd1d2f14ba7bd858f6cfe98c1508e86 rebuilt in 4m19s with SOURCE_DATE_EPOCH=1790121600 and produced an RBF byte-identical to the hardware-accepted seed5, SHA256 b76fb924c43cb25b9c516e216f247dacb576ec72ab6ef408b1a275d9bc247b8d. Compile, detailed timing verification and all reported timing categories passed. Qualification documentation records the exact recipe; twelve framework constraint warnings and single-corner coverage remain limitations. The user selected GemRB as the first accelerated-game target through an SDL2 renderer, initially 640x480 with a small SDL bring-up program and the GPU staying at 100MHz; this next direction is agreed but not implemented. Keep the GPU command interface independent of SDL for later consumers.
+
+#### Files Modified:
+
+- Noodles.sdc
+- Noodles.sv
+- files.qip
+- rtl/blit_copy64.sv
+- rtl/ddram_adapter.sv
+- rtl/pll.v
+- rtl/pll.qip
+- rtl/pll/pll_0002.v
+- rtl/sdram_adapter.sv
+- rtl/sdram_loader.sv
+- rtl/sdram_page_buffer.sv
+- rtl/sdram_cdc.sv (deleted)
+- Makefile
+- sim/tb_blit_copy64_pipeline.cpp
+- sim/engine_copy64_dut.sv
+- sim/tb_blit_copy64.cpp
+- sim/sdram_adapter_dut.sv
+- sim/sdram_loader_dut.sv
+- sim/engine_sprite_batch_sdram_dut.sv
+- sim/tb_sdram_adapter.cpp
+- sim/tb_sdram_loader.cpp
+- sim/tb_sprite_batch_sdram.cpp
+- sim/sdram_cdc_dut.sv (deleted)
+- sim/tb_sdram_cdc.cpp (deleted)
+- tools/report_timing.tcl
+- lib/noodles_link.c
+- lib/noodles_link.h
+- tools/stress_demo.c
+- tools/sprite_demo.c
+- sim/test_noodles_link.c
+- sim/tb_ddram_ingress.cpp
+- README.md
+- Noodles.qsf
+- sys/build_id.tcl
+- docs/BUILD.md
+- docs/QUALIFICATION.md
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
