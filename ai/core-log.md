@@ -2716,3 +2716,36 @@ Seed7 is the selected timing-qualified SVGA candidate. Hardware qualification an
 - [ ] Passed
 
 ---
+
+## 83 COMMIT Unreleased ??? 2026-09-23T19:17:59-07:00
+
+#### Coming From:
+
+Unreleased 37d21c9
+
+#### Purpose:
+
+Qualify SVGA seed7 on hardware and pin its settings for clean online-source reproduction.
+
+#### Outcome:
+
+The user approved hardware qualification of the four-corner-passing seed7 followed by pinning and reproduction verification. Upload the candidate under its own filename with the matching SVGA host tool, verify FTP readback hashes and preserve the older images. Keep 800x600 and 100MHz as the standard, with runtime resolution switching deferred.
+
+#### Next Steps:
+
+Run the fixed sprite workload, repeated uncapped throughput, clear, key-checker and present checks plus a sixty-second visible sprite run. Obtain the user's visual result rather than assuming acceptance from command success. Pin only the fitter seed, publish the source and build an independent clean clone from that revision with the fixed date and twenty-minute limit. Compare its RBF hash to the tested candidate and rerun detailed and four-corner timing before recording the final qualification state.
+
+#### Files Modified:
+
+- Noodles.qsf
+- README.md
+- docs/BUILD.md
+- docs/INTEGRATION.md
+- docs/QUALIFICATION.md
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
