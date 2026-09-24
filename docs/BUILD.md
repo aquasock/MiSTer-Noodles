@@ -57,6 +57,7 @@ For the accepted 2026-09-23 build, use a clean checkout without prior Quartus
 databases and run:
 
 ```sh
+git checkout --detach c3d04ab68dd1d2f14ba7bd858f6cfe98c1508e86
 SOURCE_DATE_EPOCH=1790121600 quartus_sh --flow compile Noodles
 quartus_sta -t tools/report_timing.tcl
 sha256sum output_files/Noodles.rbf

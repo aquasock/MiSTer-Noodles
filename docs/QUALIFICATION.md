@@ -8,7 +8,7 @@ from. The build procedure itself is in [BUILD.md](BUILD.md).
 
 | # | Date | Build | Seed | RBF SHA-256 | Hardware status |
 |---|---|---|---:|---|---|
-| 2 | 2026-09-23 | **Current:** shared 100MHz clock, registered write ingress and slot enables, honest DDR3 constraints | 5 | `b76fb924…247b8d` | Accepted; clean-commit reproduction pending |
+| 2 | 2026-09-23 | **Current:** shared 100MHz clock, registered write ingress and slot enables, honest DDR3 constraints | 5 | `b76fb924…247b8d` | Accepted; clean-commit reproduction verified |
 | 1 | 2026-09-22 | Historical: SPRITE_BATCH engine, 64-bit DDRAM path, PRESENT retirement-acknowledgement fix | 1 | `25f9d3a1…edba93` | Accepted -- see below |
 
 ## Current build (2)
@@ -33,10 +33,15 @@ throughput samples were 76.18, 80.11 and 81.16 Mpixel/s. No command failures
 or timeouts were reported. These are workload checks, not exhaustive pixel
 readback validation.
 
-The tested bitstream came from an isolated seed-5 source snapshot. Publication
-and an independent clean rebuild from the online commit are in progress;
-bit-for-bit reproduction of this revision is not yet claimed. The reproduction
-command pins the date using `SOURCE_DATE_EPOCH`; see [BUILD.md](BUILD.md).
+**Reproducibility verified.** A fresh clone fetched from GitHub, checked out
+at source commit `c3d04ab68dd1d2f14ba7bd858f6cfe98c1508e86`, was built without
+prior Quartus databases using `SOURCE_DATE_EPOCH=1790121600`. The build
+completed in 4m19s on 2026-09-23 and produced a byte-for-byte identical RBF
+to the hardware-accepted seed-5 snapshot (SHA-256 above). The full compile
+and detailed timing script succeeded, and all reported timing categories
+have zero TNS. This verifies that exact revision and toolchain/settings,
+not arbitrary later revisions or tool versions.
+See [BUILD.md](BUILD.md) for the reproduction command.
 
 ## Historical build (1)
 
