@@ -3050,3 +3050,34 @@ None.
 - [x] Passed
 
 ---
+
+## 92 COMMIT Unreleased ??? 2026-09-23T21:06:34-07:00
+
+#### Coming From:
+
+Unreleased 7e92feb
+
+#### Purpose:
+
+Remove the managed texture cache's periodic redundant fence-verification stall.
+
+#### Outcome:
+
+Analyze the accepted 60fps HDMI capture and add a wrap-safe live-verified completion watermark to the SDK so a later verified fence authorizes earlier surface and cache reuse without issuing another hardware liveness challenge. The capture contains constant 60fps timestamps, while low-motion frames recur every 32 to 33 frames, exactly matching the demo's 2-pixel-per-frame camera crossing a 64-pixel tile boundary and admitting a new 11-tile column. Preserve reset detection by checking session response state on every fallible operation, and require a fresh challenge only when the requested fence lies beyond the verified watermark. No RTL or RBF change is planned.
+
+#### Next Steps:
+
+Add host regression coverage for redundant-wait elimination, fence wraparound and reset loss, deploy the updated ARM demo, and repeat the 60-second HDMI capture workload to compare visible duplicate cadence and measured frame rate.
+
+#### Files Modified:
+
+- lib/noodles_link.c
+- lib/noodles_link_internal.h
+- sim/test_noodles_sdk.c
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
