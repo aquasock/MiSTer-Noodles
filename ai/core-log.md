@@ -85,3 +85,50 @@ Keep the accepted `6b9ff63` image as the timing-qualified fallback while the ble
 - [x] Passed
 
 ---
+
+## 3 COMMIT Unreleased ??? 2026-09-23T22:25:51-07:00
+
+#### Coming From:
+
+Unreleased 1d4957f
+
+#### Purpose:
+
+Add per-descriptor blend, mirror and colour/alpha modulation to SPRITE_BATCH and close the write-port timing violation left by entry 2.
+
+#### Outcome:
+
+Planned, not yet implemented. A new reference record will define sprite descriptor flag bits for straight-alpha blending, horizontal mirroring and vertical mirroring, with the colour-key word reinterpreted as an RGBA modulation for flagged descriptors, and the arithmetic of SDL 2.32.10's generic path for colour and alpha modulation with and without blending. A protocol minor revision will advertise the new descriptor semantics without changing the command layout. The blend engine will gain a colour-modulation stage, reversed source walking for vertical mirroring and burst-reversed pixel placement for horizontal mirroring, and `sprite_batch` will dispatch flagged descriptors to it, waiting for the DDR3 adapter to drain between descriptors so overlapping draws read completed results, while unflagged descriptors keep the accepted `blit_copy64` path. Batch-launched blends will not advance the host fence individually. The timing fix will give each write client a ready signal derived only from the adapter's registered queue space and its own requests, removing the combinational path from one engine's request logic into another engine's ready. The SDK will add flagged surface and texture-cache batch draws with mirror-aware clipping and will gate them on the protocol revision.
+
+#### Next Steps:
+
+Extend the exhaustive datapath and randomized engine simulations to cover modulation, both mirror axes, keyed and flagged batches and overlapping batched draws, and pass host, sanitizer and full simulation regressions. Build three seeds through the four-corner gate, deploy with hash readback, verify flagged draws on hardware against the C model, measure batch throughput, confirm existing benchmarks, and obtain user visual acceptance of a mirrored and tinted demo.
+
+#### Files Modified:
+
+- Noodles.sv
+- rtl/ddram_adapter.sv
+- rtl/blend_px.sv
+- rtl/blend_walk.sv
+- rtl/blit_blend.sv
+- rtl/sprite_batch.sv
+- rtl/link_control.sv
+- sim/blend_ref.h
+- sim/tb_blend_px.cpp
+- sim/tb_blit_blend.cpp
+- sim/tb_sprite_batch.cpp
+- lib/noodles_link.c
+- lib/noodles_link.h
+- lib/noodles_surface.c
+- lib/noodles_surface.h
+- sim/test_noodles_sdk.c
+- tools/blend_demo.c
+- docs/INTEGRATION.md
+- docs/SDK.md
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
