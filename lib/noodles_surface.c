@@ -21,6 +21,8 @@ struct texture_slot {
 struct noodles_texture_cache {
     noodles_link_t *link;
     noodles_surface_t *atlas;
+    void *atlas_map;
+    size_t atlas_map_span;
     struct texture_slot *slots;
     uint32_t cell_width, cell_height, columns, rows, capacity;
     uint64_t age;
@@ -437,6 +439,16 @@ int noodles_texture_cache_create(noodles_link_t *link, uint32_t cell_width,
     cache->columns = columns;
     cache->rows = rows;
     cache->capacity = (uint32_t)capacity;
+    cache->atlas_map_span = cache->atlas->size;
+    cache->atlas_map = mmap(NULL, cache->atlas_map_span, PROT_WRITE, MAP_SHARED,
+                            link->fd, cache->atlas->address);
+    if (cache->atlas_map == MAP_FAILED) {
+        int saved = errno;
+        (void)noodles_surface_destroy(cache->atlas);
+        free(cache->slots);
+        free(cache);
+        return fail(saved);
+    }
     *out = cache;
     return 0;
 }
@@ -473,12 +485,16 @@ int noodles_texture_cache_upload(noodles_texture_cache_t *cache, uint64_t key,
         noodles_link_wait(cache->link, slot->last_fence, timeout_ms) != 0)
         return -1;
 
-    noodles_surface_t view;
-    cache_slot_view(cache, (uint32_t)index, &view);
-    view.used = 0;
-    noodles_rect_t rect = {0, 0, cache->cell_width, cache->cell_height};
-    if (noodles_surface_update(&view, &rect, pixels, source_pitch, timeout_ms) != 0)
-        return -1;
+    uint32_t slot_x = ((uint32_t)index % cache->columns) * cache->cell_width;
+    uint32_t slot_y = ((uint32_t)index / cache->columns) * cache->cell_height;
+    size_t row_bytes = (size_t)cache->cell_width * 4;
+    for (uint32_t y = 0; y < cache->cell_height; ++y) {
+        void *destination = (char *)cache->atlas_map +
+            (size_t)(slot_y + y) * cache->atlas->pitch + (size_t)slot_x * 4;
+        const void *source = (const char *)pixels + (size_t)y * source_pitch;
+        memcpy(destination, source, row_bytes);
+    }
+    __sync_synchronize();
     *slot = (struct texture_slot){key, ++cache->age, 0, 1, 0};
     return 0;
 }
@@ -525,6 +541,7 @@ int noodles_texture_cache_destroy(noodles_texture_cache_t *cache, uint32_t timeo
             return -1;
         cache->slots[i].used = 0;
     }
+    if (munmap(cache->atlas_map, cache->atlas_map_span) != 0) return -1;
     if (noodles_surface_destroy(cache->atlas) != 0) return -1;
     free(cache->slots);
     free(cache);
