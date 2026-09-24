@@ -3142,3 +3142,36 @@ None.
 - [ ] Passed
 
 ---
+
+## 95 COMMIT Unreleased ??? 2026-09-23T21:23:06-07:00
+
+#### Coming From:
+
+Unreleased 7e9d389
+
+#### Purpose:
+
+Recover the entry 94 uncapped blit-throughput loss by reducing SDK fence-wait and liveness-ping latency on the host.
+
+#### Outcome:
+
+Planned, not yet implemented. Analysis supersedes entry 94's RTL-first hypothesis: link_control issues one 32-bit DDR3 read per 1024 idle-bus cycles, far below the observed loss, while `blit-bench` submits one 1048576-pixel batch and waits for its completion before submitting the next, so host wake-up latency is part of every measured iteration. The pre-SDK tool at `4cd38a7` polled the raw fence every 0.1ms, whereas the SDK's `pause_until` sleeps 1ms per poll and, in verified mode, `noodles_link_poll` issues its liveness ping only after observing the raw fence and then sleeps at least one further 1ms period before reading a response the core returns within microseconds. Iteration time fits this model: about 13.29ms at 78.9 Mpixel/s for the old tool, 14.00ms at 74.89 Mpixel/s for SDK 0.2 without a ping, and 15.30ms at 68.55 Mpixel/s for verified Stage 2B. The planned change is host-only: add submit-to-raw-fence and raw-to-verified timing to `blit-bench` as a diagnostic, then make the SDK check for the ping response immediately with a short bounded spin and replace the flat 1ms sleep with a short-first backoff capped at 1ms, preserving timeouts, reset/ESTALE detection and the verified-completion watermark. No RTL or RBF change is planned.
+
+#### Next Steps:
+
+Run the diagnostic on the accepted seed-13 image first; if it does not place the lost time in the host wait, stop and return a revised plan before touching RTL. Otherwise implement the SDK change, pass host regressions including mocked ping, reset and wraparound cases, sanitizers, installed consumer and ARM builds plus the unchanged RTL suite, then deploy with hash readback and run the canonical 64-sprite one-batch 128x128 `blit-bench` three times, targeting roughly 77 to 79 Mpixel/s without errors or timeouts, and re-run the tile-cache demo to confirm the 60.2fps pacing baseline.
+
+#### Files Modified:
+
+- lib/noodles_link.c
+- lib/noodles_link_internal.h
+- sim/test_noodles_sdk.c
+- tools/stress_demo.c
+- docs/SDK.md
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
