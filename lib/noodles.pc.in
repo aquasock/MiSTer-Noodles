@@ -5,6 +5,6 @@ includedir=${prefix}/include
 
 Name: noodles
 Description: MiSTer Noodles host SDK (explicit legacy SVGA transport)
-Version: 0.1.0
+Version: 0.2.0
 Libs: -L${libdir} -lnoodles
 Cflags: -I${includedir}

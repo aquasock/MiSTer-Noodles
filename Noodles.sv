@@ -189,11 +189,15 @@ wire         link_cmd_valid, link_cmd_ready;
 wire [255:0] link_cmd_data;
 wire [31:0]  link_wr_addr, link_wr_data, link_rd_addr, link_rd_data;
 wire         link_wr_en, link_wr_ready, link_rd_en, link_rd_active, link_rd_ready, link_rd_valid;
+wire         link_initialized, fence_initialized, link_session_active;
+wire         adapter_idle;
 
 link_ring link_ring
 (
 	.clk      (clk_sys),
 	.reset    (reset),
+	.enable   (link_session_active),
+	.initialized(link_initialized),
 	.rd_addr  (link_rd_addr),
 	.rd_en    (link_rd_en),
 	.rd_active(link_rd_active),
@@ -207,6 +211,32 @@ link_ring link_ring
 	.cmd_data (link_cmd_data),
 	.cmd_valid(link_cmd_valid),
 	.cmd_ready(link_cmd_ready)
+);
+
+// LINK-011: live identity and session challenge. Static metadata is useful
+// only after this block echoes a host-selected token; DDR3 itself survives
+// reset and therefore cannot prove that this core instance is alive.
+wire [31:0] control_wr_addr, control_wr_data, control_rd_addr, control_rd_data;
+wire        control_wr_en, control_wr_ready;
+wire        control_rd_en, control_rd_active, control_rd_ready, control_rd_valid;
+
+link_control link_control
+(
+	.clk             (clk_sys),
+	.reset           (reset),
+	.device_initialized(link_initialized && fence_initialized),
+	.bus_available   (link_cmd_ready && !link_rd_active && adapter_idle),
+	.rd_addr         (control_rd_addr),
+	.rd_en           (control_rd_en),
+	.rd_active       (control_rd_active),
+	.rd_ready        (control_rd_ready),
+	.rd_data         (control_rd_data),
+	.rd_valid        (control_rd_valid),
+	.wr_addr         (control_wr_addr),
+	.wr_data         (control_wr_data),
+	.wr_en           (control_wr_en),
+	.wr_ready        (control_wr_ready),
+	.session_active  (link_session_active)
 );
 
 // OUT-004: double-buffer flip. present.sv owns front_sel (which of
@@ -224,6 +254,7 @@ present #(
 (
 	.clk       (clk_sys),
 	.reset     (reset),
+	.initialized(fence_initialized),
 	.fb_vbl    (FB_VBL),
 	.fb_retired(FB_RETIRED),
 	.start     (present_start),
@@ -366,9 +397,8 @@ sprite_batch sprite_batch
 	.wr64_en(batch_wr64_en), .wr64_ready(batch_wr64_ready)
 );
 
-// 4-way priority mux into the DDRAM adapter's write port: blit_copy's copy
-// writes, link_ring's writes (INIT + read_ptr writeback), blit's fill
-// writes, and link_fence's writes (INIT + completion-count publish). None
+// Priority mux into the DDRAM adapter's write port: batch/copy, link_ring,
+// link_control, fill, and link_fence. None
 // can ever be simultaneously active by construction of CMDQ's own
 // single-engine dispatch (blit and blit_copy) and link_ring only writing
 // while idle/finishing a dispatch, so this priority is a tie-breaker, not
@@ -380,16 +410,26 @@ sprite_batch sprite_batch
 wire        wr_sel_batch  = batch_busy;
 wire        wr_sel_copy   = !wr_sel_batch && copy_busy;
 wire        wr_sel_link   = !wr_sel_batch && !wr_sel_copy && link_wr_en;
-wire        wr_sel_engine = !wr_sel_batch && !wr_sel_copy && !wr_sel_link &&
+wire        wr_sel_control = !wr_sel_batch && !wr_sel_copy && !wr_sel_link &&
+                             control_wr_en;
+wire        wr_sel_engine = !wr_sel_batch && !wr_sel_copy && !wr_sel_link && !wr_sel_control &&
                             blit_busy;
-wire        wr_sel_fence  = !wr_sel_batch && !wr_sel_copy && !wr_sel_link && !wr_sel_engine && fence_wr_en;
-wire [31:0] adapter_wr_addr = wr_sel_batch ? batch_wr_addr : wr_sel_copy ? copy_wr_addr : wr_sel_link ? link_wr_addr : wr_sel_engine ? engine_wr_addr : fence_wr_addr;
-wire [31:0] adapter_wr_data = wr_sel_batch ? batch_wr_data : wr_sel_copy ? copy_wr_data : wr_sel_link ? link_wr_data : wr_sel_engine ? engine_wr_data : fence_wr_data;
-wire        adapter_wr_en   = wr_sel_batch ? batch_wr_en : wr_sel_copy ? copy_wr_en   : wr_sel_link ? link_wr_en   : wr_sel_engine ? engine_wr_en   : fence_wr_en;
+wire        wr_sel_fence  = !wr_sel_batch && !wr_sel_copy && !wr_sel_link &&
+                            !wr_sel_control && !wr_sel_engine && fence_wr_en;
+wire [31:0] adapter_wr_addr = wr_sel_batch ? batch_wr_addr : wr_sel_copy ? copy_wr_addr :
+                              wr_sel_link ? link_wr_addr : wr_sel_control ? control_wr_addr :
+                              wr_sel_engine ? engine_wr_addr : fence_wr_addr;
+wire [31:0] adapter_wr_data = wr_sel_batch ? batch_wr_data : wr_sel_copy ? copy_wr_data :
+                              wr_sel_link ? link_wr_data : wr_sel_control ? control_wr_data :
+                              wr_sel_engine ? engine_wr_data : fence_wr_data;
+wire        adapter_wr_en   = wr_sel_batch ? batch_wr_en : wr_sel_copy ? copy_wr_en :
+                              wr_sel_link ? link_wr_en : wr_sel_control ? control_wr_en :
+                              wr_sel_engine ? engine_wr_en : fence_wr_en;
 assign batch_wr_ready  = wr_sel_batch ? adapter_wr_ready : 1'b0;
 wire        adapter_wr_ready;
 assign copy_wr_ready   = wr_sel_copy   ? adapter_wr_ready : 1'b0;
 assign link_wr_ready   = wr_sel_link   ? adapter_wr_ready : 1'b0;
+assign control_wr_ready = wr_sel_control ? adapter_wr_ready : 1'b0;
 assign engine_wr_ready = wr_sel_engine ? adapter_wr_ready : 1'b0;
 assign fence_wr_ready  = wr_sel_fence  ? adapter_wr_ready : 1'b0;
 wire adapter_wr64_en = (wr_sel_engine && engine_wr64_en) ||
@@ -401,8 +441,8 @@ assign batch_wr64_ready = adapter_batch_wr64_en ? adapter_wr64_ready : 1'b0;
 wire [31:0] adapter_wr64_addr = wr_sel_batch ? batch_wr64_addr : engine_wr64_addr;
 wire [63:0] adapter_wr64_data = wr_sel_batch ? batch_wr64_data : engine_wr64_data;
 
-// 2-way priority mux into the DDRAM adapter's read port: blit_copy and
-// link_ring. LINK-003's cmd_ready gating keeps these from ever actually
+// Priority mux into the DDRAM adapter's read port: link_control, link_ring,
+// batch, then blit_copy. LINK-003's cmd_ready gating keeps these from
 // contending (see DDR-003's consequence) -- response data/valid are simply
 // broadcast to both, since only whichever one is actually mid-request will
 // be in a state that reacts to it.
@@ -416,8 +456,9 @@ wire [63:0] adapter_wr64_data = wr_sel_batch ? batch_wr64_data : engine_wr64_dat
 // blit_copy's idle address's bit[2] instead of link's own pinned request
 // address, silently handing link_ring the WRONG half of the 64-bit DDRAM
 // word it had actually asked for.
-wire        rd_sel_link = link_rd_active;
-wire        rd_sel_batch = !rd_sel_link && batch_rd_active;
+wire        rd_sel_control = control_rd_active;
+wire        rd_sel_link = !rd_sel_control && link_rd_active;
+wire        rd_sel_batch = !rd_sel_control && !rd_sel_link && batch_rd_active;
 // Sprite reads remain on the hardware-proven DDR3 burst path. SDR-008
 // removes the SDRAM CDC overhead without changing this routing choice;
 // the optional SDRAM path still performs four 16-bit reads per pair.
@@ -433,24 +474,31 @@ wire        rd_sel_batch64 = rd_sel_batch && batch_rd64_en;
 // drops the moment the loader moves into its WAIT state to await
 // rd64_valid, and if the mux fell through then, adapter_rd64_valid/data
 // would be silently misrouted or dropped for that response.
-wire        rd_sel_loader64 = !rd_sel_link && !rd_sel_batch && loader_rd64_active;
-wire [31:0] adapter_rd_addr = rd_sel_link ? link_rd_addr : rd_sel_batch ? batch_rd_addr : copy_rd_addr;
+wire        rd_sel_loader64 = !rd_sel_control && !rd_sel_link && !rd_sel_batch &&
+                              loader_rd64_active;
+wire [31:0] adapter_rd_addr = rd_sel_control ? control_rd_addr :
+                              rd_sel_link ? link_rd_addr :
+                              rd_sel_batch ? batch_rd_addr : copy_rd_addr;
 wire [31:0] adapter_rd64_addr = rd_sel_batch64 ? batch_rd64_addr : rd_sel_loader64 ? loader_rd64_addr : 32'b0;
 wire [7:0]  adapter_rd64_len = rd_sel_batch64 ? batch_rd64_len : rd_sel_loader64 ? loader_rd64_len : 8'd1;
-wire        adapter_rd_en   = rd_sel_link ? link_rd_en   : (rd_sel_batch ? batch_rd_en : copy_rd_en);
+wire        adapter_rd_en   = rd_sel_control ? control_rd_en :
+                              rd_sel_link ? link_rd_en :
+                              (rd_sel_batch ? batch_rd_en : copy_rd_en);
 wire        adapter_rd64_en = rd_sel_batch64 || rd_sel_loader64;
 wire        adapter_rd_ready, adapter_rd_valid;
 wire [31:0] adapter_rd_data;
 wire        adapter_rd64_ready, adapter_rd64_valid;
 wire [63:0] adapter_rd64_data;
-wire        adapter_idle;
 assign link_rd_ready = rd_sel_link ? adapter_rd_ready : 1'b0;
+assign control_rd_ready = rd_sel_control ? adapter_rd_ready : 1'b0;
 assign batch_rd_ready = rd_sel_batch ? adapter_rd_ready : 1'b0;
 assign batch_rd64_ready = rd_sel_batch64 ? adapter_rd64_ready : 1'b0;
 assign loader_rd64_ready = rd_sel_loader64 ? adapter_rd64_ready : 1'b0;
-assign copy_rd_ready = (rd_sel_link || rd_sel_batch) ? 1'b0 : adapter_rd_ready;
+assign copy_rd_ready = (rd_sel_control || rd_sel_link || rd_sel_batch) ? 1'b0 : adapter_rd_ready;
+assign control_rd_data = adapter_rd_data;
+assign control_rd_valid = rd_sel_control ? adapter_rd_valid : 1'b0;
 assign link_rd_data  = adapter_rd_data;
-assign link_rd_valid = adapter_rd_valid;
+assign link_rd_valid = rd_sel_link ? adapter_rd_valid : 1'b0;
 assign batch_rd_data = adapter_rd_data;
 assign batch_rd_valid = adapter_rd_valid;
 assign batch_rd64_data = adapter_rd64_data;

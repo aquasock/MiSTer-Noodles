@@ -23,6 +23,7 @@ module link_fence #(
 ) (
     input  logic clk,
     input  logic reset,
+    output logic initialized,
 
     input  logic done_pulse,  // one cycle high per command that finished (not just dispatched)
     input  logic front_sel,   // 0=A is front, 1=B is front
@@ -57,7 +58,6 @@ module link_fence #(
     logic [31:0] done_count;
     logic [31:0] published_count;
     logic [31:0] write_value;
-    logic        initialized;
     logic        front_value;
 
     wire pending = !initialized || (done_count != published_count);

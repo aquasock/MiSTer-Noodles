@@ -23,6 +23,8 @@ module link_ring #(
 ) (
     input  logic clk,
     input  logic reset,
+    input  logic enable,
+    output logic initialized,
 
     // generic read port
     output logic [31:0] rd_addr,
@@ -105,6 +107,7 @@ module link_ring #(
             read_ptr <= '0;
             word_idx <= '0;
             slot_reg <= '0;
+            initialized <= 1'b0;
         end else begin
             unique case (state)
                 INIT_WPTR: begin
@@ -112,11 +115,14 @@ module link_ring #(
                 end
 
                 INIT_RPTR: begin
-                    if (wr_en && wr_ready) state <= IDLE;
+                    if (wr_en && wr_ready) begin
+                        initialized <= 1'b1;
+                        state <= IDLE;
+                    end
                 end
 
                 IDLE: begin
-                    if (cmd_ready) state <= POLL_REQ;
+                    if (enable && cmd_ready) state <= POLL_REQ;
                 end
 
                 POLL_REQ: begin

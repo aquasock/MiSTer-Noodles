@@ -17,6 +17,7 @@ static uint32_t memory[2048];
 static char lock_path[256];
 static int map_fail, device_fail, complete_on_sleep, interrupt_sleep, clock_fail;
 static int maps, unmaps, sleeps;
+static int control_active;
 static uint64_t now_ns;
 static const uint32_t fill[8] = {1, NOODLES_BUFFER_B_ADDR, 3200, 800, 600, 0, 0, 0};
 
@@ -62,6 +63,20 @@ int __wrap_nanosleep(const struct timespec *pause, struct timespec *remaining) {
     assert(pause->tv_sec == 0 && pause->tv_nsec > 0 && pause->tv_nsec <= 1000000);
     now_ns += pause->tv_nsec;
     ++sleeps;
+    uint32_t request = memory[12];
+    if (!control_active && request == 0x434c414du &&
+        (memory[10] != 0 || memory[11] != 0)) {
+        memory[14] = memory[10];
+        memory[15] = memory[11];
+        memory[16] = request;
+        control_active = 1;
+    } else if (control_active && request == 0) {
+        memory[16] = 0;
+        control_active = 0;
+    } else if (control_active && request != 0x434c414du &&
+               memory[10] == memory[14] && memory[11] == memory[15]) {
+        memory[16] = request;
+    }
     if (complete_on_sleep) {
         while (memory[2] != memory[0]) {
             uint32_t op = memory[1024 + memory[2] * 8];
@@ -83,6 +98,22 @@ static noodles_link_t *open_device(int recover) {
 
 static void closed(noodles_link_t *device) {
     assert(noodles_link_close(device, 10) == 0);
+}
+
+static void seed_identity(void) {
+    memory[4] = 0x4e444c53u;
+    memory[5] = NOODLES_PROTOCOL_VERSION;
+    memory[6] = 0x7e;
+    memory[7] = (800u << 16) | 600u;
+    memory[8] = 3200;
+    memory[16] = 0;
+    control_active = 0;
+}
+
+static noodles_link_t *open_verified(void) {
+    noodles_link_t *device = NULL;
+    assert(noodles_link_open(&device) == 0 && device);
+    return device;
 }
 
 int main(void) {
@@ -117,7 +148,7 @@ int main(void) {
     noodles_device_info_t info;
     assert(noodles_link_get_info(a, &info) == 0 && !info.hardware_verified);
     assert(info.width == 800 && info.height == 600 && info.pitch == 3200);
-    assert(info.assumed_opcode_mask == 0x7e);
+    assert(info.opcode_mask == 0x7e);
     assert(noodles_push_command(a, fill) == 0);
     assert(noodles_link_last_fence(a) == 1);
     int done;
@@ -195,8 +226,46 @@ int main(void) {
     clock_fail = 1;
     assert(noodles_link_drain(a, 10) == -1 && errno == EIO);
     assert(noodles_link_close(a, 10) == -1 && errno == EIO);
+
+    /* Verified stage-2B attachment validates identity and requires a live claim. */
+    clock_fail = 0;
+    memset(memory, 0, sizeof(memory));
+    assert(noodles_link_open(&a) == -1 && errno == ENODEV && !a);
+    seed_identity();
+    memory[5] = 0x00020000u;
+    assert(noodles_link_open(&a) == -1 && errno == EPROTONOSUPPORT && !a);
+    seed_identity();
+    memory[6] = 0x3e;
+    assert(noodles_link_open(&a) == -1 && errno == ENOTSUP && !a);
+    seed_identity();
+    assert(noodles_link_open_legacy(&a, 1) == -1 && errno == EPROTONOSUPPORT && !a);
+    a = open_verified();
+    assert(memory[16] == 0x434c414du && control_active);
+    assert(noodles_link_get_info(a, &info) == 0 && info.hardware_verified);
+    assert(info.protocol_version == NOODLES_PROTOCOL_VERSION);
+    assert(info.opcode_mask == 0x7e);
+    assert(noodles_push_command(a, fill) == 0);
+    memory[2] = memory[0];
+    memory[3] = 1;
+    assert(noodles_link_wait(a, 1, 10) == 0);
+    closed(a);
+    assert(!control_active && memory[16] == 0);
+
+    /* An FPGA reset clears the response and faults the stale handle before
+     * a reset fence can be accepted as completion. A new live core may then
+     * recover a dirty software marker without a blind acknowledgement flag. */
+    a = open_verified();
+    assert(noodles_push_command(a, fill) == 0);
+    control_active = 0;
+    memory[0] = memory[2] = memory[3] = memory[16] = 0;
+    assert(noodles_link_poll(a, 0, &done) == -1 && errno == ESTALE);
+    assert(noodles_link_close(a, 10) == -1 && errno == ESTALE);
+    seed_identity();
+    a = open_verified();
+    closed(a);
+
     assert(maps == unmaps);
     assert(unlink(lock_path) == 0 && rmdir(dir) == 0);
-    puts("PASS: SDK lifecycle, process locking, crash recovery, deadlines, presentation, wrap and validation");
+    puts("PASS: legacy/verified SDK lifecycle, identity, reset loss, locking, deadlines and validation");
     return 0;
 }

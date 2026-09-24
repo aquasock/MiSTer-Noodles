@@ -134,16 +134,22 @@ int main(int argc, char **argv) {
 
     dut.reset = 1;
     dut.cmd_ready = 1;
+    dut.enable = 0;
     for (int i = 0; i < 4; ++i) tb.Tick(mem);
     dut.reset = 0;
     tb.Tick(mem);
 
-    // Quiescent check: with write_ptr == read_ptr (both 0, the reset
-    // default), cmd_valid must never assert.
+    // A queued command cannot dispatch before a verified session enables
+    // the ring, even though pointer initialization has completed.
+    const Command gated = MakeCommand(0);
+    mem.WriteCommand(0, gated);
+    mem.Seed32(kHeaderAddr + 0, 1);
     for (int i = 0; i < 200; ++i) {
         tb.Tick(mem);
-        if (dut.cmd_valid) return Fail("cmd_valid asserted with an empty ring");
+        if (dut.cmd_valid) return Fail("cmd_valid asserted while ring was disabled");
     }
+    if (!dut.initialized) return Fail("ring never reported initialized");
+    dut.enable = 1;
 
     constexpr int kCommands = 5;  // > RING_SLOTS(4): forces one wraparound
     for (int i = 0; i < kCommands; ++i) {

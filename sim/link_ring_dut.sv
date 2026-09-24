@@ -7,6 +7,8 @@
 module link_ring_dut (
     input  logic clk,
     input  logic reset,
+    input  logic enable,
+    output logic initialized,
 
     input  logic          cmd_ready,
     output logic [255:0] cmd_data,
@@ -30,6 +32,8 @@ module link_ring_dut (
     link_ring #(.RING_SLOTS(4)) link_ring_i (
         .clk      (clk),
         .reset    (reset),
+        .enable   (enable),
+        .initialized(initialized),
         .rd_addr  (rd_addr),
         .rd_en    (rd_en),
         .rd_active(rd_active),

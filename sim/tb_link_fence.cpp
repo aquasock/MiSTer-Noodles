@@ -88,6 +88,8 @@ int main(int argc, char **argv) {
                       writes[0].addr, writes[0].data, kFenceAddr);
         return Fail("wrong INIT address or value");
     }
+    tb.Tick(/*wr_ready=*/true, /*done_pulse=*/false, &writes);
+    if (!dut.initialized) return Fail("initialized did not assert after INIT write");
 
     // No further writes until a completion.
     for (int i = 0; i < 50; ++i) tb.Tick(/*wr_ready=*/true, /*done_pulse=*/false, &writes);

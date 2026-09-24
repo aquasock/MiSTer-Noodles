@@ -48,12 +48,14 @@ see BLIT-004). After a successful push, capture
 `noodles_link_last_fence(device)` and use `noodles_link_poll()` or the
 deadline-based `noodles_link_wait()` to check completion.
 
-Use an opaque handle from `noodles_link_open_legacy(&device, 0)`, with
-serialized calls and a matching initialized, idle SVGA core. Hardware identity
-is explicitly **unverified**. Cooperative process locking and a dirty-session
-marker prevent another SDK producer from silently taking over unfinished work.
-Bounded close drains and frees the handle; failure does not cancel FPGA work.
-Reset during a handle's lifetime remains unsupported and undetectable.
+Use an opaque handle from `noodles_link_open(&device)`. The stage-2B core
+publishes protocol, capability and geometry information, then enables its
+command ring only after echoing a fresh 64-bit host session token. Completion
+checks include a live challenge, so reset/reload faults the handle with
+`ESTALE` instead of accepting a reset fence. Cooperative process locking and
+a dirty-session marker remain in addition to the hardware session. Bounded
+close drains, disarms and frees the handle; failure does not cancel FPGA work.
+`noodles_link_open_legacy()` remains only for preserved pre-2B core images.
 See [docs/SDK.md](docs/SDK.md) for installation, lifecycle, errors and recovery.
 
 `noodles_push_sprite_batch()` protects the fixed descriptor table until the

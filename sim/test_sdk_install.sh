@@ -11,7 +11,7 @@ for target in host arm; do
         cd "$work"
         export PKG_CONFIG_LIBDIR="$stage/usr/lib/pkgconfig"
         export PKG_CONFIG_SYSROOT_DIR="$stage"
-        test "$(pkg-config --modversion noodles)" = 0.1.0
+        test "$(pkg-config --modversion noodles)" = 0.2.0
         if [ "$target" = host ]; then
             cc="${HOSTCC:-cc}"
             link_flags=
@@ -27,8 +27,8 @@ for target in host arm; do
                 $(pkg-config --cflags noodles) consumer.c -x none \
                 $(pkg-config --libs noodles) -o host-cpp-consumer
             # Usage-only run: no /dev/mem or hardware access on the build host.
-            if ./host-consumer > usage.log 2>&1; then
-                echo "Expected usage rejection without explicit legacy flag" >&2
+            if ./host-consumer --invalid > usage.log 2>&1; then
+                echo "Expected usage rejection for invalid argument" >&2
                 exit 1
             fi
             grep -q 'Usage:' usage.log

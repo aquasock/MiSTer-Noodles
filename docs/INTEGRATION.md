@@ -4,7 +4,7 @@ This is the consumer-facing description of the 100MHz core, not
 a new GPU ABI or an SDL implementation. Architecture decisions remain in
 [ai/core-reference.md](../ai/core-reference.md); later records override
 earlier bring-up assumptions. Relevant records include CMDQ-001,
-BLIT-003/004/006, SURF-003/004/006, LINK-002/005/008 and SDR-008.
+BLIT-003/004/006, SURF-003/004/006, LINK-002/005/008/011 and SDR-008.
 
 ## Standard configuration: 800x600
 
@@ -20,8 +20,9 @@ It was built from `37d21c9` with only SEED changed to 7, pinned in source
 completed. See [QUALIFICATION.md](QUALIFICATION.md) for provenance and results.
 
 Build the host library/tools from the same source as the loaded core.
-Geometry is compile-time, with no runtime discovery: the new 800x600 tools
-must not be used with the fallback 640x480 image, or vice versa.
+Geometry remains compile-time in FPGA logic, but protocol 1.0 reports and
+verifies the fixed 800x600 values at attachment. The fallback 640x480 image
+has no protocol block and must use its preserved legacy tools.
 
 ## Preserved 640x480 recovery baseline
 
@@ -35,9 +36,9 @@ must not be used with the fallback 640x480 image, or vice versa.
 
 See [BUILD.md](BUILD.md) for reproduction and the post-fit timing gate,
 and [QUALIFICATION.md](QUALIFICATION.md) for hardware and four-corner evidence.
-Pin the source and matching host library together. There is currently no
-runtime core identifier, ABI version field or capability negotiation.
-Loading an unrelated core cannot be detected safely by this library.
+Pin the source and matching host library together. The stage-2B source adds
+the protocol identifier and fixed capability/geometry report described
+below; the accepted fallback image predates it and remains unverified.
 
 ## Memory and pixels
 
@@ -57,6 +58,7 @@ Current fixed uses (end addresses are exclusive):
 | Physical range | Use / ownership |
 |---|---|
 | `[0x30020000, 0x30020010)` | Shared ring header; fields described below. |
+| `[0x30020010, 0x30020044)` | Live identity/session control block; fields described below. |
 | `[0x30021000, 0x30021800)` | 64 command slots, 32 bytes each. |
 | `[0x30022000, 0x30022800)` | 64 sprite descriptors, 32 bytes each. |
 | `[0x31000000, 0x311d4c00)` | 800x600 buffer A pixels; within its fixed 2MiB slot beginning at `0x31000000`. |
@@ -146,12 +148,34 @@ command already dispatched. Publish slot contents and uploaded inputs
 before updating the write pointer. Use the library's barriers and mapped
 access path rather than substituting cached mappings or `volatile` alone.
 
-Open one handle only after core initialization and after previous work has
-drained, or following a fresh core load and initialization. Stage 2A adds
-cooperative process locking and a dirty-session marker, but no ready
-handshake or reset-generation detection. Serialize calls; concurrent
-producers and resetting/reloading the FPGA during a handle's lifetime are
-unsupported. The lock does not exclude legacy/direct memory writers.
+The stage-2B control block is:
+
+| Byte offset from `0x30020000` | Writer | Meaning |
+|---|---|---|
+| `+0x10` | FPGA | Magic `0x4e444c53`, published last. |
+| `+0x14` | FPGA | Protocol version `0x00010000`. |
+| `+0x18` | FPGA | Opcode capability mask `0x0000007e`. |
+| `+0x1c` | FPGA | Width in bits 31:16, height in bits 15:0. |
+| `+0x20` | FPGA | Pitch in bytes. |
+| `+0x28/+0x2c` | Host | Request token low/high. |
+| `+0x30` | Host | Request sequence. |
+| `+0x38/+0x3c` | FPGA | Response token low/high. |
+| `+0x40` | FPGA | Response sequence. |
+
+On reset, hardware disables command polling and clears request/response
+sequences before publishing identity. `noodles_link_open()` checks protocol,
+capabilities and geometry, writes a random 64-bit token and claim sequence
+`0x434c414d`, and waits for an exact echo. Only then does hardware enable the
+ring. Later nonzero non-claim sequence echoes prove liveness; sequence zero
+disarms the session. Static control bytes are not proof because DDR3 survives
+core reload.
+
+Serialize SDK calls. Cooperative process locking and the dirty marker remain
+separate from hardware readiness; neither excludes legacy/direct memory
+writers. Reset/reload during a handle clears the live response and causes
+fallible SDK operations to return `ESTALE`. A reset racing a host write may
+leave unconsumed bytes in DDR3, but the reset ring remains disabled and the
+SDK does not report completion without a fresh challenge.
 
 Successful push means submission, not completion. After a successful push,
 capture `noodles_link_last_fence(device)` and use
@@ -165,7 +189,7 @@ fixed descriptor table has library-managed ownership today:
 `noodles_push_sprite_batch()` returns `-1/EAGAIN` before any descriptor
 write when that table is busy or the ring is full. Raw opcode-5 submissions
 also claim it; overlapping library uploads are blocked until completion.
-Direct `/dev/mem` writes bypass this protection; the stage-2A SDK rejects
+Direct `/dev/mem` writes bypass this protection; the SDK rejects
 draw commands targeting the control region. It is not general texture
 lifetime management.
 
@@ -178,19 +202,21 @@ do not resubmit blindly or assume either buffer is safe to reuse. Raw and
 typed PRESENT submissions both block further writes until SDK poll/wait
 observes retirement and refreshes buffer tracking.
 
-Close with a deadline drains and always frees local resources; check its
-return value. Failure leaves the session dirty, requiring explicit external
-core reload before recovery acknowledgement. Only retry transient `EAGAIN`;
-report other errors. See [SDK.md](SDK.md) for the host-only lifecycle policy
-and the limitations that require a stage-2B hardware handshake.
+Close with one deadline drains, disarms the hardware session and always frees
+local resources; check its return value. Failure leaves the session dirty.
+If hardware still reports that session, verified reopen fails with
+`EOWNERDEAD`; after an actual reload clears the response, verified reopen can
+recover without a blind acknowledgement flag. Only retry transient `EAGAIN`;
+report other errors. See [SDK.md](SDK.md) for the complete lifecycle policy.
 
 ## Handoff boundary
 
-Step 1 documented the existing unversioned interface. The subsequent SVGA
-change keeps command layouts and buffer addresses but changes framebuffer
-geometry, requiring matching host tools. Preserve the older 640x480 image
-as the recovery fallback while later stages add an identified/versioned SDK,
-managed surfaces and the drawing operations required by GemRB.
+Step 1 documented the original unversioned interface. The subsequent SVGA
+change kept command layouts and buffer addresses while changing geometry.
+Stage 2B adds identified protocol 1.0 and a live session without changing
+draw-command layouts. Preserve the older 640x480 image and its matching
+stage-2A tools as the recovery fallback while later stages add managed
+surfaces and the drawing operations required by GemRB.
 
 There is currently no SDL renderer, texture allocator, alpha blending,
 tint, scaling or flipping API. The new render target is 800x600 and core audio is

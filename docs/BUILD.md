@@ -22,7 +22,9 @@ quartus_sta -t tools/report_multicorner.tcl  # required post-fit timing gate
 
 `make sdk` / `make sdk-host` build the static SDK independently of the demos.
 See [SDK.md](SDK.md) for staged installation, pkg-config and external consumers.
-Host-only SDK work does not require a new FPGA build.
+SDK stage 2A was host-only. The stage-2B live identity/session protocol adds
+FPGA RTL and therefore requires a new full build, timing qualification and
+hardware validation.
 
 ## Two levels of build
 

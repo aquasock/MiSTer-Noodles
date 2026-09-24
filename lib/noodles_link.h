@@ -8,7 +8,8 @@
 extern "C" {
 #endif
 
-#define NOODLES_SDK_VERSION "0.1.0"
+#define NOODLES_SDK_VERSION "0.2.0"
+#define NOODLES_PROTOCOL_VERSION 0x00010000u
 #define NOODLES_BUFFER_A_ADDR 0x31000000u
 #define NOODLES_BUFFER_B_ADDR 0x31200000u
 #define NOODLES_BUFFER_PITCH 3200u
@@ -29,10 +30,15 @@ typedef struct {
 
 typedef struct {
     uint32_t width, height, pitch;
-    uint32_t assumed_opcode_mask;
-    int hardware_verified; /* Always zero in SDK stage 2A. */
+    uint32_t opcode_mask;
+    uint32_t protocol_version;
+    int hardware_verified;
     const char *sdk_version;
 } noodles_device_info_t;
+
+/* Verified attachment to a stage-2B core. The FPGA must acknowledge a fresh
+ * 64-bit session token before the command ring is enabled. */
+int noodles_link_open(noodles_link_t **out);
 
 /* Explicit legacy attachment: caller guarantees the matching initialized,
  * quiescent SVGA core is loaded. No identity, idle or reset detection exists.

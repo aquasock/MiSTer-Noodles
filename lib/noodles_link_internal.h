@@ -10,7 +10,8 @@ struct noodles_link {
     volatile uint32_t *header, *slots;
     uint32_t write_ptr, submitted, presents_completed, done_baseline;
     uint32_t batch_fence, present_fence;
-    int batch_pending, present_pending, fault;
+    uint32_t token_lo, token_hi, ping_seq;
+    int batch_pending, present_pending, ping_pending, verified, fault;
 };
 
 /* Internal wrap-safe comparison, also exercised by transport regressions. */

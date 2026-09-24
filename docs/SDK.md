@@ -1,15 +1,14 @@
-# Host SDK, stage 2A
+# Host SDK
 
 `libnoodles.a` is a C99 static library with a C++-compatible public header
-`noodles_link.h`. SDK version 0.1.0 is independent of the FPGA command
-protocol. This is a host-only change: the accepted 800x600 seed7 RBF and its
-100MHz clock are unchanged.
+`noodles_link.h`. SDK 0.2.0 uses hardware protocol 1.0 to identify the live
+800x600 core, claim one host session and detect reset before accepting a
+fence as completed. The command opcodes, framebuffer geometry and 100MHz
+core clock are unchanged.
 
-**Every connection is legacy/unverified.** The current FPGA has no live
-identity, capability, readiness or reset-generation handshake. Information
-returned by this SDK is the compiled-in SVGA contract, not a hardware probe.
-Stage 2B must supply that protocol before applications can discover a core
-safely. Do not use this SDK with another core or the 640x480 fallback.
+Use `noodles_link_open()` for the stage-2B core. The explicit
+`noodles_link_open_legacy()` entry point remains for older unverified images;
+it is not a fallback mode for a stage-2B core.
 
 ## Build and install
 
@@ -40,20 +39,50 @@ separate C and C++ consumers using only installed files and `pkg-config`.
 The example is also the device-info/smoke tool:
 
 ```sh
-# On MiSTer, after the matching SVGA core is loaded, initialized and idle:
-./sdk-smoke --legacy-svga
+# On MiSTer, after the stage-2B core is loaded:
+./sdk-smoke
 ```
 
-It prints the assumed geometry and unverified status, fills the back buffer,
-presents, waits and closes. `/dev/mem` access normally requires root.
+It prints verified protocol, capability and geometry information, fills the
+back buffer, presents, waits and closes. `/dev/mem` access normally requires
+root.
 
-## Lifecycle
+## Hardware control block
 
-`noodles_link_open_legacy(&device, 0)` returns an opaque heap-allocated handle.
-The explicit legacy entry point means the caller guarantees the matching
-core is initialized and quiescent, and that no old tool is still using it.
-The SDK checks ring indices and refuses a visibly nonempty ring, but **an
-empty ring is not proof that its last dispatched command completed**.
+The control block begins at physical `0x30020010`. All fields are
+little-endian 32-bit words.
+
+| Address | Owner | Meaning |
+|---|---|---|
+| `0x30020010` | FPGA | Magic `0x4e444c53`. Published last during initialization. |
+| `0x30020014` | FPGA | Protocol version, major in bits 31:16 and minor in 15:0; currently `0x00010000`. |
+| `0x30020018` | FPGA | Capability bits; bit N advertises opcode N, currently `0x0000007e`. |
+| `0x3002001c` | FPGA | Width in bits 31:16, height in bits 15:0. |
+| `0x30020020` | FPGA | Framebuffer pitch in bytes. |
+| `0x30020028/2c` | Host | 64-bit request token, low word then high word. |
+| `0x30020030` | Host | Request sequence. |
+| `0x30020038/3c` | FPGA | Echoed 64-bit response token. |
+| `0x30020040` | FPGA | Echoed response sequence. |
+
+On reset the FPGA disarms the command ring and clears request/response
+sequences before publishing identity. A new host writes a random nonzero
+64-bit token, then request sequence `0x434c414d`. The FPGA accepts that claim
+only after ring-pointer initialization, echoes the token and sequence, and
+then enables command polling. While active, it echoes nonzero non-claim
+sequence changes only when the request token still matches. Request sequence
+zero closes the hardware session and disables the ring.
+
+Static magic alone is not proof of a live core because DDR3 survives reload.
+The claim echo proves readiness; a fresh sequence echo validates liveness.
+The protocol is correctness metadata and cooperative ownership, not an
+authentication or security boundary.
+
+## Verified lifecycle
+
+`noodles_link_open(&device)` returns an opaque heap-allocated handle only
+after checking magic, exact protocol version, required opcode capabilities,
+800x600 geometry and 3200-byte pitch, then completing the live claim.
+Unexpected identity fails before the SDK publishes commands.
 
 Calls must be serialized by the application. A nonblocking `flock` on
 `/run/noodles.lock` excludes other cooperating SDK clients, including
@@ -66,25 +95,35 @@ different locking conventions bypass this exclusion.
 The lock file also records clean/dirty sessions. Opening marks it dirty;
 a successful drained close marks it clean. Process death or a failed
 shutdown leaves it dirty even though the OS releases the lock. A subsequent
-normal open fails with `EOWNERDEAD` rather than assuming abandoned work is
-safe to overwrite. This marker survives process restart, not system reboot,
-and is not a hardware identity or reset counter.
+verified open fails with `EOWNERDEAD` while the hardware response still
+shows the abandoned active session. After an actual core reload clears and
+disarms the response, verified open may recover the dirty software marker
+without a caller-supplied acknowledgement flag. The marker survives process
+restart, not system reboot, and remains separate from hardware identity.
 
-To recover, stop all producers, explicitly reload the matching core and
-allow initialization to finish. Only then may the caller use
-`noodles_link_open_legacy(&device, 1)` or:
+If the FPGA resets during a handle, the response clears and fallible SDK
+operations fail with `ESTALE`. The reset fence value is never accepted as
+completion without a fresh live challenge. A submission racing the reset may
+already have been written to DDR3, but the reset hardware keeps the ring
+disarmed; the SDK does not claim that work completed or was cancelled.
 
-```sh
-./sdk-smoke --legacy-svga --ack-core-reload
-```
+`noodles_link_close(device, timeout_ms)` uses one monotonic deadline to drain,
+close the hardware session, release resources and free the handle. Check its
+return value and discard the pointer in both cases. Only a successful drain
+and hardware disarm mark the software session clean.
 
-This flag acknowledges an action the caller already performed. It does not
-load/reset the core, prove idle, or bypass an active process lock. Never
-automatically retry with it after an error.
+## Legacy lifecycle
 
-Reset or core replacement during an open handle remains unsupported and
-cannot reliably be detected in 2A. A reset may make old fence values appear
-complete; do not rely on a timeout to detect it.
+`noodles_link_open_legacy(&device, ack_reload)` retains SDK 0.1 behavior for
+the preserved pre-2B core images. The caller guarantees a matching,
+initialized and quiescent SVGA core. Empty ring pointers cannot prove idle,
+and reset cannot be detected. A dirty legacy marker requires an external
+reload followed by `ack_reload=1`; the flag does not reload hardware.
+
+The 0.2 SDK refuses legacy attachment when it sees the current protocol
+identity. Use verified open for the stage-2B core. For the older recovery
+core, preserve and use its matching stage-2A binary package because static
+control bytes can survive switching back from a newer core.
 
 ## Submission and completion
 
@@ -94,7 +133,10 @@ success; there is no public baseline arithmetic or mapped-pointer access.
 Tokens belong to that device session and retain the existing 31-bit modulo
 count. Keep token distance below 2^30 completions and never compare with `>=`.
 
-`noodles_link_poll(device, fence, &complete)` does not wait. Use
+`noodles_link_poll(device, fence, &complete)` does not wait. On a verified
+handle, a reached fence starts or checks a new hardware challenge; poll may
+therefore report incomplete once after the raw count reaches its target.
+It reports complete only after the matching live response arrives. Use
 `noodles_link_wait(device, fence, timeout_ms)` for a monotonic deadline, or
 `noodles_link_drain(device, timeout_ms)` for the last submitted command.
 A zero timeout checks once and faults the handle if not complete; use poll
@@ -112,12 +154,6 @@ work is rejected with that error; even late completion does not restore it.
 **Timeout does not cancel queued work or a flip.** Do not resubmit that
 command, reuse its memory or infer the visible buffer from the failure.
 
-`noodles_link_close(device, timeout_ms)` attempts to drain and always frees
-the handle and releases local resources, whether it succeeds or fails.
-Check its return value and discard the pointer in both cases. Failure leaves
-the session dirty; a clean close is not a substitute for externally ensuring
-the core was never reset.
-
 ## Errors and validation
 
 Fallible APIs return 0 or `-1` with `errno`. Read-only scalar getters require
@@ -127,7 +163,11 @@ a valid live handle; they are observations, not health checks.
 |---|---|
 | `EAGAIN` | Ring/table busy or presentation not yet observed complete. Nothing new published; poll/drain as appropriate and retry. |
 | `EBUSY` | Another SDK client owns the device, or legacy attachment sees a nonempty ring. |
-| `EOWNERDEAD` | A dirty prior session requires explicit external core reload. |
+| `EOWNERDEAD` | A dirty prior software session is still active in hardware; reload the core. |
+| `ESTALE` | The verified hardware session was lost, normally by FPGA reset/reload. |
+| `ENODEV` | The stage-2B identity magic is absent. |
+| `EPROTONOSUPPORT` | Hardware protocol version is incompatible, or legacy open was attempted on the current protocol. |
+| `ENOTSUP` | Required capabilities or fixed geometry do not match this SDK. |
 | `ETIMEDOUT` | Deadline expired; handle faulted, work not cancelled. |
 | `EINVAL` | Invalid argument, unsupported command encoding, rectangle/alignment or address span. |
 | `EPROTO` | Invalid ring index at attachment; do not write to that presumed device. |
@@ -138,7 +178,7 @@ invalid batch counts/flags, truncated field widths, misalignment and
 overflowing/out-of-envelope spans. This is stricter than the old raw
 transport, whose zero-size/unknown commands could hang fence waits.
 
-This stage conservatively permits DDR3 spans only in
+The SDK conservatively permits DDR3 spans only in
 `[0x30000000, 0x40000000)`, excluding `[0x30020000, 0x30022800)` control
 memory. Upload alone may write wholly inside the fixed descriptor table,
 subject to its existing ownership protection. Board-SDRAM loads require
@@ -152,17 +192,16 @@ The raw batch entry point validates the command only; callers manually
 uploading descriptors remain responsible for their contents and must obey
 the same limits. Raw memory diagnostics remain explicitly outside the SDK.
 
-## Migration
+## Migration and scope
 
-The C API is intentionally source-incompatible with stack-allocated demo
-handles: use an opaque pointer and explicit legacy open, handle uniform
-`-1/errno` errors, use fence tokens and check bounded close. There is no
-stable shared-library ABI promise in this static-only milestone.
-Repository draw tools now link the archive and use SDK completion helpers;
-they print the legacy attachment assumption instead of claiming detection.
+New consumers use an opaque pointer from `noodles_link_open()`, handle uniform
+`-1/errno` errors, use fence tokens and check bounded close. Device
+information now includes the hardware protocol version and
+`hardware_verified=1`. Repository draw tools use verified open. There is no
+stable shared-library ABI promise in this static-only pre-1.0 SDK.
 
-No SDL code, runtime resolution switch, capability negotiation, texture
-allocator, automatic recovery or new FPGA drawing operations are included.
+No SDL code, runtime resolution switch, texture allocator, automatic core
+reload or new drawing operations are included.
 
 ## Stage-2A hardware execution
 

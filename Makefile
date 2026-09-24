@@ -60,6 +60,7 @@ BLIT_COPY64_SIM   := $(SIM_DIR)/blit_copy64/Vengine_copy64_dut
 BLIT_COPY64_PIPELINE_SIM := $(SIM_DIR)/blit_copy64_pipeline/Vblit_copy64
 LINK_RING_SIM     := $(SIM_DIR)/link_ring/Vlink_ring_dut
 LINK_FENCE_SIM    := $(SIM_DIR)/link_fence/Vlink_fence_dut
+LINK_CONTROL_SIM  := $(SIM_DIR)/link_control/Vlink_control_dut
 PRESENT_SIM       := $(SIM_DIR)/present/Vpresent_dut
 BATCH_CMDQ_SIM    := $(SIM_DIR)/cmdq_batch/Vcmdq_batch_dut
 SPRITE_BATCH_SIM  := $(SIM_DIR)/sprite_batch/Vengine_sprite_batch_dut
@@ -118,7 +119,7 @@ $(HOSTLINKTEST): sim/test_noodles_link.c lib/noodles_link.c lib/noodles_link.h l
 	$(HOSTCC) $(CFLAGS) -o $@ sim/test_noodles_link.c lib/noodles_link.c \
 		-Wl,--wrap=mmap -Wl,--wrap=munmap
 
-sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(DDRAM_INGRESS_SIM) $(BLIT_COPY_SIM) $(BLIT_COPY64_SIM) $(BLIT_COPY64_PIPELINE_SIM) $(LINK_RING_SIM) $(LINK_FENCE_SIM) $(PRESENT_SIM) $(BATCH_CMDQ_SIM) $(SPRITE_BATCH_SIM) $(SDRAM_ADAPTER_SIM) $(SDRAM_LOADER_SIM) $(SPRITE_BATCH_SDRAM_SIM)
+sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(DDRAM_INGRESS_SIM) $(BLIT_COPY_SIM) $(BLIT_COPY64_SIM) $(BLIT_COPY64_PIPELINE_SIM) $(LINK_RING_SIM) $(LINK_FENCE_SIM) $(LINK_CONTROL_SIM) $(PRESENT_SIM) $(BATCH_CMDQ_SIM) $(SPRITE_BATCH_SIM) $(SDRAM_ADAPTER_SIM) $(SDRAM_LOADER_SIM) $(SPRITE_BATCH_SDRAM_SIM)
 	$(SOLID_FILL_SIM)
 	$(DDRAM_ADAPTER_SIM)
 	$(DDRAM_INGRESS_SIM)
@@ -127,6 +128,7 @@ sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(DDRAM_INGRESS_SIM) $(BLIT_COPY_SIM
 	$(BLIT_COPY64_PIPELINE_SIM)
 	$(LINK_RING_SIM)
 	$(LINK_FENCE_SIM)
+	$(LINK_CONTROL_SIM)
 	$(PRESENT_SIM)
 	$(BATCH_CMDQ_SIM)
 	$(SPRITE_BATCH_SIM)
@@ -193,6 +195,12 @@ $(LINK_FENCE_SIM): rtl/link_fence.sv sim/link_fence_dut.sv sim/tb_link_fence.cpp
 	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module link_fence_dut \
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
 		rtl/link_fence.sv sim/link_fence_dut.sv sim/tb_link_fence.cpp -o $(notdir $@)
+
+$(LINK_CONTROL_SIM): rtl/link_control.sv sim/link_control_dut.sv sim/tb_link_control.cpp
+	@mkdir -p $(dir $@)
+	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module link_control_dut \
+		--Wall --Wno-fatal -Wno-DECLFILENAME \
+		rtl/link_control.sv sim/link_control_dut.sv sim/tb_link_control.cpp -o $(notdir $@)
 
 $(PRESENT_SIM): rtl/present.sv sim/present_dut.sv sim/tb_present.cpp
 	@mkdir -p $(dir $@)

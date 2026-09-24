@@ -1,6 +1,5 @@
-// Implementation of noodles_link.h. See that header for the API contract;
-// this file is just LINK-002/LINK-003's wire format (previously hand-rolled
-// identically in tools/link_push.c) factored out into something reusable.
+// Implementation of noodles_link.h: stage-2B session control plus the
+// LINK-002/LINK-003 command transport.
 
 #define _POSIX_C_SOURCE 200809L
 #include "noodles_link_internal.h"
@@ -11,6 +10,7 @@
 #include <stdlib.h>
 #include <sys/file.h>
 #include <sys/mman.h>
+#include <sys/random.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -18,7 +18,7 @@
 #define NOODLES_SLOT_BASE_ADDR 0x30021000u
 #define NOODLES_RING_SLOTS 64u
 #define NOODLES_SLOT_WORDS 8u
-#define NOODLES_MAP_SPAN 0x2000u  // covers header (+16B used) and all 64 slots (2048B)
+#define NOODLES_MAP_SPAN 0x2000u  // header/control block and all 64 command slots
 
 #define NOODLES_OP_SOLID_FILL 1u
 #define NOODLES_OP_BLIT_COPY 2u
@@ -27,15 +27,45 @@
 #define NOODLES_OP_SPRITE_BATCH 5u
 #define NOODLES_OP_LOAD_SDRAM 6u
 #define NOODLES_FENCE_MASK 0x7fffffffu
+#define NOODLES_CONTROL_MAGIC 0x4e444c53u
+#define NOODLES_CONTROL_CLAIM 0x434c414du
+#define NOODLES_REQUIRED_CAPABILITIES 0x0000007eu
+#define NOODLES_CONTROL_MAGIC_WORD 4u
+#define NOODLES_CONTROL_PROTOCOL_WORD 5u
+#define NOODLES_CONTROL_CAPABILITIES_WORD 6u
+#define NOODLES_CONTROL_GEOMETRY_WORD 7u
+#define NOODLES_CONTROL_PITCH_WORD 8u
+#define NOODLES_CONTROL_REQUEST_TOKEN_LO_WORD 10u
+#define NOODLES_CONTROL_REQUEST_TOKEN_HI_WORD 11u
+#define NOODLES_CONTROL_REQUEST_SEQ_WORD 12u
+#define NOODLES_CONTROL_RESPONSE_TOKEN_LO_WORD 14u
+#define NOODLES_CONTROL_RESPONSE_TOKEN_HI_WORD 15u
+#define NOODLES_CONTROL_RESPONSE_SEQ_WORD 16u
 
 static int fail(int error) {
     errno = error;
     return -1;
 }
 
-static int healthy(const noodles_link_t *link) {
+static int session_error(const noodles_link_t *link) {
+    if (!link->verified) return 0;
+    __sync_synchronize();
+    if (link->header[NOODLES_CONTROL_RESPONSE_SEQ_WORD] == 0 ||
+        link->header[NOODLES_CONTROL_RESPONSE_TOKEN_LO_WORD] != link->token_lo ||
+        link->header[NOODLES_CONTROL_RESPONSE_TOKEN_HI_WORD] != link->token_hi) {
+        return ESTALE;
+    }
+    return 0;
+}
+
+static int healthy(noodles_link_t *link) {
     if (!link) return fail(EINVAL);
     if (link->fault) return fail(link->fault);
+    int error = session_error(link);
+    if (error) {
+        link->fault = error;
+        return fail(error);
+    }
     return 0;
 }
 
@@ -46,10 +76,82 @@ static int mark_session(noodles_link_t *link, char state) {
     return fsync(link->lock_fd);
 }
 
-int noodles_link_open_legacy(noodles_link_t **out, int ack_reload) {
+static int monotonic_ns(uint64_t *value) {
+    struct timespec time;
+    if (clock_gettime(CLOCK_MONOTONIC, &time) != 0) return -1;
+    *value = (uint64_t)time.tv_sec * 1000000000u + (uint64_t)time.tv_nsec;
+    return 0;
+}
+
+static int pause_until(uint64_t deadline) {
+    uint64_t now;
+    if (monotonic_ns(&now) != 0) return -1;
+    if (now >= deadline) return fail(ETIMEDOUT);
+    uint64_t remaining = deadline - now;
+    struct timespec pause = {0, remaining < 1000000u ? (long)remaining : 1000000};
+    if (nanosleep(&pause, NULL) != 0 && errno != EINTR) return -1;
+    return 0;
+}
+
+static int random_token(uint32_t *lo, uint32_t *hi) {
+    uint32_t token[2];
+    size_t offset = 0;
+    while (offset < sizeof(token)) {
+        ssize_t got = getrandom((char *)token + offset, sizeof(token) - offset, 0);
+        if (got < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (got == 0) return fail(EIO);
+        offset += (size_t)got;
+    }
+    if (token[0] == 0 && token[1] == 0) token[0] = 1;
+    *lo = token[0];
+    *hi = token[1];
+    return 0;
+}
+
+static void request_sequence(noodles_link_t *link, uint32_t sequence) {
+    __sync_synchronize();
+    link->header[NOODLES_CONTROL_REQUEST_SEQ_WORD] = sequence;
+    __sync_synchronize();
+}
+
+static int wait_response_until(noodles_link_t *link, uint32_t sequence, uint64_t deadline) {
+    for (;;) {
+        __sync_synchronize();
+        if (link->header[NOODLES_CONTROL_RESPONSE_SEQ_WORD] == sequence &&
+            (!sequence ||
+             (link->header[NOODLES_CONTROL_RESPONSE_TOKEN_LO_WORD] == link->token_lo &&
+              link->header[NOODLES_CONTROL_RESPONSE_TOKEN_HI_WORD] == link->token_hi))) {
+            return 0;
+        }
+        if (pause_until(deadline) != 0) return -1;
+    }
+}
+
+static int wait_response(noodles_link_t *link, uint32_t sequence, uint32_t timeout_ms) {
+    uint64_t start;
+    if (monotonic_ns(&start) != 0) return -1;
+    return wait_response_until(link, sequence, start + (uint64_t)timeout_ms * 1000000u);
+}
+
+static int initialize_transport(noodles_link_t *link) {
+    link->write_ptr = link->header[0];
+    uint32_t fence_state = link->header[3];
+    link->done_baseline = fence_state & NOODLES_FENCE_MASK;
+    link->presents_completed = (fence_state >> 31) & 1u;
+    if (link->write_ptr >= NOODLES_RING_SLOTS || link->header[2] >= NOODLES_RING_SLOTS)
+        return fail(EPROTO);
+    if (link->write_ptr != link->header[2]) return fail(EBUSY);
+    return 0;
+}
+
+static int open_common(noodles_link_t **out, int verified, int ack_reload) {
     if (!out) return fail(EINVAL);
     *out = NULL;
-    if (ack_reload != 0 && ack_reload != 1) return fail(EINVAL);
+    if (verified && ack_reload) return fail(EINVAL);
+    if (!verified && ack_reload != 0 && ack_reload != 1) return fail(EINVAL);
     noodles_link_t *link = calloc(1, sizeof(*link));
     if (!link) return -1;
     link->fd = link->lock_fd = -1;
@@ -62,7 +164,8 @@ int noodles_link_open_legacy(noodles_link_t **out, int ack_reload) {
     char state = 0;
     ssize_t got = pread(link->lock_fd, &state, 1, 0);
     if (got < 0) goto failed;
-    if (got && state != 'C' && !ack_reload) {
+    int dirty = got && state != 'C';
+    if (!verified && dirty && !ack_reload) {
         errno = EOWNERDEAD;
         goto failed;
     }
@@ -80,24 +183,52 @@ int noodles_link_open_legacy(noodles_link_t **out, int ack_reload) {
     link->header = (volatile uint32_t *)link->map;
     link->slots =
         (volatile uint32_t *)((char *)link->map + (NOODLES_SLOT_BASE_ADDR - NOODLES_HEADER_ADDR));
-    link->write_ptr = link->header[0];  // sync with whatever is already published
-    uint32_t fence_state = link->header[3];
-    link->done_baseline = fence_state & 0x7fffffffu;
-    link->presents_completed = (fence_state >> 31) & 1u;
-    if (link->write_ptr >= NOODLES_RING_SLOTS || link->header[2] >= NOODLES_RING_SLOTS) {
-        errno = EPROTO;
+
+    if (verified) {
+        if (link->header[NOODLES_CONTROL_MAGIC_WORD] != NOODLES_CONTROL_MAGIC) {
+            errno = ENODEV;
+            goto failed;
+        }
+        if (link->header[NOODLES_CONTROL_PROTOCOL_WORD] != NOODLES_PROTOCOL_VERSION) {
+            errno = EPROTONOSUPPORT;
+            goto failed;
+        }
+        uint32_t geometry = link->header[NOODLES_CONTROL_GEOMETRY_WORD];
+        if ((link->header[NOODLES_CONTROL_CAPABILITIES_WORD] &
+             NOODLES_REQUIRED_CAPABILITIES) != NOODLES_REQUIRED_CAPABILITIES ||
+            (geometry >> 16) != NOODLES_BUFFER_WIDTH ||
+            (geometry & 0xffffu) != NOODLES_BUFFER_HEIGHT ||
+            link->header[NOODLES_CONTROL_PITCH_WORD] != NOODLES_BUFFER_PITCH) {
+            errno = ENOTSUP;
+            goto failed;
+        }
+        uint32_t response = link->header[NOODLES_CONTROL_RESPONSE_SEQ_WORD];
+        if (response != 0) {
+            errno = dirty ? EOWNERDEAD : EBUSY;
+            goto failed;
+        }
+        if (random_token(&link->token_lo, &link->token_hi) != 0) goto failed;
+        link->header[NOODLES_CONTROL_REQUEST_TOKEN_LO_WORD] = link->token_lo;
+        link->header[NOODLES_CONTROL_REQUEST_TOKEN_HI_WORD] = link->token_hi;
+        link->verified = 1;
+        request_sequence(link, NOODLES_CONTROL_CLAIM);
+        if (wait_response(link, NOODLES_CONTROL_CLAIM, NOODLES_DEFAULT_TIMEOUT_MS) != 0)
+            goto failed;
+    } else if (link->header[NOODLES_CONTROL_MAGIC_WORD] == NOODLES_CONTROL_MAGIC &&
+               link->header[NOODLES_CONTROL_PROTOCOL_WORD] == NOODLES_PROTOCOL_VERSION) {
+        errno = EPROTONOSUPPORT;
         goto failed;
     }
-    if (link->write_ptr != link->header[2]) {
-        errno = EBUSY;
-        goto failed;
-    }
-    /* Empty ring cannot prove idle on the legacy core: caller must guarantee it. */
+
+    if (initialize_transport(link) != 0) goto failed;
+    /* Empty ring proves readiness only after the stage-2B claim gates it. */
     if (mark_session(link, 'D') != 0) goto failed;
     *out = link;
     return 0;
 failed: {
     int saved = errno;
+    if (link->verified && link->map && link->map != MAP_FAILED)
+        request_sequence(link, 0);
     if (link->map && link->map != MAP_FAILED) munmap(link->map, NOODLES_MAP_SPAN);
     if (link->fd >= 0) close(link->fd);
     if (link->lock_fd >= 0) close(link->lock_fd);
@@ -106,9 +237,44 @@ failed: {
 }
 }
 
+int noodles_link_open(noodles_link_t **out) {
+    return open_common(out, 1, 0);
+}
+
+int noodles_link_open_legacy(noodles_link_t **out, int ack_reload) {
+    return open_common(out, 0, ack_reload);
+}
+
 int noodles_link_close(noodles_link_t *link, uint32_t timeout_ms) {
     if (!link) return fail(EINVAL);
-    int error = noodles_link_drain(link, timeout_ms) == 0 ? 0 : errno;
+    uint64_t start = 0, deadline = 0;
+    int error = 0;
+    if (healthy(link) != 0) {
+        error = errno;
+    } else if (monotonic_ns(&start) != 0) {
+        error = errno;
+    } else {
+        deadline = start + (uint64_t)timeout_ms * 1000000u;
+    }
+    if (!error) {
+        for (;;) {
+            int complete;
+            if (noodles_link_poll(link, noodles_link_last_fence(link), &complete) != 0) {
+                error = errno;
+                break;
+            }
+            if (complete) break;
+            if (pause_until(deadline) != 0) {
+                error = errno;
+                link->fault = error;
+                break;
+            }
+        }
+    }
+    if (!error && link->verified) {
+        request_sequence(link, 0);
+        if (wait_response_until(link, 0, deadline) != 0) error = errno;
+    }
     if (munmap(link->map, link->map_span) != 0 && !error) error = errno;
     if (close(link->fd) != 0 && !error) error = errno;
     if (!error && mark_session(link, 'C') != 0) {
@@ -122,10 +288,23 @@ int noodles_link_close(noodles_link_t *link, uint32_t timeout_ms) {
 }
 
 int noodles_link_get_info(const noodles_link_t *link, noodles_device_info_t *info) {
-    if (healthy(link) != 0) return -1;
+    if (!link) return fail(EINVAL);
+    if (link->fault) return fail(link->fault);
+    int error = session_error(link);
+    if (error) return fail(error);
     if (!info) return fail(EINVAL);
-    *info = (noodles_device_info_t){NOODLES_BUFFER_WIDTH, NOODLES_BUFFER_HEIGHT,
-        NOODLES_BUFFER_PITCH, 0x7eu, 0, NOODLES_SDK_VERSION};
+    uint32_t geometry = link->verified ? link->header[NOODLES_CONTROL_GEOMETRY_WORD] :
+                                        (NOODLES_BUFFER_WIDTH << 16) | NOODLES_BUFFER_HEIGHT;
+    *info = (noodles_device_info_t){
+        geometry >> 16,
+        geometry & 0xffffu,
+        link->verified ? link->header[NOODLES_CONTROL_PITCH_WORD] : NOODLES_BUFFER_PITCH,
+        link->verified ? link->header[NOODLES_CONTROL_CAPABILITIES_WORD] :
+                         NOODLES_REQUIRED_CAPABILITIES,
+        link->verified ? link->header[NOODLES_CONTROL_PROTOCOL_WORD] : 0,
+        link->verified,
+        NOODLES_SDK_VERSION,
+    };
     return 0;
 }
 
@@ -145,38 +324,40 @@ int noodles_link_poll(noodles_link_t *link, noodles_fence_t target, int *complet
     if (healthy(link) != 0) return -1;
     if (!complete) return fail(EINVAL);
     __sync_synchronize();
-    *complete = noodles_link_fence_reached(link, target);
-    if (link->present_pending && noodles_link_fence_reached(link, link->present_fence)) {
+    int reached = noodles_link_fence_reached(link, target);
+    if (reached && link->verified) {
+        if (!link->ping_pending) {
+            do {
+                ++link->ping_seq;
+            } while (link->ping_seq == 0 || link->ping_seq == NOODLES_CONTROL_CLAIM);
+            request_sequence(link, link->ping_seq);
+            link->ping_pending = 1;
+            reached = 0;
+        } else if (link->header[NOODLES_CONTROL_RESPONSE_SEQ_WORD] == link->ping_seq) {
+            link->ping_pending = 0;
+        } else {
+            reached = 0;
+        }
+    }
+    *complete = reached;
+    if (reached && link->present_pending &&
+        noodles_link_fence_reached(link, link->present_fence)) {
         link->presents_completed = (link->header[3] >> 31) & 1u;
         link->present_pending = 0;
     }
     return 0;
 }
 
-static int monotonic_ns(uint64_t *value) {
-    struct timespec time;
-    if (clock_gettime(CLOCK_MONOTONIC, &time) != 0) return -1;
-    *value = (uint64_t)time.tv_sec * 1000000000u + (uint64_t)time.tv_nsec;
-    return 0;
-}
-
 int noodles_link_wait(noodles_link_t *link, noodles_fence_t target, uint32_t timeout_ms) {
     if (healthy(link) != 0) return -1;
-    uint64_t start, now;
+    uint64_t start;
     if (monotonic_ns(&start) != 0) { link->fault = errno; return -1; }
     uint64_t deadline = start + (uint64_t)timeout_ms * 1000000u;
     for (;;) {
         int complete;
         if (noodles_link_poll(link, target, &complete) != 0) return -1;
         if (complete) return 0;
-        if (monotonic_ns(&now) != 0) { link->fault = errno; return -1; }
-        if (now >= deadline) {
-            link->fault = ETIMEDOUT;
-            return fail(ETIMEDOUT);
-        }
-        uint64_t remaining = deadline - now;
-        struct timespec pause = {0, remaining < 1000000u ? (long)remaining : 1000000};
-        if (nanosleep(&pause, NULL) != 0 && errno != EINTR) {
+        if (pause_until(deadline) != 0) {
             link->fault = errno;
             return -1;
         }
@@ -232,11 +413,16 @@ static int valid_command(const uint32_t *c) {
 
 static int descriptors_available(noodles_link_t *link) {
     if (link->batch_pending) {
-        if (!noodles_link_fence_reached(link, link->batch_fence)) {
+        int complete;
+        if (link->verified) {
+            if (noodles_link_poll(link, link->batch_fence, &complete) != 0) return 0;
+        } else {
+            complete = noodles_link_fence_reached(link, link->batch_fence);
+        }
+        if (!complete) {
             errno = EAGAIN;
             return 0;
         }
-        __sync_synchronize();
         link->batch_pending = 0;
     }
     return 1;
@@ -259,6 +445,7 @@ int noodles_push_command(noodles_link_t *link, const uint32_t command[8]) {
     int is_batch = (command[0] & 0xffu) == NOODLES_OP_SPRITE_BATCH;
     // Reap completed ownership on every push, including long runs of non-batch work.
     int available = descriptors_available(link);
+    if (!available && errno != EAGAIN) return -1;
     if ((is_batch && !available) || !ring_has_space(link)) return -1;
     uint32_t next_write_ptr = (link->write_ptr + 1) % NOODLES_RING_SLOTS;
 

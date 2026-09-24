@@ -6,8 +6,7 @@
 #include <stdlib.h>
 
 static inline int tool_open(noodles_link_t **link) {
-    fprintf(stderr, "Noodles: legacy/unverified SVGA attachment; matching idle core required.\n");
-    return noodles_link_open_legacy(link, 0);
+    return noodles_link_open(link);
 }
 
 static inline void tool_close(noodles_link_t *link) {

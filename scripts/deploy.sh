@@ -14,8 +14,8 @@ ssh "root@$HOST" "mkdir -p $DEST/assets"
 scp $BINS "root@$HOST:$DEST/"
 scp $ASSETS "root@$HOST:$DEST/assets/"
 echo
-echo "SDK smoke check, requiring the matching initialized, idle SVGA core:"
-echo "  $DEST/sdk-smoke --legacy-svga"
+echo "verified SDK smoke check, requiring the stage-2B core:"
+echo "  $DEST/sdk-smoke"
 echo
 echo "after loading the Noodles core, push a real host-driven command into LINK's ring buffer:"
 echo "  $DEST/link-push"
