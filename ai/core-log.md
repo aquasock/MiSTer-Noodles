@@ -311,7 +311,7 @@ Scope double-buffered or multi-slot sprite descriptors as the next performance c
 
 ---
 
-## 8 COMMIT Unreleased ??? 2026-09-24T09:49:02-07:00
+## 8 COMMIT Unreleased 513f218 2026-09-24T09:49:02-07:00
 
 #### Coming From:
 
@@ -323,19 +323,17 @@ Remove the single sprite-descriptor-table submission bottleneck while preserving
 
 #### Outcome:
 
-The planned protocol 1.5 and SDK 0.9 change will add a capability-gated ring of 64 aligned 2 KiB descriptor tables, pass opcode 5 word 1 through CMDQ as the selected table base, and make `sprite_batch` fetch from that latched base. The SDK will choose free tables, track completion fences independently for typed and raw batch submissions, protect overlapping raw uploads, reserve the complete descriptor pool, and retain the existing single-table behavior when attached to protocol 1.4 hardware. Simulation will cover address decode, non-default table fetches, simultaneous in-flight ownership, wraparound, compatibility and non-destructive retry behavior.
+Source `513f218` publishes protocol 1.5 and SDK 0.9 with 64 aligned 2 KiB descriptor tables, CMDQ-captured opcode-5 table selection, per-table fence ownership, protected raw uploads and protocol-1.4 single-table compatibility. Complete RTL, host, installed-consumer and sanitizer regressions passed, including non-default bases, 320 mixed draws, all 64 simultaneous table owners and 89,063,424 blend vectors. A first seed-13 fit with a redundant table-base register failed slow -40C setup at -0.082ns; removing that register while retaining CMDQ's stable capture preserved behavior, and the repeated suite passed. Per the user's two-build rule, corrected seed 13 and seed 7 fits both passed all four corners; pinned seed 13 has +0.088ns worst setup, +0.080ns worst hold and RBF SHA256 `b79037fce611af71513b7aba9f48ace0a3fa1ffc3f6820c96080be4e60dd5e56`. On hardware it reported protocol `0x00010005` and mask `0x3fe`, passed 576 ordered batched draws bit-exactly with three tables queued per round, drained the SDL audio diagnostic, and ran a four-batch stress at 60.4fps. MiSTer-GemRB source `50cf286` passed its pixel diagnostic and AR4000 combat reduced queue time from 24.1-26.5ms to 14.4-15.2ms per frame, eliminated sprite-batch stalls, reduced drains from approximately 25-27 to about one per frame, reached 15.9-17.8fps and game over without a renderer fault, and used 41.8% of one Cortex-A9 core versus the prior 48-50.5% sample.
 
 #### Next Steps:
 
-Implement and run the complete RTL, host, installed-consumer and sanitizer regressions, then perform the user-required isolated seed-13 fit and four-corner timing gate before publishing the RTL source. After the exact revision is reproduced and accepted on hardware, rebuild MiSTer-GemRB against SDK 0.9 and compare AR4000 batch stalls, drains, draw time and frame rate with the protocol 1.4 baseline.
+Repeat AR4000 once with statistics disabled, then capture a spell-heavy interval to identify whether its remaining cost is flagged sprite work, scaling or a software primitive before choosing the next shared accelerator feature. Keep the protocol-1.4 image as the recovery fallback and retain the two-build limit for future seed comparisons.
 
 #### Files Modified:
 
 - Noodles.sv
 - README.md
-- docs/BUILD.md
 - docs/INTEGRATION.md
-- docs/QUALIFICATION.md
 - docs/SDK.md
 - lib/noodles.pc.in
 - lib/noodles_link.c
@@ -357,7 +355,7 @@ Implement and run the complete RTL, host, installed-consumer and sanitizer regre
 
 #### Status:
 
-- [ ] Built
-- [ ] Passed
+- [x] Built
+- [x] Passed
 
 ---
