@@ -8,11 +8,65 @@ from. The build procedure itself is in [BUILD.md](BUILD.md).
 
 | # | Date | Build | Seed | RBF SHA-256 | Hardware status |
 |---|---|---|---:|---|---|
+| 6 | 2026-09-24 | **Candidate:** protocol 1.5 descriptor ring, 800x600 at 100MHz, four-corner timing pass | 13 | `b79037fc…dd5e56` | Awaiting hardware pixel and MiSTer-GemRB validation |
 | 5 | 2026-09-24 | **Current:** protocol 1.4, 800x600 at 100MHz, four-corner timing pass | 13 | `39c2efa8…7e008f` | Exact pixels, HDMI audio and MiSTer-GemRB accepted |
 | 4 | 2026-09-23 | Previous protocol 1.0 800x600 build, four-corner timing pass | 7 | `a020e304…43a47a` | User visually accepted; independent reproduction waived |
 | 3 | 2026-09-23 | 800x600 candidate, source `37d21c9`; cold-corner setup failure | 5 | `65ca7861…eb5587` | Diagnostic hardware run only; not qualified |
 | 2 | 2026-09-23 | Recovery fallback: 640x480, shared 100MHz clock, registered write ingress and slot enables | 5 | `b76fb924…247b8d` | Accepted; clean-commit reproduction verified |
 | 1 | 2026-09-22 | Historical: SPRITE_BATCH engine, 64-bit DDRAM path, PRESENT retirement-acknowledgement fix | 1 | `25f9d3a1…edba93` | Accepted -- see below |
+
+## Protocol 1.5 descriptor-ring candidate (6)
+
+Source `513f2182b3b0c156c0bd8644e06678cdef0b5f14` publishes protocol
+`0x00010005`, capability mask `0x000003fe` and SDK 0.9. Opcode 5 can select
+one of 64 aligned 2KiB descriptor tables. CMDQ captures the table base for
+the command, while the SDK uses independent completion-fence ownership to
+prepare later batches without waiting for the previous table to retire.
+Protocol 1.4 and earlier cores retain the original single-table behavior.
+
+The full RTL, host, installed-consumer and sanitizer regressions passed before
+the fits. Coverage includes non-default descriptor bases, eight mixed batches
+containing 320 draws, a 64-table ownership stress, raw-upload protection,
+fence wraparound, protocol 1.4 fallback and two consecutive public-SDK batches
+whose descriptors were verified in distinct mapped tables. The production
+DDR3 sprite test completed 64 descriptors in 295,809 cycles. The blend unit
+passed 89,063,424 vectors and the blended blitter passed 5,000 randomized
+cases.
+
+An initial seed-13 fit with a redundant 32-bit table-base register in
+`sprite_batch` failed slow -40C setup at -0.082ns overall and -0.075ns in the
+core. That image, SHA-256 `55c29910b324c609bec406d99bb1054fc476e2b197851c3228b35f2d5827954f`,
+was rejected and was not published or deployed. CMDQ already holds the base
+stable until batch completion, so the redundant register was removed and the
+complete regression suite was repeated successfully.
+
+Following the user's two-build rule, the corrected source was built in two
+isolated directories with Quartus Prime Lite 17.0.2 Build 602,
+`SOURCE_DATE_EPOCH=1790121600`, 16 fitter threads and MEDIUM register packing.
+Both seeds pass setup, hold, recovery, removal and minimum-pulse checks at all
+four operating corners:
+
+| Seed | Slow -40C setup | Worst hold | Four-corner result | RBF SHA-256 |
+|---:|---:|---:|---|---|
+| 13 | +0.088ns | +0.080ns | PASS | `b79037fce611af71513b7aba9f48ace0a3fa1ffc3f6820c96080be4e60dd5e56` |
+| 7 | +0.260ns | +0.070ns | PASS | `aa517c3a2b3ce41c6e7ae9e8539c1776b5a5984cbc87bbea35a773b3b442f0cc` |
+
+Seed 13 is the pinned candidate. Its per-corner worst slack, in ns, is:
+
+| Model at 1.1V | Setup | Hold | Core hold | Min pulse width |
+|---|---:|---:|---:|---:|
+| Slow, +100C | +0.153 | +0.183 | +0.246 | +1.122 |
+| Slow, -40C | +0.088 | +0.083 | +0.192 | +1.122 |
+| Fast, +100C | +3.219 | +0.101 | +0.101 | +1.122 |
+| Fast, -40C | +3.609 | +0.080 | +0.080 | +1.122 |
+
+Recovery and removal pass at every corner. The seed-13 fit uses 14,683 ALMs,
+18,895 registers, 367,668 block-memory bits, 77 RAM blocks and 60 DSP blocks.
+Seed 7 uses 14,686 ALMs and 18,903 registers with the same memory and DSP
+counts. The isolated build's RTL files match source `513f218`; Quartus's
+expanded QSF only repeats the source-file assignments already supplied by
+`files.qip`. Hardware acceptance, exact-pixel validation and the MiSTer-GemRB
+AR4000 comparison remain pending, so build 5 stays the accepted fallback.
 
 ## Current protocol 1.4 seed-13 build (5)
 

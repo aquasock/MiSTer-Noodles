@@ -16,9 +16,10 @@ quartus_sta -t tools/report_timing.tcl
 quartus_sta -t tools/report_multicorner.tcl  # required post-fit timing gate
 ```
 
-`Noodles.qsf` pins the fitter settings for the accepted protocol 1.4 seed-13 build
-(see below); the Quartus project is named
-`Noodles`, so a full build writes `output_files/Noodles.rbf`.
+`Noodles.qsf` pins the fitter settings used by both the accepted protocol 1.4
+seed-13 build and the timing-qualified protocol 1.5 candidate (see below).
+The Quartus project is named `Noodles`, so a full build writes
+`output_files/Noodles.rbf`.
 
 `make sdk` / `make sdk-host` build the static SDK independently of the demos.
 See [SDK.md](SDK.md) for staged installation, pkg-config and external consumers.
@@ -63,12 +64,23 @@ and the recorded build date. Matching settings alone is not proof of
 reproducibility; compare the resulting RBF hash against
 [QUALIFICATION.md](QUALIFICATION.md).
 
-The current protocol 1.4 image was built from `2dea6a1` with SEED overridden
-to 13. It passes all four timing corners, exact-pixel hardware diagnostics,
-HDMI audio and the MiSTer-GemRB AR4000 workload. The project now pins that
-seed without changing RTL, clocks or constraints. Use
-`SOURCE_DATE_EPOCH=1790121600` and compare against the seed-13 hash in
-[QUALIFICATION.md](QUALIFICATION.md) when reproducing it.
+The current source is the protocol 1.5 and SDK 0.9 descriptor-ring candidate.
+Its seed-13 and seed-7 builds both pass all four timing corners; seed 13 is the
+pinned hardware-test image. It has not yet replaced the hardware-accepted
+protocol 1.4 image. Use `SOURCE_DATE_EPOCH=1790121600` and compare against the
+protocol 1.5 seed-13 hash in [QUALIFICATION.md](QUALIFICATION.md).
+
+```sh
+git checkout --detach 513f2182b3b0c156c0bd8644e06678cdef0b5f14
+SOURCE_DATE_EPOCH=1790121600 quartus_sh --flow compile Noodles
+quartus_sta -t tools/report_timing.tcl
+quartus_sta -t tools/report_multicorner.tcl
+sha256sum output_files/Noodles.rbf
+```
+
+The accepted protocol 1.4 fallback remains reproducible from the pinned source
+below. It passed exact-pixel hardware diagnostics, HDMI audio and the
+MiSTer-GemRB AR4000 workload.
 
 ```sh
 git checkout --detach 042b62ce9aefd1d34d167916ccffff930512e8e6
