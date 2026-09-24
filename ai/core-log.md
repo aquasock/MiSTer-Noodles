@@ -42,6 +42,35 @@ Wire CMDQ and BLIT into Noodles.sv for real: design and implement the DDRAM writ
 
 ---
 
+## 87 COMMIT Unreleased ??? 2026-09-23T20:09:02-07:00
+
+#### Coming From:
+
+Unreleased 9e06a0f
+
+#### Purpose:
+
+Investigate and close the Stage 2B setup-timing failure under the approved timing-closure scope.
+
+#### Outcome:
+
+The recovery review confirmed that local `main` matches `origin/main` at `bd7ba1d`, and that the corrected Stage 2B source completed Quartus compilation but failed setup timing at -0.185 ns while hold timing passed at +0.180 ns. The user approved inspecting the isolated build at `/tmp/noodles-2b.dal6zF` and making a narrowly scoped placement, seed or RTL change, followed by simulation and a clean Quartus build; the failed image remains prohibited from deployment or hardware acceptance.
+
+#### Next Steps:
+
+Inspect the failing setup paths and their source or constraint causes, implement only the smallest justified timing-closure change, then run the relevant simulations and a clean Quartus build with timing verification. Stop for further direction before deployment or hardware testing if timing remains negative or the change would materially expand scope.
+
+#### Files Modified:
+
+None.
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
+
 ## 2 COMMIT Unreleased ecadd93 2026-09-21T23:04:52-07:00
 
 #### Coming From:
