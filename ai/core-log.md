@@ -278,7 +278,7 @@ Open a separate approved cycle to pin seed 13 in `Noodles.qsf`, refresh the olde
 
 ---
 
-## 7 COMMIT Unreleased ??? 2026-09-24T09:33:02-07:00
+## 7 COMMIT Unreleased 042b62c 2026-09-24T09:33:02-07:00
 
 #### Coming From:
 
@@ -290,11 +290,11 @@ Pin the hardware-accepted seed-13 protocol 1.4 image and make its build and qual
 
 #### Outcome:
 
-The planned source change will replace the obsolete seed-7 fitter assignment with seed 13 and update the consumer, build and qualification documents to identify protocol 1.4, SDK 0.8, the exact accepted RBF hash, its three-seed timing comparison, hardware pixel validation, HDMI audio result and MiSTer-GemRB AR4000 result. No RTL, clock, constraint, protocol or SDK behavior will change.
+Source `042b62c` replaces the obsolete seed-7 fitter assignment with seed 13 and updates the consumer, build and qualification documents for the protocol 1.4 and SDK 0.8 baseline, including the exact accepted RBF hash, three-seed timing comparison, hardware pixel validation, HDMI audio result and MiSTer-GemRB AR4000 result; it changes no RTL, clock, constraint, protocol or SDK behavior. A fresh online clone of exact source `042b62c`, built with Quartus Prime Lite 17.0.2 Build 602 and `SOURCE_DATE_EPOCH=1790121600`, completed in 5m18s and passed the four-corner gate with the same +0.250ns worst setup, +0.108ns worst hold, 14687 ALMs, 18983 registers, 367668 memory bits and 60 DSP blocks. Its RBF was byte-identical to the hardware-accepted artifact with SHA256 `39c2efa8b08164eb3daad2d5b62ea6961152727b1f92886f5c4a329d527e008f`, so deployment and hardware diagnostics did not need repeating. Documentation commit `70de906` records the exact pinned revision and successful reproduction.
 
 #### Next Steps:
 
-Commit and publish the pin and documentation first, then build that exact revision from a clean isolated tree with the qualified epoch, Quartus version, thread count and packing settings. Run the four-corner timing gate, compare the RBF against the accepted seed-13 artifact, and repeat hardware identity and exact-pixel diagnostics if any generated bit differs.
+Scope double-buffered or multi-slot sprite descriptors as the next performance cycle, using fence-based ownership so the host can prepare a following batch while hardware consumes the current table. Preserve command order and bounded memory ownership, measure its effect on draw stalls and drains in AR4000, and defer fill batching until the remaining approximately 3ms per frame of solid fills becomes material.
 
 #### Files Modified:
 
@@ -306,7 +306,7 @@ Commit and publish the pin and documentation first, then build that exact revisi
 
 #### Status:
 
-- [ ] Built
-- [ ] Passed
+- [x] Built
+- [x] Passed
 
 ---
