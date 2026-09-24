@@ -90,7 +90,7 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 | How do I avoid tearing when drawing animated content? Which buffer do I draw into? | OUT component records | OUT-004 |
 | Why were the OSD test buttons (Marker/Draw/Blit Copy Test) removed? | CMDQ component records | CMDQ-003 |
 | Is any address inside SURF-003's window actually unsafe? | SURF component records | SURF-004 |
-| What resolution are the surfaces, and where do they live now? | SURF component records | SURF-005 |
+| What resolution are the surfaces, and where do they live now? | SURF component records | SURF-006 |
 | What are BLIT_COPY's exact fields? | BLIT component records | BLIT-003 |
 | How does a read reach DDRAM_*? | DDR component records | DDR-003 |
 | Does polling for LINK steal video scan-out bandwidth? | DDR component records | DDR-004 |
@@ -314,10 +314,20 @@ OUT-005: "OUT-004's single-fresh-vblank-edge PRESENT margin is not reliably suff
   kind: INTERFACE
   component_id: SURF
   title: "Surfaces sized up from 64x64 bring-up to 640x480 (StarCraft/OpenBW-scale); double-buffer addresses moved to 2MB-aligned slots"
-  status: DECIDED
+  status: SUPERSEDED
   decided_date: 2026-09-22
   decision: "The 64x64 surface was always a bring-up size, chosen to keep early hardware debugging simple, not a real target. Sized up to 640x480 (exactly 4:3, matching VIDEO_ARX/VIDEO_ARY's existing setting) -- large enough to be a plausible target for the kind of sprite-based game (Petz/Dogz-style, StarCraft/OpenBW-style) this engine's rendering capability is being built toward, per BLIT-006 and OUT-004. Each 640x480x4B buffer is ~1.17MB, far larger than the old 64x64 surface's 16KB, so OUT-004's tight 32KB buffer spacing no longer fits -- BUFFER_A/BUFFER_B moved to their own 2MB-aligned slots (0x31000000/0x31200000), comfortably clear of each other and of LINK-002's ring (a few KB at 0x30020000+), still well inside SURF-003's confirmed-safe [0x20000000,0x40000000) window and clear of SURF-004's 0x20000000 collision. Host-side scratch regions used by demo tools that need an off-screen source (blit_copy_push.c, blit_copy_key_push.c, bench.c) moved to their own 2MB slot (0x31400000) for the same reason -- the old 0x30010000 scratch address would now fall inside the ring header's neighborhood once a full-size source region is needed. lib/noodles_link.h's NOODLES_BUFFER_WIDTH/HEIGHT/PITCH/A_ADDR/B_ADDR constants updated to match; every tool that drew directly into a hardcoded single-buffer address was updated to use noodles_link_back_buffer() + noodles_present_and_wait() instead, since OUT-004 already made that the correct pattern and these tools hadn't caught up yet."
   consequence: "A full-surface SOLID_FILL now costs ~15ms (640*480 pixels at BLIT-001/bench's measured ~1 cycle/pixel, vs ~205us at 64x64) and a full-surface BLIT_COPY ~126ms (~8.2 cycles/pixel) -- still comfortably within a single vsync-paced frame, but tools polling the completion fence needed longer timeouts than the old 64x64-era 200ms (bumped to 2s in blit_copy_push.c/blit_copy_key_push.c). The write-mux/read-mux/DDRAM adapter designs are unaffected -- nothing here is a new architecture concern, only larger addresses and more pixels per command. Verified on real hardware: present_demo.c's color cycle and blit_copy_key_push.c's sprite composite both confirmed visually correct at the new resolution and buffer addresses (0x31000000/0x31200000 observed alternating correctly in present_demo.c's own output)."
+
+- record_id: SURF-006
+  kind: INTERFACE
+  component_id: SURF
+  title: "800x600 framebuffer geometry in the existing two DDR3 slots"
+  status: DECIDED
+  decided_date: 2026-09-23
+  supersedes: "SURF-005"
+  decision: "The standard render framebuffer is 800x600, 32 bits per pixel, with a 3200-byte row pitch and unchanged RGB byte order. Buffer A remains at physical DDR3 byte address 0x31000000 and buffer B at 0x31200000; each occupies 1920000 bytes within its reserved 2MiB slot. The source image remains 4:3 and the MiSTer scaler selects/scales to the independently configured HDMI output mode. The GPU clock stays 100MHz. The core FB_WIDTH/FB_HEIGHT/FB_STRIDE and host NOODLES_BUFFER_WIDTH/HEIGHT/PITCH must agree."
+  consequence: "Host applications must be rebuilt for this geometry and paired with the matching core because the current interface has no runtime geometry discovery. Command layouts, buffer selection, PRESENT retirement, production DDR3 sprite routing and scratch base 0x31400000 are unchanged. This supersedes SURF-005's geometry, not the historical 640x480 image's qualification; acceptance of a new bitstream is recorded separately in core-log.md."
 
 - record_id: BLIT-003
   kind: INTERFACE
