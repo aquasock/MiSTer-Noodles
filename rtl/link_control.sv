@@ -19,7 +19,7 @@ module link_control #(
 
     output logic [31:0] rd_addr,
     output logic         rd_en,
-    output logic         rd_active,
+    output logic         rd_active,   // spans every *_REQ/*_WAIT state
     input  logic         rd_ready,
     input  logic [31:0]  rd_data,
     input  logic         rd_valid,
@@ -33,7 +33,7 @@ module link_control #(
 );
 
     localparam logic [31:0] MAGIC = 32'h4e44_4c53;
-    localparam logic [31:0] PROTOCOL = 32'h0001_0002;       // LINK-013
+    localparam logic [31:0] PROTOCOL = 32'h0001_0003;       // LINK-014
     localparam logic [31:0] CAPABILITIES = 32'h0000_00fe;   // opcodes 1-7
     localparam logic [31:0] GEOMETRY = {16'd800, 16'd600};
     localparam logic [31:0] PITCH = 32'd3200;
@@ -69,14 +69,10 @@ module link_control #(
     logic [31:0] rd_data_q;
     logic        rd_valid_q;
 
-    assign rd_en = state == POLL_SEQ_REQ || state == TOKEN_LO_REQ || state == TOKEN_HI_REQ;
-    assign rd_active = state == POLL_SEQ_REQ || state == POLL_SEQ_WAIT ||
-                       state == TOKEN_LO_REQ || state == TOKEN_LO_WAIT ||
-                       state == TOKEN_HI_REQ || state == TOKEN_HI_WAIT;
-    assign rd_addr = (state == TOKEN_LO_REQ || state == TOKEN_LO_WAIT) ?
-                     REQUEST_TOKEN_LO_ADDR :
-                     (state == TOKEN_HI_REQ || state == TOKEN_HI_WAIT) ?
-                     REQUEST_TOKEN_HI_ADDR : REQUEST_SEQ_ADDR;
+    // rd_en/rd_active/rd_addr are registers set on the transitions into and
+    // out of the *_REQ/*_WAIT states, equal cycle for cycle to decoding the
+    // state but without state-decode logic ahead of the top-level read mux
+    // and the adapter's request queue.
 
     assign wr_en = state == INIT_MAGIC_CLEAR || state == INIT_REQUEST_CLEAR ||
                    state == INIT_RESPONSE_CLEAR || state == INIT_PROTOCOL ||
@@ -116,6 +112,9 @@ module link_control #(
             rd_data_q <= 32'd0;
             rd_valid_q <= 1'b0;
             session_active <= 1'b0;
+            rd_en <= 1'b0;
+            rd_active <= 1'b0;
+            rd_addr <= REQUEST_SEQ_ADDR;
         end else begin
             // Register DDR3 responses before the session FSM compares them.
             rd_valid_q <= rd_valid;
@@ -142,12 +141,19 @@ module link_control #(
                     end else if (bus_available) begin
                         poll_count <= '0;
                         state <= POLL_SEQ_REQ;
+                        rd_en <= 1'b1;
+                        rd_active <= 1'b1;
+                        rd_addr <= REQUEST_SEQ_ADDR;
                     end
                 end
-                POLL_SEQ_REQ: if (rd_en && rd_ready) state <= POLL_SEQ_WAIT;
+                POLL_SEQ_REQ: if (rd_en && rd_ready) begin
+                    state <= POLL_SEQ_WAIT;
+                    rd_en <= 1'b0;
+                end
                 POLL_SEQ_WAIT: begin
                     if (rd_valid_q) begin
                         request_seq <= rd_data_q;
+                        rd_active <= 1'b0;
                         if (rd_data_q == last_request_seq) begin
                             state <= IDLE;
                         end else if (session_active && rd_data_q == 32'd0) begin
@@ -159,22 +165,34 @@ module link_control #(
                         end else if (rd_data_q != 32'd0 &&
                                      (session_active || (device_initialized && rd_data_q == CLAIM))) begin
                             state <= TOKEN_LO_REQ;
+                            rd_en <= 1'b1;
+                            rd_active <= 1'b1;
+                            rd_addr <= REQUEST_TOKEN_LO_ADDR;
                         end else begin
                             state <= IDLE;
                         end
                     end
                 end
-                TOKEN_LO_REQ: if (rd_en && rd_ready) state <= TOKEN_LO_WAIT;
+                TOKEN_LO_REQ: if (rd_en && rd_ready) begin
+                    state <= TOKEN_LO_WAIT;
+                    rd_en <= 1'b0;
+                end
                 TOKEN_LO_WAIT: begin
                     if (rd_valid_q) begin
                         candidate_token_lo <= rd_data_q;
                         state <= TOKEN_HI_REQ;
+                        rd_en <= 1'b1;
+                        rd_addr <= REQUEST_TOKEN_HI_ADDR;
                     end
                 end
-                TOKEN_HI_REQ: if (rd_en && rd_ready) state <= TOKEN_HI_WAIT;
+                TOKEN_HI_REQ: if (rd_en && rd_ready) begin
+                    state <= TOKEN_HI_WAIT;
+                    rd_en <= 1'b0;
+                end
                 TOKEN_HI_WAIT: begin
                     if (rd_valid_q) begin
                         candidate_token_hi <= rd_data_q;
+                        rd_active <= 1'b0;
                         if ((!session_active && request_seq == CLAIM &&
                              (candidate_token_lo != 32'd0 || rd_data_q != 32'd0)) ||
                             (session_active && candidate_token_lo == session_token_lo &&

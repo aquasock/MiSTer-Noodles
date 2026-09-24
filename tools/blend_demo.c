@@ -10,6 +10,11 @@
 //   blend-demo bench [seconds]     64 blended 128x128 sprites per fence wait
 //                                  into the back buffer, as 64 BLIT_BLEND
 //                                  commands and then as one flagged batch
+//   blend-demo modes [seconds] [n] n arrows passing behind a wall band, drawn
+//                                  GemRB-style: copied into a scratch surface,
+//                                  the wall cut from their alpha with the
+//                                  stencil mode, then composited with BLEND,
+//                                  ADD (glow) or MUL in turn (BLIT-009)
 //   blend-demo show [seconds] [n]  n translucent, tinted arrows in one batch
 //                                  per frame, drifting over colour bars; each
 //                                  points the way it moves (mirror-x) and
@@ -202,6 +207,16 @@ static int verify(noodles_link_t *link) {
                 flags = next_random() & (NOODLES_DRAW_BLEND | NOODLES_DRAW_MIRROR_X |
                                          NOODLES_DRAW_MIRROR_Y);
                 if (!flags) flags = NOODLES_DRAW_BLEND;
+                if (next_random() % 3 == 0) {   // BLIT-009 explicit mode
+                    uint32_t op_c = 1 + next_random() % 5, op_a = 1 + next_random() % 5;
+                    flags = (flags & (NOODLES_DRAW_MIRROR_X | NOODLES_DRAW_MIRROR_Y)) |
+                            NOODLES_DRAW_BLEND_MODE(1 + next_random() % 10, 1 + next_random() % 10,
+                                                    op_c, 1 + next_random() % 10,
+                                                    1 + next_random() % 10, op_a);
+                    if (op_c == NOODLES_BLENDOP_ADD && op_a == NOODLES_BLENDOP_ADD &&
+                        (next_random() & 1))
+                        flags |= NOODLES_DRAW_SINGLE_ROUNDING;
+                }
                 mod = next_random() % 3 ? next_random() : 0xffffffffu;
                 ++flagged;
             }
@@ -214,7 +229,7 @@ static int verify(noodles_link_t *link) {
                     uint32_t sp = src[(sy + fy) * SW + sx + fx];
                     uint32_t *e = &expect[(dy + y) * DW + dx + x];
                     if (flags & ~NOODLES_DRAW_KEY)
-                        *e = noodles_draw_ref(sp, *e, mod, (flags & NOODLES_DRAW_BLEND) != 0);
+                        *e = noodles_mode_ref(sp, *e, mod, flags);
                     else if (!(flags & NOODLES_DRAW_KEY) || sp != key)
                         *e = sp;
                 }
@@ -345,14 +360,106 @@ static int show(noodles_link_t *link, noodles_surface_t *sprite, double seconds,
     return 0;
 }
 
+// GemRB's software-renderer occlusion, per arrow and in batch order: copy the
+// arrow into its scratch surface, scale the scratch's alpha by 1 - wall mask
+// alpha (NOODLES_DRAW_MODE_STENCIL_ALPHA), then composite the scratch.
+static int modes(noodles_link_t *link, noodles_surface_t *sprite, double seconds, int count) {
+    enum { WALL_X = 340, WALL_W = 120 };
+    static uint32_t mask_row[NOODLES_BUFFER_WIDTH];
+    noodles_surface_t *mask = NULL, *scratch[MAX_SHOW / 3];
+    const noodles_rect_t rect = {0, 0, SPRITE, SPRITE};
+    if (noodles_surface_create(link, NOODLES_BUFFER_WIDTH, NOODLES_BUFFER_HEIGHT, &mask) != 0) {
+        perror("mask surface");
+        return -1;
+    }
+    for (int x = 0; x < (int)NOODLES_BUFFER_WIDTH; ++x)
+        mask_row[x] = (x >= WALL_X && x < WALL_X + WALL_W) ? 0xff000000u : 0;
+    for (uint32_t y = 0; y < NOODLES_BUFFER_HEIGHT; ++y) {
+        const noodles_rect_t row = {0, (int32_t)y, NOODLES_BUFFER_WIDTH, 1};
+        if (noodles_surface_update(mask, &row, mask_row, sizeof(mask_row), 2000) != 0) {
+            perror("mask upload");
+            return -1;
+        }
+    }
+    for (int i = 0; i < count; ++i)
+        if (noodles_surface_create(link, SPRITE, SPRITE, &scratch[i]) != 0) {
+            perror("scratch surface");
+            return -1;
+        }
+    static const uint32_t bars[8][3] = {
+        {255, 255, 255}, {255, 255, 0}, {0, 255, 255}, {0, 255, 0},
+        {255, 0, 255},   {255, 0, 0},   {0, 0, 255},   {24, 24, 24},
+    };
+    static const uint32_t finish[3] = {NOODLES_DRAW_BLEND, NOODLES_DRAW_MODE_ADD,
+                                       NOODLES_DRAW_MODE_MUL};
+    long frames = 0;
+    double start = now_seconds();
+    while (now_seconds() - start < seconds) {
+        uint32_t back = noodles_link_back_buffer(link);
+        for (int b = 0; b < 8; ++b)
+            if (RETRY(noodles_push_solid_fill(link, back + (uint32_t)b * 100 * 4,
+                                              NOODLES_BUFFER_PITCH, 100, NOODLES_BUFFER_HEIGHT,
+                                              noodles_rgb((uint8_t)bars[b][0], (uint8_t)bars[b][1],
+                                                          (uint8_t)bars[b][2]))) != 0) {
+                perror("fill");
+                return -1;
+            }
+        // The wall: drawn opaque over the bars; arrows must pass behind it.
+        if (RETRY(noodles_push_solid_fill(link, back + WALL_X * 4, NOODLES_BUFFER_PITCH, WALL_W,
+                                          NOODLES_BUFFER_HEIGHT, noodles_rgb(90, 60, 40))) != 0) {
+            perror("wall");
+            return -1;
+        }
+        noodles_surface_draw_t draws[MAX_SHOW];
+        size_t n = 0;
+        for (int i = 0; i < count; ++i) {
+            double t = frames / 60.0 + i * 0.7;
+            int x = (int)(336 + 380 * sin(t * (0.5 + 0.05 * i)));
+            int y = (int)(236 + 270 * cos(t * (0.4 + 0.03 * i)));
+            uint32_t mirror = cos(t * (0.5 + 0.05 * i)) < 0 ? NOODLES_DRAW_MIRROR_X : 0;
+            if (i % 4 == 3) mirror |= NOODLES_DRAW_MIRROR_Y;
+            // 1. The arrow into scratch, mirrored as needed (a plain store).
+            draws[n++] = (noodles_surface_draw_t){sprite, rect, 0, 0, mirror, 0xffffffffu};
+            // 2. The wall mask under the arrow's screen position cuts its alpha.
+            draws[n++] = (noodles_surface_draw_t){mask, {x, y, SPRITE, SPRITE}, 0, 0,
+                                                  NOODLES_DRAW_MODE_STENCIL_ALPHA, 0xffffffffu};
+            // 3. Composite: BLEND, ADD (glow) or MUL in turn.
+            draws[n++] = (noodles_surface_draw_t){scratch[i], rect, x, y, finish[i % 3],
+                                                  0xffffffffu};
+        }
+        // Step 1 draws into scratch surfaces, step 3 onto the back buffer, so
+        // issue them as per-destination batches in the same overall order.
+        for (size_t k = 0; k < n; k += 3) {
+            if (RETRY(noodles_surface_draw_batch(link, scratch[k / 3], &draws[k], 2)) != 0 ||
+                RETRY(noodles_surface_draw_batch(link, NULL, &draws[k + 2], 1)) != 0) {
+                perror("draw batch");
+                return -1;
+            }
+        }
+        if (RETRY(noodles_present_and_wait(link)) != 0) {
+            perror("present");
+            return -1;
+        }
+        ++frames;
+    }
+    double elapsed = now_seconds() - start;
+    printf("modes: %ld frames in %.1fs (%.1f fps), %d arrows occluded by the wall, composited "
+           "with BLEND/ADD/MUL\n", frames, elapsed, frames / elapsed, count);
+    for (int i = 0; i < count; ++i) noodles_surface_destroy(scratch[i]);
+    noodles_surface_destroy(mask);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     const char *mode = argc > 1 ? argv[1] : "";
     double seconds = argc > 2 ? strtod(argv[2], NULL) : 15.0;
     int count = argc > 3 ? atoi(argv[3]) : 16;
-    if ((strcmp(mode, "verify") && strcmp(mode, "bench") && strcmp(mode, "show")) ||
-        seconds <= 0.0 || count < 1 || count > MAX_SHOW) {
-        fprintf(stderr, "usage: %s verify | bench [seconds] | show [seconds] [1-%d]\n", argv[0],
-                MAX_SHOW);
+    if ((strcmp(mode, "verify") && strcmp(mode, "bench") && strcmp(mode, "show") &&
+         strcmp(mode, "modes")) ||
+        seconds <= 0.0 || count < 1 || count > MAX_SHOW ||
+        (!strcmp(mode, "modes") && count > MAX_SHOW / 3)) {
+        fprintf(stderr, "usage: %s verify | bench [seconds] | show [seconds] [1-%d] | "
+                "modes [seconds] [1-%d]\n", argv[0], MAX_SHOW, MAX_SHOW / 3);
         return 2;
     }
     noodles_link_t *link = NULL;
@@ -373,8 +480,9 @@ int main(int argc, char **argv) {
             perror("sprite surface");
             rc = -1;
         } else {
-            rc = !strcmp(mode, "bench") ? bench(link, sprite, seconds)
-                                        : show(link, sprite, seconds, count);
+            rc = !strcmp(mode, "bench")   ? bench(link, sprite, seconds)
+                 : !strcmp(mode, "modes") ? modes(link, sprite, seconds, count)
+                                          : show(link, sprite, seconds, count);
         }
     }
     tool_close(link);

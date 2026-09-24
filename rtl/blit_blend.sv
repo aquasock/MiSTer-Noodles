@@ -53,6 +53,10 @@ module blit_blend #(
     input  logic [15:0] height,
     input  logic [31:0] mod,
     input  logic        blend,
+    // BLIT-009: explicit blend mode (descriptor flags 31:8) when mode_en,
+    // otherwise BLEND or a plain store as selected by `blend`.
+    input  logic        mode_en,
+    input  logic [23:0] mode,
     input  logic        mirror_x,
     input  logic        mirror_y,
     input  logic        key_enable,
@@ -82,7 +86,11 @@ module blit_blend #(
     localparam int DST_W = $clog2(DST_DEPTH);
     localparam int OUT_W = $clog2(OUT_DEPTH);
     localparam int TAG_W = $clog2(TAG_DEPTH);
-    localparam int LATENCY = 5;  // blend_px
+    localparam int LATENCY = 7;  // blend_px
+    // BLIT-009 presets, blend_px mode layout (aop, adf, asf, cop, cdf, csf,
+    // reserved, single): SDL BLEND and NONE.
+    localparam logic [23:0] MODE_BLEND = {3'd1, 4'd6, 4'd2, 3'd1, 4'd6, 4'd5, 2'b00};
+    localparam logic [23:0] MODE_NONE  = {3'd1, 4'd1, 4'd2, 3'd1, 4'd1, 4'd2, 2'b00};
 
     // ---------------------------------------------------------------
     // Command capture. The mirrored source base needs a multiply, so the
@@ -90,7 +98,8 @@ module blit_blend #(
     logic [31:0] dst_r, src_r, src_base_r, mod_r;
     logic [31:0] src_span_r;
     logic [15:0] dst_pitch_r, src_pitch_r, width_r, height_r;
-    logic        blend_r, mirror_x_r, mirror_y_r, key_enable_r;
+    logic        mirror_x_r, mirror_y_r, key_enable_r;
+    logic [23:0] mode_r;
     logic [31:0] key_r;
     logic [1:0]  prep;
     logic        walk_start;
@@ -99,30 +108,30 @@ module blit_blend #(
     // Request walkers.
     logic        s_valid, d_valid, s_finished, d_finished;
     logic [31:0] s_addr, d_addr;
-    logic [16:0] s_left, d_left;
+    logic [4:0]  s_len, d_len;
+    // In-rectangle pixels carried by the source burst being formed.
+    logic [5:0]  s_px;
     logic        s_lo, d_lo, s_hi, d_hi;
     logic        s_form, d_form;
 
-    wire [4:0] s_len = (s_left < 17'(BURST)) ? s_left[4:0] : 5'(BURST);
-    wire [4:0] d_len = (d_left < 17'(BURST)) ? d_left[4:0] : 5'(BURST);
-    // In-rectangle pixels carried by the source burst being formed.
-    wire [5:0] s_px = {s_len, 1'b0} - {5'd0, !s_lo} - {5'd0, !s_hi};
-
-    blend_walk src_walk (
+    blend_walk #(.BURST(BURST)) src_walk (
         .clk(clk), .reset(reset), .start(walk_start),
         .base(src_base_r), .pitch(src_pitch_r), .pitch_neg(mirror_y_r), .reverse(mirror_x_r),
         .width(width_r), .height(height_r),
-        .step(s_form), .step_len(s_len),
-        .valid(s_valid), .burst_addr(s_addr), .left(s_left),
+        .step(s_form),
+        .valid(s_valid), .burst_addr(s_addr), .burst_len(s_len), .burst_px(s_px),
         .burst_lo(s_lo), .burst_hi(s_hi), .finished(s_finished)
     );
 
-    blend_walk dst_walk (
+    blend_walk #(.BURST(BURST)) dst_walk (
         .clk(clk), .reset(reset), .start(walk_start),
         .base(dst_r), .pitch(dst_pitch_r), .pitch_neg(1'b0), .reverse(1'b0),
         .width(width_r), .height(height_r),
-        .step(d_form), .step_len(d_len),
-        .valid(d_valid), .burst_addr(d_addr), .left(d_left),
+        .step(d_form),
+        .valid(d_valid), .burst_addr(d_addr), .burst_len(d_len),
+        /* verilator lint_off PINCONNECTEMPTY */
+        .burst_px(),
+        /* verilator lint_on PINCONNECTEMPTY */
         .burst_lo(d_lo), .burst_hi(d_hi), .finished(d_finished)
     );
 
@@ -236,13 +245,13 @@ module blit_blend #(
 
     blend_px lane_lo (
         .clk(clk), .reset(reset), .in_valid(launch),
-        .src(lane_src_lo), .dst(dw_mem[dw_rp][31:0]), .mod(mod_r), .blend(blend_r),
+        .src(lane_src_lo), .dst(dw_mem[dw_rp][31:0]), .mod(mod_r), .mode(mode_r),
         .out_valid(lo_out_valid), .out(lo_out)
     );
 
     blend_px lane_hi (
         .clk(clk), .reset(reset), .in_valid(launch),
-        .src(lane_src_hi), .dst(dw_mem[dw_rp][63:32]), .mod(mod_r), .blend(blend_r),
+        .src(lane_src_hi), .dst(dw_mem[dw_rp][63:32]), .mod(mod_r), .mode(mode_r),
         /* verilator lint_off PINCONNECTEMPTY */
         .out_valid(),
         /* verilator lint_on PINCONNECTEMPTY */
@@ -335,7 +344,7 @@ module blit_blend #(
             dst_r <= '0; src_r <= '0; src_base_r <= '0; mod_r <= '0;
             dst_pitch_r <= '0; src_pitch_r <= '0;
             width_r <= '0; height_r <= '0;
-            blend_r <= 1'b0; mirror_x_r <= 1'b0; mirror_y_r <= 1'b0;
+            mode_r <= MODE_NONE; mirror_x_r <= 1'b0; mirror_y_r <= 1'b0;
             key_enable_r <= 1'b0; key_r <= '0;
             req_valid <= 1'b0;
             req_is_dst <= 1'b0; req_lo <= 1'b0; req_hi <= 1'b0;
@@ -357,7 +366,8 @@ module blit_blend #(
                 dst_pitch_r <= dst_pitch; src_pitch_r <= src_pitch;
                 width_r <= width; height_r <= height;
                 mod_r <= mod;
-                blend_r <= blend; mirror_x_r <= mirror_x; mirror_y_r <= mirror_y;
+                mode_r <= mode_en ? mode : blend ? MODE_BLEND : MODE_NONE;
+                mirror_x_r <= mirror_x; mirror_y_r <= mirror_y;
                 key_enable_r <= key_enable; key_r <= key_value;
                 prefer_dst <= 1'b1;
             end else if (prep != 2'd0) begin

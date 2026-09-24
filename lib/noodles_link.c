@@ -469,14 +469,28 @@ static int valid_command(const uint32_t *c, int allow_managed) {
     }
 }
 
+/* An explicit mode's fields (BLIT-009): SDL factors 1-10, operations 1-5,
+ * single rounding only with two ADDs, reserved bits 7:5 and 9 clear. */
+static int valid_mode(uint32_t f) {
+    const uint32_t csf = f >> 10 & 0xfu, cdf = f >> 14 & 0xfu, cop = f >> 18 & 0x7u;
+    const uint32_t asf = f >> 21 & 0xfu, adf = f >> 25 & 0xfu, aop = f >> 29 & 0x7u;
+    return !(f & 0x2e0u) && !(f & NOODLES_DRAW_BLEND) &&
+        csf >= 1 && csf <= 10 && cdf >= 1 && cdf <= 10 && asf >= 1 && asf <= 10 &&
+        adf >= 1 && adf <= 10 && cop >= 1 && cop <= 5 && aop >= 1 && aop <= 5 &&
+        (!(f & NOODLES_DRAW_SINGLE_ROUNDING) ||
+         (cop == NOODLES_BLENDOP_ADD && aop == NOODLES_BLENDOP_ADD));
+}
+
 /* Descriptor checks shared by the raw and managed batch paths: 0, or the
- * errno to fail with. Flagged draws (BLIT-008) need protocol 1.2, carry
- * their modulation in the colour-key word and so cannot also be keyed, and
- * must not read the rectangle they write. */
+ * errno to fail with. Flagged draws (BLIT-008) need protocol 1.2 and
+ * explicit modes (BLIT-009) 1.3; both carry their modulation in the
+ * colour-key word and so cannot also be keyed, and must not read the
+ * rectangle they write. */
 static int check_descriptors(const noodles_link_t *link, const noodles_sprite_descriptor_t *d,
                              unsigned count, int allow_managed) {
     for (unsigned i = 0; i < count; ++i, ++d) {
-        if (d->flags > NOODLES_DRAW_FLAGS_MASK ||
+        const int explicit_mode = (d->flags & NOODLES_DRAW_MODE) != 0;
+        if ((explicit_mode ? !valid_mode(d->flags) : d->flags > NOODLES_DRAW_FLAGS_MASK) ||
             !valid_rect(d->dst_addr, d->dst_pitch, d->width, d->height, allow_managed) ||
             !valid_rect(d->src_addr, d->src_pitch, d->width, d->height, allow_managed))
             return EINVAL;
@@ -485,7 +499,7 @@ static int check_descriptors(const noodles_link_t *link, const noodles_sprite_de
             !(rect_end(d->dst_addr, d->dst_pitch, d->width, d->height) <= d->src_addr ||
               rect_end(d->src_addr, d->src_pitch, d->width, d->height) <= d->dst_addr))
             return EINVAL;
-        if ((link->protocol & 0xffffu) < 2) return ENOTSUP;
+        if ((link->protocol & 0xffffu) < (explicit_mode ? 3u : 2u)) return ENOTSUP;
     }
     return 0;
 }

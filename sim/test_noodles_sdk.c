@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "../lib/noodles_link.h"
 #include "../lib/noodles_surface.h"
+#include "blend_ref.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -611,6 +612,70 @@ int main(void) {
     assert(noodles_texture_cache_destroy(draw_cache, 10) == 0);
     assert(noodles_surface_destroy(target) == 0);
     assert(noodles_surface_destroy(sprite) == 0);
+    closed(a);
+
+    /* BLIT-009 explicit modes: the SDK's encodings are the reference
+     * model's, a protocol 1.2 core refuses them without publishing, and a
+     * 1.3 core receives them intact; malformed modes are rejected. */
+    assert(NOODLES_DRAW_MODE_MUL ==
+           noodles_ref_mode(NOODLES_REF_DST_COLOR, NOODLES_REF_ONE_MINUS_SRC_ALPHA,
+                            NOODLES_REF_ADD, NOODLES_REF_ZERO, NOODLES_REF_ONE, NOODLES_REF_ADD, 1));
+    assert(NOODLES_DRAW_MODE_ADD ==
+           noodles_ref_mode(NOODLES_REF_SRC_ALPHA, NOODLES_REF_ONE, NOODLES_REF_ADD,
+                            NOODLES_REF_ZERO, NOODLES_REF_ONE, NOODLES_REF_ADD, 0));
+    memory[0] = memory[2] = memory[3] = 0;
+    seed_identity();
+    memory[5] = 0x00010002u;
+    memory[6] = 0xfe;
+    a = open_verified();
+    noodles_surface_t *mode_sprite = NULL;
+    assert(noodles_surface_create(a, 64, 64, &mode_sprite) == 0);
+    noodles_surface_draw_t mode_draw = {mode_sprite, {0, 0, 64, 64}, 10, 10,
+                                        NOODLES_DRAW_MODE_ADD, 0xffffffffu};
+    before = memory[0];
+    assert(noodles_surface_draw_batch(a, NULL, &mode_draw, 1) == -1 && errno == ENOTSUP);
+    assert(memory[0] == before);
+    mode_draw.flags = NOODLES_DRAW_BLEND;
+    assert(noodles_surface_draw_batch(a, NULL, &mode_draw, 1) == 0);
+    assert(noodles_surface_destroy(mode_sprite) == 0);
+    closed(a);
+
+    memory[0] = memory[2] = memory[3] = 0;
+    seed_identity();
+    memory[6] = 0xfe;
+    a = open_verified();
+    assert(noodles_surface_create(a, 64, 64, &mode_sprite) == 0);
+    mode_draw.source = mode_sprite;   /* the previous link's surfaces are gone */
+    const noodles_sprite_descriptor_t *mode_desc =
+        (const noodles_sprite_descriptor_t *)descriptor_memory;
+    mode_draw.flags = NOODLES_DRAW_MODE_MUL | NOODLES_DRAW_MIRROR_X;
+    mode_draw.modulation = 0x80ff40ffu;
+    assert(noodles_surface_draw_batch(a, NULL, &mode_draw, 1) == 0);
+    assert(mode_desc[0].flags == (NOODLES_DRAW_MODE_MUL | NOODLES_DRAW_MIRROR_X) &&
+           mode_desc[0].colorkey == 0x80ff40ffu);
+    assert(noodles_link_drain(a, 10) == 0);
+    mode_draw.flags = NOODLES_DRAW_MODE_STENCIL_ALPHA;
+    assert(noodles_surface_draw_batch(a, NULL, &mode_draw, 1) == 0);
+    assert(noodles_link_drain(a, 10) == 0);
+    const uint32_t bad_modes[] = {
+        NOODLES_DRAW_MODE_ADD | NOODLES_DRAW_BLEND,          /* mode replaces BLEND */
+        NOODLES_DRAW_MODE_ADD | NOODLES_DRAW_KEY,            /* flagged draws cannot key */
+        NOODLES_DRAW_MODE_ADD | 0x200u,                      /* reserved bit 9 */
+        NOODLES_DRAW_MODE_ADD | 0x20u,                       /* reserved bit 5 */
+        NOODLES_DRAW_BLEND_MODE(0, 1, 1, 1, 1, 1),            /* factor 0 */
+        NOODLES_DRAW_BLEND_MODE(11, 1, 1, 1, 1, 1),           /* factor 11 */
+        NOODLES_DRAW_BLEND_MODE(1, 1, 6, 1, 1, 1),            /* operation 6 */
+        NOODLES_DRAW_BLEND_MODE(1, 1, NOODLES_BLENDOP_SUBTRACT, 1, 1, 1) |
+            NOODLES_DRAW_SINGLE_ROUNDING,                   /* single rounding needs ADD */
+        NOODLES_DRAW_BLEND | 0x100u,                         /* mode bits without bit 4 */
+    };
+    for (size_t k = 0; k < sizeof(bad_modes) / sizeof(bad_modes[0]); ++k) {
+        mode_draw.flags = bad_modes[k];
+        before = memory[0];
+        assert(noodles_surface_draw_batch(a, NULL, &mode_draw, 1) == -1 && errno == EINVAL);
+        assert(memory[0] == before);
+    }
+    assert(noodles_surface_destroy(mode_sprite) == 0);
     closed(a);
 
     /* A raw fence that retires after the backoff has grown still gets a

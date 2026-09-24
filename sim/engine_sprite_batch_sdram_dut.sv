@@ -61,7 +61,7 @@ module engine_sprite_batch_sdram_dut (
         .blend_start(), .blend_dst_addr(), .blend_dst_pitch(), .blend_src_addr(),
         .blend_src_pitch(), .blend_width(), .blend_height(), .blend_mod(),
         .blend_enable(), .blend_mirror_x(), .blend_mirror_y(),
-        .blend_key_enable(), .blend_key_value(),
+        .blend_key_enable(), .blend_key_value(), .blend_mode_en(), .blend_mode(),
         /* verilator lint_on PINCONNECTEMPTY */
         .blend_done(1'b0)
     );

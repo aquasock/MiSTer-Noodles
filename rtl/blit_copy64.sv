@@ -65,6 +65,14 @@ module blit_copy64 #(
     // currently being formed; want_len_p_valid marks whether one is ready.
     logic [LENB-1:0] want_len_p;
     logic want_len_p_valid;
+    // Registered with want_len_p: whether that request finishes the row.
+    // COMMIT uses it instead of comparing col + 2 * want_len against width,
+    // keeping the column counter off the row-change and address paths.
+    logic row_end_p;
+    // Byte addresses of the current column in the source and destination
+    // rows, kept alongside col so requests and destination FIFO entries are
+    // a register plus a constant offset rather than row + col * 4.
+    logic [ADDR_WIDTH-1:0] src_cur, dst_cur;
     // Registered paired-write output -- see the comment at stage_paired
     // below. Mirrors req_valid/req_len/req_addr's role on the read side:
     // decouples "we've decided this pair is a paired write" from "ddram_
@@ -200,6 +208,7 @@ module blit_copy64 #(
             row_remain_r <= 0;
             pairs_issued <= 0; pairs_done <= 0; total_pairs <= 0;
             src_row <= 0; dst_row <= 0; dst_pitch_r <= 0; src_pitch_r <= 0;
+            src_cur <= 0; dst_cur <= 0; row_end_p <= 0;
 
             key_enable_r <= 0; key_r <= 0;
         end else begin
@@ -210,6 +219,8 @@ module blit_copy64 #(
                 row_remain_r <= width >> 1;
                 dst_pitch_r <= dst_pitch; src_pitch_r <= src_pitch;
                 src_row <= src_addr; dst_row <= dst_addr;
+                src_cur <= src_addr; dst_cur <= dst_addr;
+                row_end_p <= 0;
 
                 key_enable_r <= key_enable; key_r <= key_value;
                 pairs_issued <= 0; pairs_done <= 0;
@@ -240,6 +251,7 @@ module blit_copy64 #(
                 if (prepare_now) begin
                     want_len_p <= want_len16_prep[LENB-1:0];
                     want_len_p_valid <= (want_len16_prep != 0);
+                    row_end_p <= (want_len16_prep == row_remain_r);
                 end
                 // COMMIT: consume the already-registered want_len_p. State
                 // advances when the request is FORMED, not when it is
@@ -249,25 +261,28 @@ module blit_copy64 #(
                 if (commit_now) begin
                     req_valid <= 1'b1;
                     req_len <= want_len_p;
-                    req_addr <= src_row + col * 4;
+                    req_addr <= src_cur;
                     for (int i = 0; i < FIFO_DEPTH; i++) begin
                         if (i < int'(want_len_p)) begin
                             automatic logic [PTR_W-1:0] idx = wr_ptr + i[PTR_W-1:0];
-                            automatic logic [15:0] pair_col = col + 16'(2 * i);
-                            dst0_fifo[idx] <= dst_row + ADDR_WIDTH'(pair_col) * 4;
+                            dst0_fifo[idx] <= dst_cur + ADDR_WIDTH'(8 * i);
                             valid_fifo[idx] <= 1'b0;
                         end
                     end
                     wr_ptr <= wr_ptr + want_len_p[PTR_W-1:0];
                     pairs_issued <= pairs_issued + 32'(want_len_p);
                     want_len_p_valid <= 1'b0;
-                    if (new_col >= width_r) begin
+                    if (row_end_p) begin
                         col <= 0; row <= row + 1'b1;
                         src_row <= src_row + src_pitch_r;
                         dst_row <= dst_row + dst_pitch_r;
+                        src_cur <= src_row + src_pitch_r;
+                        dst_cur <= dst_row + dst_pitch_r;
                         row_remain_r <= width_r >> 1;
                     end else begin
                         col <= new_col;
+                        src_cur <= src_cur + {{(ADDR_WIDTH-LENB-3){1'b0}}, want_len_p, 3'b000};
+                        dst_cur <= dst_cur + {{(ADDR_WIDTH-LENB-3){1'b0}}, want_len_p, 3'b000};
                         row_remain_r <= row_remain_r - {{(16-LENB){1'b0}}, want_len_p};
                     end
                 end else if (req_valid && rd64_ready) begin

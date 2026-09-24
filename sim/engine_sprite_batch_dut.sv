@@ -50,6 +50,8 @@ module engine_sprite_batch_dut (
     logic [15:0] blend_dst_pitch, blend_src_pitch, blend_width, blend_height;
     logic        blend_enable, blend_mirror_x, blend_mirror_y, blend_key_enable;
     logic [31:0] blend_key_value;
+    logic        blend_mode_en;
+    logic [23:0] blend_mode;
     logic [31:0] blend_rd64_addr, blend_wr_addr, blend_wr_data, blend_wr64_addr;
     logic [63:0] blend_wr64_data;
     logic [7:0]  blend_rd64_len;
@@ -77,7 +79,8 @@ module engine_sprite_batch_dut (
         .blend_width(blend_width), .blend_height(blend_height), .blend_mod(blend_mod),
         .blend_enable(blend_enable), .blend_mirror_x(blend_mirror_x),
         .blend_mirror_y(blend_mirror_y), .blend_key_enable(blend_key_enable),
-        .blend_key_value(blend_key_value), .blend_done(blend_done)
+        .blend_key_value(blend_key_value), .blend_mode_en(blend_mode_en),
+        .blend_mode(blend_mode), .blend_done(blend_done)
     );
 
     blit_blend blend_i (
@@ -87,6 +90,7 @@ module engine_sprite_batch_dut (
         .width(blend_width), .height(blend_height), .mod(blend_mod),
         .blend(blend_enable), .mirror_x(blend_mirror_x), .mirror_y(blend_mirror_y),
         .key_enable(blend_key_enable), .key_value(blend_key_value),
+        .mode_en(blend_mode_en), .mode(blend_mode),
         .busy(blend_busy), .done(blend_done),
         .rd64_addr(blend_rd64_addr), .rd64_en(blend_rd64_en), .rd64_len(blend_rd64_len),
         .rd64_ready(blend_rd64_ready), .rd64_data(rd64_data), .rd64_valid(blend_rd64_valid),

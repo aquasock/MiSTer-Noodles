@@ -135,7 +135,16 @@ struct Rect {
     bool blend = true, mirror_x = false, mirror_y = false;
     bool key = false;
     uint32_t key_value = 0;
+    uint32_t mode_flags = 0;   // BLIT-009 flags word with bit 4, or 0 for blend/store
 };
+
+// A random valid BLIT-009 mode (descriptor flags with bit 4).
+uint32_t RandomMode() {
+    const uint32_t op_c = 1 + Rand(5), op_a = 1 + Rand(5);
+    const int single = (op_c == 1 && op_a == 1) ? int(Rand(2)) : 0;
+    return noodles_ref_mode(1 + Rand(10), 1 + Rand(10), op_c, 1 + Rand(10), 1 + Rand(10), op_a,
+                            single);
+}
 
 uint32_t AlphaMod(uint8_t m) { return 0x00ffffffu | (uint32_t(m) << 24); }
 
@@ -149,6 +158,7 @@ uint64_t Run(Testbench &tb, AvalonMemory &mem, const Rect &r) {
     dut.mod = r.mod;
     dut.blend = r.blend; dut.mirror_x = r.mirror_x; dut.mirror_y = r.mirror_y;
     dut.key_enable = r.key; dut.key_value = r.key_value;
+    dut.mode_en = (r.mode_flags & 0x10u) != 0; dut.mode = r.mode_flags >> 8;
     tb.Tick(mem);
     dut.start = 0;
     uint64_t guard = 0;
@@ -199,7 +209,8 @@ void CheckCase(Testbench &tb, AvalonMemory &mem, const Rect &r, const char *labe
             const uint32_t sy = r.mirror_y ? r.height - 1 - y : y;
             const uint32_t sp = source[r.src + sy * r.src_pitch + sx * 4];
             if (!(r.key && sp == r.key_value))
-                expect[d] = noodles_draw_ref(sp, expect[d], r.mod, r.blend);
+                expect[d] = noodles_mode_ref(sp, expect[d], r.mod,
+                                             r.mode_flags ? r.mode_flags : (r.blend ? 0x2u : 0u));
         }
     }
     std::unordered_map<uint32_t, uint32_t> before;
@@ -218,7 +229,11 @@ void CheckCase(Testbench &tb, AvalonMemory &mem, const Rect &r, const char *labe
             if (bad <= 24) {
                 uint32_t match = 0xffffffffu;
                 for (const auto &[sa, sv] : source)
-                    if (noodles_draw_ref(sv, before[addr], r.mod, r.blend) == got) { match = sa; break; }
+                    if (noodles_mode_ref(sv, before[addr], r.mod,
+                                         r.mode_flags ? r.mode_flags : (r.blend ? 0x2u : 0u)) == got) {
+                        match = sa;
+                        break;
+                    }
                 std::fprintf(stderr, "  x=%d y=%d at %08x got %08x want %08x orig %08x from-src %08x\n",
                              x, y, addr, got, want, before[addr], match);
             }
@@ -277,6 +292,7 @@ int main(int argc, char **argv) {
         }
         r.key = Rand(3) == 0;
         r.key_value = RandomPixel();
+        if (Rand(3) == 0) r.mode_flags = RandomMode();
         CheckCase(tb, mem, r, "random");
         ++cases;
     }

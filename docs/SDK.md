@@ -1,10 +1,11 @@
 # Host SDK
 
 `libnoodles.a` is a C99 static library with C++-compatible public headers
-`noodles_link.h` and `noodles_surface.h`. SDK 0.5.0 uses hardware protocol 1.x to identify the live
+`noodles_link.h` and `noodles_surface.h`. SDK 0.6.0 uses hardware protocol 1.x to identify the live
 800x600 core, claim one host session and detect reset before accepting a
 fence as completed. Protocol 1.1 cores add opcode 7, BLIT_BLEND, and 1.2 cores add flagged
-batch draws (blend, mirroring and RGBA modulation per draw); framebuffer
+batch draws (blend, mirroring and RGBA modulation per draw) and 1.3 cores
+explicit blend modes per draw; framebuffer
 geometry and the 100MHz core clock are unchanged.
 
 Use `noodles_link_open()` for the stage-2B core. The explicit
@@ -56,7 +57,7 @@ little-endian 32-bit words.
 | Address | Owner | Meaning |
 |---|---|---|
 | `0x30020010` | FPGA | Magic `0x4e444c53`. Published last during initialization. |
-| `0x30020014` | FPGA | Protocol version, major in bits 31:16 and minor in 15:0; `0x00010002` on cores with flagged batch draws, `0x00010001` with BLIT_BLEND only, `0x00010000` before. |
+| `0x30020014` | FPGA | Protocol version, major in bits 31:16 and minor in 15:0; `0x00010003` with explicit blend modes, `0x00010002` with flagged batch draws, `0x00010001` with BLIT_BLEND only, `0x00010000` before. |
 | `0x30020018` | FPGA | Capability bits; bit N advertises opcode N: `0x000000fe` with BLIT_BLEND, `0x0000007e` before it. |
 | `0x3002001c` | FPGA | Width in bits 31:16, height in bits 15:0. |
 | `0x30020020` | FPGA | Framebuffer pitch in bytes. |
@@ -250,6 +251,21 @@ protocol 1.2 core and fail with `ENOTSUP`, publishing nothing, on older
 ones; a keyed draw cannot also be flagged, and a surface cannot draw onto
 itself.
 
+`NOODLES_DRAW_MODE` (protocol 1.3, BLIT-009) replaces `NOODLES_DRAW_BLEND`
+with an explicit mode built by `NOODLES_DRAW_BLEND_MODE(color_src, color_dst,
+color_op, alpha_src, alpha_dst, alpha_op)` from `NOODLES_BLENDFACTOR_*` and
+`NOODLES_BLENDOP_*`, which use SDL's `SDL_BlendFactor`/`SDL_BlendOperation`
+numbering so `SDL_ComposeCustomBlendMode()` descriptions map across
+unchanged. `NOODLES_DRAW_MODE_ADD`, `_MOD` and `_MUL` reproduce SDL 2.32.10's
+software modes bit-exactly (MUL adds `NOODLES_DRAW_SINGLE_ROUNDING`), and
+`NOODLES_DRAW_MODE_STENCIL_ALPHA` keeps the destination colour while scaling
+its alpha by one minus the source alpha, GemRB's wall-occlusion pass.
+SDL's software renderer has no composed modes, so their arithmetic is the
+project's own: each term is `floor(value * factor / 255)`, combined by the
+operation and clamped to 0-255, with minimum and maximum comparing the raw
+values. Malformed modes fail with `EINVAL`; modes on a pre-1.3 core fail
+with `ENOTSUP`.
+
 The fixed-cell `noodles_texture_cache` packs same-sized images into one
 managed atlas and addresses them with application-defined 64-bit keys.
 Uploads replace the least-recently-used cell when full and wait only if that
@@ -269,8 +285,9 @@ stable shared-library ABI promise in this static-only pre-1.0 SDK.
 
 No SDL code, runtime resolution switch or automatic core reload is included.
 Managed surfaces and the texture cache are host-SDK facilities that work
-over protocol 1.0 through 1.2; SDK 0.4 added BLIT_BLEND for protocol 1.1
-cores and SDK 0.5 flagged batch draws for protocol 1.2 cores.
+over protocol 1.0 through 1.3; SDK 0.4 added BLIT_BLEND for protocol 1.1
+cores, SDK 0.5 flagged batch draws for protocol 1.2 cores and SDK 0.6
+explicit blend modes for protocol 1.3 cores.
 
 ## Stage-2A hardware execution
 

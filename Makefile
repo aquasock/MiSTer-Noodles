@@ -116,7 +116,7 @@ test-host: $(HOSTLINKTEST) build/host/test-noodles-sdk
 	$(HOSTLINKTEST)
 	build/host/test-noodles-sdk
 
-build/host/test-noodles-sdk: sim/test_noodles_sdk.c build/host/libnoodles.a
+build/host/test-noodles-sdk: sim/test_noodles_sdk.c sim/blend_ref.h build/host/libnoodles.a
 	$(HOSTCC) $(CPPFLAGS) $(CFLAGS) -o $@ $< build/host/libnoodles.a \
 		-Wl,--wrap=open -Wl,--wrap=mmap -Wl,--wrap=munmap \
 		-Wl,--wrap=clock_gettime -Wl,--wrap=nanosleep

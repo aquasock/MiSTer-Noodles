@@ -447,7 +447,6 @@ int noodles_surface_draw_batch(noodles_link_t *link, noodles_surface_t *destinat
         const noodles_surface_t *source = draws[i].source;
         const uint32_t flags = draws[i].flags;
         if (!active_surface(source) || source->link != link || source == destination ||
-            flags > NOODLES_DRAW_FLAGS_MASK ||
             ((flags & NOODLES_DRAW_KEY) && (flags & ~NOODLES_DRAW_KEY)))
             return fail(EINVAL);
         int clipped = clipped_draw(destination, address, width, height, draws[i].dst_x,
@@ -662,8 +661,7 @@ int noodles_texture_cache_draw_batch_to_back_buffer(noodles_texture_cache_t *cac
     size_t descriptor_count = 0;
     for (size_t i = 0; i < count; ++i) {
         const uint32_t flags = draws[i].flags;
-        if (flags > NOODLES_DRAW_FLAGS_MASK ||
-            ((flags & NOODLES_DRAW_KEY) && (flags & ~NOODLES_DRAW_KEY)))
+        if ((flags & NOODLES_DRAW_KEY) && (flags & ~NOODLES_DRAW_KEY))
             return fail(EINVAL);
         int index = find_key(cache, draws[i].key);
         if (index < 0) return fail(ENOENT);

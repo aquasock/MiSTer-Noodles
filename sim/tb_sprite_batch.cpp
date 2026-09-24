@@ -285,6 +285,13 @@ int main(int argc, char **argv) {
             } else {
                 flags = (rnd(4) != 0 ? 2u : 0u) | (rnd(2) ? 4u : 0u) | (rnd(2) ? 8u : 0u);
                 if (!flags) flags = 4;
+                if (rnd(3) == 0) {   // BLIT-009 explicit blend mode replaces bit 1
+                    const uint32_t op_c = 1 + rnd(5), op_a = 1 + rnd(5);
+                    const int single = (op_c == 1 && op_a == 1) ? int(rnd(2)) : 0;
+                    flags = (flags & 0xcu) |
+                            noodles_ref_mode(1 + rnd(10), 1 + rnd(10), op_c, 1 + rnd(10),
+                                             1 + rnd(10), op_a, single);
+                }
                 word4 = rnd(3) == 0 ? 0xffffffffu : uint32_t(rng());
                 ++flagged_count;
             }
@@ -301,10 +308,10 @@ int main(int argc, char **argv) {
             for (uint32_t y = 0; y < h; ++y)
                 for (uint32_t x = 0; x < w; ++x) {
                     const uint32_t a = dst + y * kCanvasPitch + x * 4;
-                    if (flags & 0xe) {
+                    if (flags & 0x1e) {
                         const uint32_t sx = (flags & 4) ? w - 1 - x : x;
                         const uint32_t sy = (flags & 8) ? h - 1 - y : y;
-                        model[a] = noodles_draw_ref(pixels[sy * w + sx], model[a], word4, flags & 2);
+                        model[a] = noodles_mode_ref(pixels[sy * w + sx], model[a], word4, flags);
                     } else if (!(flags & 1) || pixels[y * w + x] != word4) {
                         model[a] = pixels[y * w + x];
                     }

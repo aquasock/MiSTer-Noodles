@@ -8,8 +8,8 @@
 // the colorkey).  Descriptors are fetched one word at a time, then handed to
 // the existing blit_copy engine; only one copy is ever active.
 //
-// BLIT-008: a descriptor with any of flag bits 1-3 (blend, mirror-x,
-// mirror-y) is a flagged draw handed to the external blit_blend engine,
+// BLIT-008/009: a descriptor with any of flag bits 1-4 (blend, mirror-x,
+// mirror-y, explicit blend mode) is a flagged draw handed to the external blit_blend engine,
 // with word 4 as its RGBA modulation. blit_blend reads the destination, and
 // ddram_adapter lets reads pass queued writes, so the sequencer waits for
 // the adapter to go idle before a flagged draw and before the draw that
@@ -51,6 +51,7 @@ module sprite_batch #(
     output logic [31:0] blend_mod,
     output logic blend_enable, output logic blend_mirror_x, output logic blend_mirror_y,
     output logic blend_key_enable, output logic [31:0] blend_key_value,
+    output logic blend_mode_en, output logic [23:0] blend_mode,
     input logic blend_done
 );
     // LAUNCH is deliberately separate from DESC_WAIT.  The final descriptor
@@ -60,7 +61,8 @@ module sprite_batch #(
                               FINISH} state_t;
     state_t state;
     logic prev_flagged;
-    wire draw_flags = desc[7][3:1] != 3'b000;
+    // BLIT-008 bits 1-3 and BLIT-009 bit 4 (explicit blend mode).
+    wire draw_flags = desc[7][4:1] != 4'b0000;
     wire copy64_safe = !desc[2][0] && desc[5][2:0] == 3'b000 && desc[6][2:0] == 3'b000;
     // Runs on blit_blend: a flagged draw, or a copy blit_copy64 cannot do.
     wire flagged = draw_flags || !copy64_safe;
@@ -121,6 +123,8 @@ module sprite_batch #(
     assign blend_mirror_y = desc[7][3];
     assign blend_key_enable = !draw_flags && desc[7][0];
     assign blend_key_value = desc[4];
+    assign blend_mode_en = desc[7][4];
+    assign blend_mode = desc[7][31:8];
 
     always_ff @(posedge clk or posedge reset) begin
         if (reset) begin

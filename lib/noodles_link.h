@@ -8,11 +8,11 @@
 extern "C" {
 #endif
 
-#define NOODLES_SDK_VERSION "0.5.0"
+#define NOODLES_SDK_VERSION "0.6.0"
 /* Newest protocol this SDK knows. Verified open accepts any 1.x core;
  * optional operations are gated by capability bits and minor revision
  * (LINK-013). */
-#define NOODLES_PROTOCOL_VERSION 0x00010002u
+#define NOODLES_PROTOCOL_VERSION 0x00010003u
 #define NOODLES_CAP_BLIT_BLEND (1u << 7)
 
 /* Sprite descriptor flags (BLIT-006, BLIT-008). BLEND/MIRROR_X/MIRROR_Y make
@@ -24,6 +24,61 @@ extern "C" {
 #define NOODLES_DRAW_MIRROR_X 4u
 #define NOODLES_DRAW_MIRROR_Y 8u
 #define NOODLES_DRAW_FLAGS_MASK 0xfu
+
+/* Explicit blend modes (BLIT-009, protocol 1.3). NOODLES_DRAW_MODE selects
+ * the mode encoded by NOODLES_DRAW_BLEND_MODE() in place of
+ * NOODLES_DRAW_BLEND; it combines with the mirror flags. Factors and
+ * operations use SDL 2.32.10's SDL_BlendFactor/SDL_BlendOperation values, so
+ * an SDL_ComposeCustomBlendMode() description maps across unchanged. Each
+ * term is floor(value * factor / 255), combined by the operation and
+ * clamped to 0-255; MINIMUM/MAXIMUM ignore the factors. SINGLE_ROUNDING
+ * rounds the ADD of both products once (SDL's MUL) and needs both
+ * operations to be ADD. */
+#define NOODLES_DRAW_MODE 0x10u
+#define NOODLES_DRAW_SINGLE_ROUNDING 0x100u
+enum {
+    NOODLES_BLENDFACTOR_ZERO = 1,
+    NOODLES_BLENDFACTOR_ONE,
+    NOODLES_BLENDFACTOR_SRC_COLOR,
+    NOODLES_BLENDFACTOR_ONE_MINUS_SRC_COLOR,
+    NOODLES_BLENDFACTOR_SRC_ALPHA,
+    NOODLES_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
+    NOODLES_BLENDFACTOR_DST_COLOR,
+    NOODLES_BLENDFACTOR_ONE_MINUS_DST_COLOR,
+    NOODLES_BLENDFACTOR_DST_ALPHA,
+    NOODLES_BLENDFACTOR_ONE_MINUS_DST_ALPHA
+};
+enum {
+    NOODLES_BLENDOP_ADD = 1,
+    NOODLES_BLENDOP_SUBTRACT,
+    NOODLES_BLENDOP_REV_SUBTRACT,
+    NOODLES_BLENDOP_MINIMUM,
+    NOODLES_BLENDOP_MAXIMUM
+};
+#define NOODLES_DRAW_BLEND_MODE(color_src, color_dst, color_op, alpha_src, alpha_dst, alpha_op) \
+    (NOODLES_DRAW_MODE | (uint32_t)(color_src) << 10 | (uint32_t)(color_dst) << 14 |             \
+     (uint32_t)(color_op) << 18 | (uint32_t)(alpha_src) << 21 | (uint32_t)(alpha_dst) << 25 |     \
+     (uint32_t)(alpha_op) << 29)
+/* SDL 2.32.10 software-renderer modes, bit-exact. */
+#define NOODLES_DRAW_MODE_ADD                                                                  \
+    NOODLES_DRAW_BLEND_MODE(NOODLES_BLENDFACTOR_SRC_ALPHA, NOODLES_BLENDFACTOR_ONE,             \
+                            NOODLES_BLENDOP_ADD, NOODLES_BLENDFACTOR_ZERO,                     \
+                            NOODLES_BLENDFACTOR_ONE, NOODLES_BLENDOP_ADD)
+#define NOODLES_DRAW_MODE_MOD                                                                  \
+    NOODLES_DRAW_BLEND_MODE(NOODLES_BLENDFACTOR_DST_COLOR, NOODLES_BLENDFACTOR_ZERO,            \
+                            NOODLES_BLENDOP_ADD, NOODLES_BLENDFACTOR_ZERO,                     \
+                            NOODLES_BLENDFACTOR_ONE, NOODLES_BLENDOP_ADD)
+#define NOODLES_DRAW_MODE_MUL                                                                  \
+    (NOODLES_DRAW_BLEND_MODE(NOODLES_BLENDFACTOR_DST_COLOR,                                     \
+                             NOODLES_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, NOODLES_BLENDOP_ADD,     \
+                             NOODLES_BLENDFACTOR_ZERO, NOODLES_BLENDFACTOR_ONE,                \
+                             NOODLES_BLENDOP_ADD) | NOODLES_DRAW_SINGLE_ROUNDING)
+/* Keeps destination colour and scales destination alpha by 1 - source
+ * alpha: GemRB's wall-occlusion stencil pass. */
+#define NOODLES_DRAW_MODE_STENCIL_ALPHA                                                        \
+    NOODLES_DRAW_BLEND_MODE(NOODLES_BLENDFACTOR_ZERO, NOODLES_BLENDFACTOR_ONE,                  \
+                            NOODLES_BLENDOP_ADD, NOODLES_BLENDFACTOR_ZERO,                     \
+                            NOODLES_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, NOODLES_BLENDOP_ADD)
 #define NOODLES_BUFFER_A_ADDR 0x31000000u
 #define NOODLES_BUFFER_B_ADDR 0x31200000u
 #define NOODLES_BUFFER_PITCH 3200u
