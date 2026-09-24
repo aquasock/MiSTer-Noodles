@@ -2749,3 +2749,32 @@ Publish the pinned source and qualification record without claiming independent 
 - [x] Passed
 
 ---
+
+## 84 COMMIT Unreleased ??? 2026-09-23T19:25:30-07:00
+
+#### Coming From:
+
+Unreleased 4cd38a7
+
+#### Purpose:
+
+Package the host library as a reusable legacy-mode SDK without changing the accepted FPGA image.
+
+#### Outcome:
+
+The user approved stage 2A: static ARM/native libraries, installed headers and pkg-config metadata, an opaque handle, centralized bounded completion and presentation handling, lifecycle errors and migrated tools. Hardware identity and reset detection are explicitly unavailable on this core and remain stage 2B. Cooperative locking must not be described as protection against legacy tools or direct memory writers, and timeouts must not imply cancellation.
+
+#### Next Steps:
+
+Publish this proposal, implement and validate the host-only SDK against mocked memory and the accepted SVGA core, and prove a separate consumer builds against an installed SDK. Document explicit legacy attachment assumptions and conservative recovery after abandoned work. Preserve the 800x600 geometry, command layouts, 100MHz clock and all FPGA source/settings; no Quartus build is required.
+
+#### Files Modified:
+
+None.
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
