@@ -600,7 +600,7 @@ MiSTer-GemRB now reaches 25-30fps across tested scenes with the engine near its 
 
 ---
 
-## 15 COMMIT Unreleased ??? 2026-09-25T15:20:57-07:00
+## 15 COMMIT Unreleased d5051f4 2026-09-25T15:20:57-07:00
 
 #### Coming From:
 
@@ -612,31 +612,47 @@ Raise the core clock from 100MHz to 120MHz by separating the video clock and reg
 
 #### Outcome:
 
-Planned. A TimeQuest scan of the reproduced protocol-1.7 seed-13 fit found 1,245 core-clock endpoints at the slow 100C corner whose paths exceed 8.33ns, against 7,922 for 150MHz, so with user approval the 150MHz target is staged through 120MHz first; every 120MHz fix is also required for 150MHz. The failing groups are link_ring's combinational read priority into sprite_batch's copy address registers, blit_blend's partial_pending control into its pixel pipeline, sprite_batch's copy-FIFO write decode, the fill engine's column logic into the adapter's write ingress, the adapter's queue state into the HPS F2SDRAM port, a few board-SDRAM controller paths, and framework scaler and output logic that runs on the core clock only because CLK_VIDEO is tied to clk_sys. The PLL will provide clk_sys at 120MHz and a separate 100MHz CLK_VIDEO with CE_PIXEL in that domain, and FB_VBL and FB_RETIRED will pass through two-flop synchronizers into clk_sys; FB_RETIRED already arrives from the framework's own clock domain and is sampled today without one. The read-port owner selection and link and control priority will move into a registered arbiter module with SymbiYosys proofs that a client keeps the port for every outstanding response and that each response reaches only its requester; the adapter's DDRAM outputs will be registered; and the fill address, sprite FIFO and blend control paths will gain registered stages. The board-SDRAM refresh and start-up counts will be derived from the clock frequency. Protocol, capabilities, command timing semantics and the SDK are unchanged.
+Source `d5051f4` raises `clk_sys` to 120MHz, keeps video at 100MHz, synchronizes the video and retirement levels, registers the DDRAM paths, adds a proved seven-client read owner, pipelines the copy and blend engines and scales board-SDRAM timing from the clock frequency without changing protocol 1.7, its capabilities or the SDK contract. The complete Verilator suite and all ten formal proof and cover tasks passed. Three clean Quartus fits then tested seeds 3, 7 and 13: seed 3 passed every corner with +0.089ns worst setup and +0.096ns worst hold, seed 13 passed with +0.051ns worst setup and +0.112ns worst hold, and seed 7 failed slow -40C setup at -0.100ns, so seed 3 is pinned; its RBF SHA256 is `fe858c3fce82ac17cb867485bf66c0627e5219c6cdd6f351dc7478364399a0c3`. On hardware the seed-3 image reported protocol 1.7 and passed the exact-pixel SDL diagnostic with hash `93f8e614` plus HDMI audio in two-buffer mode, but it failed the throughput qualification reproducibly: solid fill, fill batch and blended fill completed at approximately their 100MHz rates, then the first full-screen `BLIT_COPY` warmup never retired and timed out. The earlier apparent two- and three-buffer passes were found to have run against the accepted fallback left by the interrupted session, not this candidate. The MiSTer-GemRB AR0015 comparison was therefore not run, the 120MHz image is rejected, and the accepted 100MHz seed-13 image with SHA256 `ae0159da05a78b3209a6f3619173bb83cff84ca319d24c62159b2156a7e0fcd9` was restored and passed its SDK, three-buffer exact-pixel and audio checks.
 
 #### Next Steps:
 
-Require the complete Verilator suite and make formal to pass, then fit seeds 13 and 7 at 120MHz and accept only four-corner closure with positive setup and hold slack. On hardware, require the exact-pixel SDL diagnostic with hash 93f8e614 and HDMI audio in both buffer modes, engine rates near 1.2 times the protocol-1.7 measurements from the throughput tool, and a MiSTer-GemRB comparison of the AR0015 fog scene with DrawFPS=1 and diagnostics off before continuing toward 150MHz.
+Keep the accepted 100MHz image loaded and obtain approval for a diagnostic-only cycle that instruments the full-screen copy request, response, FIFO and completion state around the timeout, then reproduces it with bounded copy sizes to distinguish a 120MHz DDRAM handshake failure from an engine pipeline or counter defect. Do not continue toward 150MHz or run GemRB against the 120MHz candidate until the copy timeout is understood and corrected.
 
 #### Files Modified:
 
 - Noodles.sv
 - Noodles.sdc
-- rtl/pll/pll_0002.v
-- rtl/ddram_adapter.sv
-- rtl/ddram_read_arbiter.sv
+- Noodles.qsf
+- README.md
+- docs/BUILD.md
+- docs/INTEGRATION.md
+- Makefile
+- files.qip
+- fv/ddram_read_owner.sby
+- rtl/blend_px.sv
 - rtl/blit.sv
 - rtl/blit_blend.sv
-- rtl/sprite_batch.sv
-- rtl/sdram.sv
+- rtl/blit_copy.sv
+- rtl/blit_copy64.sv
+- rtl/ddram_adapter.sv
+- rtl/ddram_read_owner.sv
+- rtl/pll.v
+- rtl/pll/pll_0002.v
 - rtl/present.sv
-- fv/ddram_read_arbiter.sby
-- files.qip
-- Makefile
+- rtl/sdram.sv
+- rtl/sdram_loader.sv
+- sim/engine_sprite_batch_dut.sv
+- sim/sdram_loader_dut.sv
+- sim/tb_blend_px.cpp
+- sim/tb_blit_copy64.cpp
+- sim/tb_ddram_ingress.cpp
+- sim/test_report_multicorner.tcl
+- tools/report_multicorner.tcl
+- tools/report_timing.tcl
 
 #### Status:
 
-- [ ] Built
+- [x] Built
 - [ ] Passed
 
 ---
