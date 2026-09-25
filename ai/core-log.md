@@ -484,7 +484,7 @@ Keep the bounded progress API as the generic pressure path and benchmark the acc
 
 ---
 
-## 12 COMMIT Unreleased ??? 2026-09-25T05:18:57-07:00
+## 12 COMMIT Unreleased eb5886f 2026-09-25T05:18:57-07:00
 
 #### Coming From:
 
@@ -496,11 +496,11 @@ Remove unnecessary DDR3 destination traffic from identity-modulated standard-alp
 
 #### Outcome:
 
-The proposed protocol-preserving RTL change makes the blend engine consume source-aligned output pairs before forming destination reads. Fully transparent pairs advance without a destination read or write, fully opaque pairs write the source result without a destination read, and partial-alpha pairs continue through the existing bit-exact destination-read and blend pipeline. All other modes, modulation, solid fills, keys, mirroring, alignment and edge behavior remain on their existing paths.
+Source `eb5886f` makes identity-modulated standard-alpha draws classify each source pair before destination access: transparent pairs advance without a destination read or write, opaque pairs bypass the blend pipeline and write directly through a registered output stage, and the first partial pair returns the remainder of the draw to the existing destination-read pipeline. The complete simulation suite passed 5,000 randomized cases and 89,063,424 exact blend vectors, native and installed SDK tests, the ARM build and ASan/UBSan passed, and clean seed-13 and seed-7 Quartus builds passed every timing corner. The seed-13 RBF SHA256 is `75e3a2c633f0c729c04d72a57138f34d2222ba5772a48427d0e6ab23e140d197`; it used 16,061 ALMs, 20,656 registers, 366,612 memory bits and 60 DSP blocks. On MiSTer, the exact SDL diagnostic retained hash `93f8e614`, audio passed, and the blend diagnostic matched 307,852 pixels across scalar, fill and batched cases. Direct comparison with the accepted RBF showed unchanged synthetic endpoints of approximately 66.2 million mixed, 57.7 million opaque and 66.9 million transparent pixels per second because source reads or destination writes remain the limiting traffic. The live paused scene improved from the prior 20.0-20.2fps range to 20.9-21.6fps in the first controlled sample, but panning measured 16.6-17.9fps and matched the prior clean 17.9fps result. Combat measured 12.1-14.5fps with unchanged visible stutter; rendering consumed approximately 30-34ms per frame while time outside the renderer rose to 42-53ms, and the known Kobold Commando projectile fault then terminated GemRB with signal 11 while the core remained running.
 
 #### Next Steps:
 
-Extend the blend walker and engine model for single-word destination decisions, add directed and randomized tests that mix opaque, transparent and partial pairs across every alignment, mirror direction, row edge and injected bus stall, and run the complete simulation, SDK, sanitizer and ARM suites. Before publishing the RTL source, require one local seed-13 Quartus fit and all four timing corners to pass; then build at no more than two seeds in parallel and require exact MiSTer pixels, audio, engine throughput and stationary and panning comparisons.
+Retain the correct binary-alpha shortcuts, but do not expect them to remove the visible gameplay dip. Profile the current spell-heavy interval at ARM function level because its 42-53ms non-renderer component now exceeds rendering time, and separately design a generic span-list or polygon submission path for panning, where thousands of SDL span calls still dominate command construction. Select the next RTL throughput change only after the profile distinguishes useful CPU work from synchronization and identifies which remaining full-screen operation limits stationary rendering.
 
 #### Files Modified:
 
@@ -510,7 +510,7 @@ Extend the blend walker and engine model for single-word destination decisions, 
 
 #### Status:
 
-- [ ] Built
-- [ ] Passed
+- [x] Built
+- [x] Passed
 
 ---
