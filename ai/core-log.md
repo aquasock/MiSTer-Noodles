@@ -515,7 +515,7 @@ Retain the correct binary-alpha shortcuts, but do not expect them to remove the 
 
 ---
 
-## 13 COMMIT Unreleased ??? 2026-09-25T08:46:09-07:00
+## 13 COMMIT Unreleased 26acb9c 2026-09-25T08:46:09-07:00
 
 #### Coming From:
 
@@ -527,23 +527,27 @@ Let draw work continue while a flip waits for vertical blank by adding an opt-in
 
 #### Outcome:
 
-The previously proposed DDR3 write-burst change is superseded before implementation. MiSTer-GemRB source `cd506c8` measured the accepted protocol-1.6 image with a standalone SDK client: full-surface solid fills ran at 175 Mpixel/s or 0.57 clocks per pixel, about 88% of the 64-bit 100MHz port's one-write-per-cycle ceiling that bursts cannot exceed, plain sprite-batch draws at 83 Mpixel/s and standard-alpha blends at 69 Mpixel/s regardless of source alpha, so blends are pipeline-limited rather than write-limited. With `RETIRE_VBLANKS(0)`, PRESENT behaves as ordinary vertical-sync double buffering with no extra retirement frame, but CMDQ holds every later command until the flip completes, and the SDK's confirmed wait trails raw completion by the remainder of the executing command. In GemRB's paused AR4000 scene each frame occupies the engine for about 35ms after the previous flip, just beyond the 33.3ms two-refresh budget, so the engine idles for about 15.6ms until the third refresh and the rate locks at 20fps. The proposed change adds protocol 1.7 with capability bit 11: a third fixed 800x600 surface `BUFFER_C` at `0x31600000`, clear of tool scratch at `0x31400000` and the managed arena at `0x32000000`; a two-bit front-buffer index driving a three-way `FB_BASE` mux; and a new `PRESENT_QUEUED` opcode carrying an explicit buffer index. CMDQ dispatches `PRESENT_QUEUED` only when the present engine is idle, so a new flip waits until the previous one has retired, then completes the command's fence on acceptance while the present engine performs the vertically synchronized flip and retirement handshake in the background; later non-PRESENT commands no longer wait on `present_busy`. Legacy opcode-4 PRESENT keeps its blocking double-buffer behavior between buffers A and B. SDK 0.12 adds an opt-in three-buffer mode that rotates A, B and C, keeps at most one unaccepted presentation and permits back-buffer CPU transfers while a queued flip is pending, because the back buffer is then neither displayed nor awaiting display. The first seed-13 and seed-7 fits of that change used 15,509 and 15,519 ALMs but failed four-corner timing in pre-existing paths: seed 13 at -0.495ns slow -40C setup from `fill_batch` state `DESC_REQ` through the combinational DDR3 read-mux priority chain, `rd64_len`, `rd64_ready` and `blit_copy64` request commit to `dst_cur`, and seed 7 at -0.318ns in `blit_blend` from its pixel-FIFO reservation through source-request formation to `req_len`, plus -0.083ns on the read-mux path. The user approved fixing those critical paths rather than searching seeds. Because engine read clients never overlap, the top level now takes their read-port owner from a register one cycle after a client becomes active while control and link keep combinational priority, and `blit_blend` keeps pixel and destination free-space counters so request formation compares burst size without an adder.
+The previously proposed DDR3 write-burst change was superseded before implementation after MiSTer-GemRB source `cd506c8` measured the accepted protocol-1.6 image: solid fills already reached 175 Mpixel/s or 0.57 clocks per pixel, about 88% of the 64-bit 100MHz port's one-write-per-cycle ceiling, blends were pipeline-limited at 69 Mpixel/s, and GemRB's paused scene locked at 20fps because PRESENT held CMDQ until vertical blank after about 35ms of engine work. Sources `ca23af4` and `26acb9c` publish protocol 1.7, capability mask `0x00000ffe` and SDK 0.12 as specified in reference record OUT-013: a third buffer at `0x31600000`, a two-bit front index, opcode 11 `PRESENT_QUEUED` with buffer index 0-2 or flip barrier 3, fence completion on acceptance, retirement captured at the flip, unchanged legacy PRESENT, and an opt-in SDK three-buffer mode that rotates the back buffer, barriers the first queued flip and permits back-buffer CPU transfers during a queued flip. The first fits of the feature failed timing in pre-existing paths, so with user approval the top level now registers the engine read-port owner and `blit_blend` tracks free FIFO space; the complete simulation suite, host tests, ASan/UBSan, installed consumers and ARM build passed. Seed 13 of `ca23af4` passed all corners but hardware showed commands behind a queued flip still waited for it, because `cmd_ready` gated on the retained PRESENT in `cmd_data` without `cmd_valid`; `26acb9c` gates on the offered command and adds a stale-data test that fails on the previous RTL. Its isolated seed-13 build, with Quartus Prime Lite 17.0.2 and `SOURCE_DATE_EPOCH=1790121600`, passed all four corners with +0.100ns worst setup and +0.009ns worst hold, used 15,604 ALMs, 20,486 registers, 366,612 memory bits, 75 RAM blocks and 60 DSP blocks, and produced RBF SHA256 `ae0159da05a78b3209a6f3619173bb83cff84ca319d24c62159b2156a7e0fcd9`, deployed as `pet/Noodles_triple_seed13.rbf`; seed 7 failed slow -40C setup at -0.047ns and the limiting seed-13 path is link_ring's combinational read priority into `blit_copy64`. On MiSTer the SDL diagnostic passed with hash `93f8e614` and audio in both buffer modes, engine rates were unchanged, a fill behind a queued flip completed 2.76ms after acceptance, and off-screen frames of 19.2ms, 27.4ms and 35.5ms ran at 51.8, 36.4 and 28.1fps against 30.2, 30.2 and 20fps with two buffers. In MiSTer-GemRB the paused AR4000 scene rose from 19.84-19.91fps to 29.15-29.23fps with near-zero presentation wait, the menu felt smoother and the user saw no ghosting, but spell-heavy combat fell to 7.8-10fps with 88-117ms per frame outside the renderer and felt laggier before the known Kobold Commando signal-11 fault ended the session.
 
 #### Next Steps:
 
-Implement the RTL, SDK and timing changes with simulation coverage, mirroring the registered read owner in the sprite-batch testbench's arbitration, for queued acceptance, three-way rotation, a second queued PRESENT stalling until the first retires, draws proceeding behind a pending flip, fence counting, first-present blanking and unchanged legacy PRESENT, then run the complete simulation, native, installed-consumer, sanitizer and ARM suites. Require a local seed-13 fit and all four timing corners before publishing, with no more than two Quartus builds in parallel, deploy under a distinct RBF name, and accept it only after MiSTer-GemRB shows exact pixels, audio, no ghosting and improved stationary pacing against the 20fps baseline.
+Keep the image as the three-buffer candidate while MiSTer-GemRB measures whether concurrent engine traffic slows ARM memory access through the shared DDR3 controller, then compare two- and three-buffer combat on this core. If contention is material, evaluate controller port priority, renderer pacing or moving read-only texture sources to board SDRAM; register link_ring's read priority in the next RTL change to restore timing margin.
 
 #### Files Modified:
 
+- Makefile
 - Noodles.sv
+- README.md
+- docs/INTEGRATION.md
+- docs/SDK.md
+- lib/noodles_link.c
+- lib/noodles_link.h
+- lib/noodles_link_internal.h
+- lib/noodles_surface.c
 - rtl/blit_blend.sv
 - rtl/cmdq.sv
 - rtl/link_control.sv
 - rtl/present.sv
-- lib/noodles_link.h
-- lib/noodles_link.c
-- lib/noodles_surface.c
-- lib/noodles_link_internal.h
 - sim/cmdq_batch_dut.sv
 - sim/engine_sprite_batch_dut.sv
 - sim/present_dut.sv
@@ -551,14 +555,10 @@ Implement the RTL, SDK and timing changes with simulation coverage, mirroring th
 - sim/tb_link_control.cpp
 - sim/tb_present.cpp
 - sim/test_noodles_sdk.c
-- Makefile
-- README.md
-- docs/INTEGRATION.md
-- docs/SDK.md
 
 #### Status:
 
-- [ ] Built
-- [ ] Passed
+- [x] Built
+- [x] Passed
 
 ---
