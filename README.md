@@ -73,6 +73,13 @@ Protocol 1.6 and SDK 0.10 add `noodles_push_fill_batch()` and
 `noodles_surface_fill_batch()`. A batch contains up to 64 clipped opaque
 rectangles, executes strictly in descriptor order and retires as one fence.
 
+The SDK permits one pending `PRESENT` while the next frame's commands queue
+behind it. `noodles_link_back_buffer()` predicts the post-flip writable buffer
+during that interval, managed-surface transfers synchronize against the
+surface's own last use, and descriptor ownership still prevents table reuse.
+A second `PRESENT`, arbitrary raw uploads and direct CPU back-buffer transfers
+remain blocked until the pending flip retires.
+
 ## Build
 
     make          # cross-build the ARM-side host tools (static, armv7/Cortex-A9)

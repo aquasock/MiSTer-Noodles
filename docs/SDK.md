@@ -155,11 +155,16 @@ than a full backoff period. Sleeping a flat 1ms per check cost the canonical
 one-batch `blit-bench` about 13% of its measured throughput.
 
 `noodles_push_present(device, &fence)` submits exactly one flip, separately
-from waiting. While that flip is pending, drawing, uploads and another
-PRESENT return `EAGAIN`. Poll/wait observes retirement and refreshes the
-back-buffer role; only then query `noodles_link_back_buffer()` for the next
-frame. This also applies to raw opcode-4 submissions. The convenience
-`noodles_present_and_wait()` submits once and waits up to 2000ms.
+from waiting. A second PRESENT returns `EAGAIN` until poll/wait observes the
+first one's retirement. Drawing may continue behind the pending flip because
+the command ring preserves its order. During that interval,
+`noodles_link_back_buffer()` predicts the role after the queued flip, so typed
+back-buffer drawing addresses the surface that will be writable when those
+commands execute. Descriptor-table uploads are also allowed behind the flip;
+other raw uploads remain blocked because the SDK cannot infer the last GPU use
+of arbitrary caller-owned memory. This also applies to raw opcode-4
+submissions. The convenience `noodles_present_and_wait()` submits once and
+waits up to 2000ms.
 
 On a wait timeout or clock/sleep failure the handle is faulted. Further
 work is rejected with that error; even late completion does not restore it.
@@ -173,7 +178,7 @@ a valid live handle; they are observations, not health checks.
 
 | Error | Meaning / action |
 |---|---|
-| `EAGAIN` | Ring/table busy or presentation not yet observed complete. Nothing new published; poll/drain as appropriate and retry. |
+| `EAGAIN` | Ring/table busy, a second presentation is pending, or a guarded raw transfer cannot safely cross a pending presentation. Nothing new published; poll/drain as appropriate and retry. |
 | `EBUSY` | Another SDK client owns the device, or legacy attachment sees a nonempty ring. |
 | `EOWNERDEAD` | A dirty prior software session is still active in hardware; reload the core. |
 | `ESTALE` | The verified hardware session was lost, normally by FPGA reset/reload. |
@@ -225,7 +230,9 @@ SDK.
 `noodles_surface_create()` returns an opaque surface. Partial
 `noodles_surface_update()` and `noodles_surface_read()` require an entirely
 in-bounds rectangle and a host pitch large enough for one row. They wait with
-the caller's bounded timeout if GPU work still references that surface.
+the caller's bounded timeout if GPU work still references that surface. They
+may run while a presentation is pending: synchronization follows the
+surface's last-use fence instead of serializing on vertical blank.
 Surface fill and copy operations clip signed rectangles against source and
 destination bounds before publishing a command. Same-surface copies remain
 unsupported because hardware overlap semantics are undefined.

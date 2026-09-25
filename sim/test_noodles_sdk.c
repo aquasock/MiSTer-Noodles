@@ -194,19 +194,35 @@ int main(void) {
     assert(noodles_link_poll(a, 1, &done) == 0 && !done);
     noodles_fence_t fence;
     assert(noodles_push_present(a, &fence) == 0 && fence == 2);
+    assert(noodles_link_back_buffer(a) == NOODLES_BUFFER_A_ADDR);
+    const uint32_t next_fill[8] = {
+        1, NOODLES_BUFFER_A_ADDR, 3200, 800, 600, 0, 0, 0,
+    };
     uint32_t before = memory[0];
-    assert(noodles_push_command(a, fill) == -1 && errno == EAGAIN && memory[0] == before);
-    assert(noodles_link_back_buffer(a) == NOODLES_BUFFER_B_ADDR);
-    /* Even after physical retirement, callers must observe it before drawing
-     * with the next buffer; a submission cannot silently change buffer roles. */
+    assert(noodles_push_command(a, next_fill) == 0 && memory[0] != before);
+    before = memory[0];
+    noodles_fence_t second_fence;
+    assert(noodles_push_present(a, &second_fence) == -1 && errno == EAGAIN &&
+           memory[0] == before);
+    assert(noodles_link_upload(a, 0x30050000u, fill, sizeof(fill)) == -1 &&
+           errno == EAGAIN);
+    noodles_sprite_descriptor_t queued_draw = {
+        NOODLES_BUFFER_A_ADDR, 3200, 1, 1, 0,
+        NOODLES_BUFFER_B_ADDR, 3200, 0,
+    };
+    assert(noodles_push_sprite_batch(a, &queued_draw, 1) == 0);
+    assert(((const noodles_sprite_descriptor_t *)descriptor_memory)->dst_addr ==
+           NOODLES_BUFFER_A_ADDR);
+    /* The predicted role stays stable after physical retirement and after
+     * software observes the completed presentation. */
     memory[2] = memory[0];
-    memory[3] = 0x80000002u;
-    assert(noodles_push_command(a, fill) == -1 && errno == EAGAIN);
+    memory[3] = 0x80000004u;
+    assert(noodles_link_back_buffer(a) == NOODLES_BUFFER_A_ADDR);
     assert(noodles_link_poll(a, fence, &done) == 0 && done);
+    assert(noodles_link_back_buffer(a) == NOODLES_BUFFER_A_ADDR);
     complete_on_sleep = interrupt_sleep = 1;
     assert(noodles_link_wait(a, fence, 10) == 0);
-    assert(noodles_link_back_buffer(a) == NOODLES_BUFFER_A_ADDR);
-    assert(noodles_push_command(a, fill) == 0);
+    assert(noodles_push_command(a, next_fill) == 0);
     closed(a); /* drains outstanding work, including after EINTR */
     assert(sleeps == 1);
     a = open_device(0);
@@ -790,14 +806,27 @@ int main(void) {
     assert(published[0] == 8 && published[3] == 4 && published[4] == 4 &&
            published[5] == 0x40112233u && published[6] == NOODLES_DRAW_MODE_MUL);
     assert(noodles_surface_destroy(fill_surface) == 0);
+    noodles_surface_t *pending_surface = NULL;
+    assert(noodles_surface_create(a, 4, 4, &pending_surface) == 0);
     assert(noodles_push_present(a, &fence) == 0);
+    assert(noodles_link_back_buffer(a) == NOODLES_BUFFER_A_ADDR);
+    noodles_rect_t pending_rect = {0, 0, 2, 2};
+    uint32_t pending_upload[4] = {1, 2, 3, 4};
+    uint32_t pending_read[4] = {0};
+    assert(noodles_surface_update(pending_surface, &pending_rect,
+                                  pending_upload, 8, 10) == 0);
+    assert(noodles_surface_read(pending_surface, &pending_rect,
+                                pending_read, 8, 10) == 0);
+    assert(!memcmp(pending_upload, pending_read, sizeof(pending_upload)));
     assert(noodles_back_buffer_read(a, &back_rect, back_read, 12, 10) == -1 &&
            errno == EAGAIN);
+    assert(noodles_push_present(a, &second_fence) == -1 && errno == EAGAIN);
     assert(noodles_link_wait(a, fence, 10) == 0);
     assert(noodles_link_back_buffer(a) == NOODLES_BUFFER_A_ADDR);
     assert(noodles_back_buffer_update(a, &back_rect, back_upload, 12, 10) == 0);
     assert(!memcmp(back_buffer_memory[0] + 3 * NOODLES_BUFFER_PITCH + 2 * 4,
                    back_upload, 8));
+    assert(noodles_surface_destroy(pending_surface) == 0);
     closed(a);
 
     /* A raw fence that retires after the backoff has grown still gets a

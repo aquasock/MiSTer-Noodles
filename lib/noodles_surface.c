@@ -225,7 +225,6 @@ static int transfer_rows(noodles_link_t *link, uint32_t address, uint32_t device
 static int transfer(noodles_surface_t *surface, const noodles_rect_t *rect, void *pixels,
                     size_t host_pitch, uint32_t timeout_ms, int write) {
     if (!pixels || !validate_transfer(surface, rect, host_pitch)) return fail(EINVAL);
-    if (surface->link->present_pending) return fail(EAGAIN);
     if (wait_for_cpu(surface, timeout_ms) != 0) return -1;
 
     uint64_t address64 = (uint64_t)surface->address + (uint32_t)rect->y * surface->pitch +

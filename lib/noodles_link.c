@@ -409,11 +409,6 @@ int noodles_link_drain(noodles_link_t *link, uint32_t timeout_ms) {
     return noodles_link_wait(link, noodles_link_last_fence(link), timeout_ms);
 }
 
-static int submission_ready(noodles_link_t *link) {
-    if (noodles_link_check(link) != 0) return -1;
-    return link->present_pending ? fail(EAGAIN) : 0;
-}
-
 static int overlaps_managed_arena(uint32_t address, uint64_t bytes) {
     uint64_t end = (uint64_t)address + bytes;
     uint64_t arena_end = (uint64_t)NOODLES_SURFACE_ARENA_ADDR + NOODLES_SURFACE_ARENA_BYTES;
@@ -587,11 +582,13 @@ static int ring_has_space(const noodles_link_t *link) {
 }
 
 static int push_command(noodles_link_t *link, const uint32_t command[8], int allow_managed) {
-    if (submission_ready(link) != 0) return -1;
+    if (noodles_link_check(link) != 0) return -1;
     if (!valid_command(link, command, allow_managed)) {
         errno = EINVAL;
         return -1;
     }
+    if (command[0] == NOODLES_OP_PRESENT && link->present_pending)
+        return fail(EAGAIN);
     if (command[0] < 32 && !(link->capabilities & (1u << command[0])))
         return fail(ENOTSUP);
     uint32_t op = command[0] & 0xffu;
@@ -680,7 +677,7 @@ int noodles_push_blend_fill(noodles_link_t *link, uint32_t dst_addr, uint16_t ds
 int noodles_push_sprite_batch(noodles_link_t *link,
                               const noodles_sprite_descriptor_t *descriptors,
                               uint16_t count) {
-    if (submission_ready(link) != 0) return -1;
+    if (noodles_link_check(link) != 0) return -1;
     if (!descriptors || count == 0 || count > NOODLES_SPRITE_DESCRIPTOR_MAX) {
         errno = EINVAL;
         return -1;
@@ -701,7 +698,7 @@ int noodles_push_sprite_batch(noodles_link_t *link,
 
 int noodles_link_push_sprite_descriptors_managed(
     noodles_link_t *link, const noodles_sprite_descriptor_t *descriptors, uint16_t count) {
-    if (submission_ready(link) != 0) return -1;
+    if (noodles_link_check(link) != 0) return -1;
     if (!descriptors || count == 0 || count > NOODLES_SPRITE_DESCRIPTOR_MAX) {
         errno = EINVAL;
         return -1;
@@ -723,7 +720,7 @@ int noodles_link_push_sprite_descriptors_managed(
 static int push_fill_descriptors(noodles_link_t *link,
                                  const noodles_fill_descriptor_t *descriptors,
                                  uint16_t count, int allow_managed) {
-    if (submission_ready(link) != 0) return -1;
+    if (noodles_link_check(link) != 0) return -1;
     if (!descriptors || count == 0 || count > NOODLES_SPRITE_DESCRIPTOR_MAX)
         return fail(EINVAL);
     if (!(link->capabilities & NOODLES_CAP_FILL_BATCH)) return fail(ENOTSUP);
@@ -784,18 +781,20 @@ int noodles_present_and_wait(noodles_link_t *link) {
 }
 
 uint32_t noodles_link_back_buffer(const noodles_link_t *link) {
-    return (link->presents_completed % 2 == 0) ? NOODLES_BUFFER_B_ADDR : NOODLES_BUFFER_A_ADDR;
+    uint32_t parity = link->presents_completed ^ (link->present_pending ? 1u : 0u);
+    return parity ? NOODLES_BUFFER_A_ADDR : NOODLES_BUFFER_B_ADDR;
 }
 
 int noodles_link_upload(noodles_link_t *link, uint32_t dst_addr, const void *data,
                          size_t size_bytes) {
-    if (submission_ready(link) != 0) return -1;
+    if (noodles_link_check(link) != 0) return -1;
     if (!data || !size_bytes || size_bytes > UINT32_MAX) return fail(EINVAL);
     uint64_t end = (uint64_t)dst_addr + size_bytes;
     uint64_t descriptor_end = (uint64_t)NOODLES_SPRITE_DESCRIPTOR_ADDR +
         descriptor_table_count(link) * NOODLES_SPRITE_DESCRIPTOR_TABLE_BYTES;
     int descriptor_upload = dst_addr >= NOODLES_SPRITE_DESCRIPTOR_ADDR &&
         end <= descriptor_end;
+    if (link->present_pending && !descriptor_upload) return fail(EAGAIN);
     uint64_t touch_start = dst_addr > NOODLES_SPRITE_DESCRIPTOR_ADDR ?
         dst_addr : NOODLES_SPRITE_DESCRIPTOR_ADDR;
     uint64_t touch_end = end < descriptor_end ? end : descriptor_end;
