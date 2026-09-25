@@ -483,3 +483,34 @@ Keep the bounded progress API as the generic pressure path and benchmark the acc
 - [x] Passed
 
 ---
+
+## 12 COMMIT Unreleased ??? 2026-09-25T05:18:57-07:00
+
+#### Coming From:
+
+Unreleased 973dfb6
+
+#### Purpose:
+
+Remove unnecessary DDR3 destination traffic from identity-modulated standard-alpha blends by resolving fully opaque and fully transparent source pairs before destination access.
+
+#### Outcome:
+
+The proposed protocol-preserving RTL change makes the blend engine consume source-aligned output pairs before forming destination reads. Fully transparent pairs advance without a destination read or write, fully opaque pairs write the source result without a destination read, and partial-alpha pairs continue through the existing bit-exact destination-read and blend pipeline. All other modes, modulation, solid fills, keys, mirroring, alignment and edge behavior remain on their existing paths.
+
+#### Next Steps:
+
+Extend the blend walker and engine model for single-word destination decisions, add directed and randomized tests that mix opaque, transparent and partial pairs across every alignment, mirror direction, row edge and injected bus stall, and run the complete simulation, SDK, sanitizer and ARM suites. Before publishing the RTL source, require one local seed-13 Quartus fit and all four timing corners to pass; then build at no more than two seeds in parallel and require exact MiSTer pixels, audio, engine throughput and stationary and panning comparisons.
+
+#### Files Modified:
+
+- rtl/blend_walk.sv
+- rtl/blit_blend.sv
+- sim/tb_blit_blend.cpp
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
