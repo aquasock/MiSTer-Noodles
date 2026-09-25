@@ -27,6 +27,7 @@ ARMCOPYPUSH := build/arm/blit-copy-push
 ARMFILLPUSH := build/arm/solid-fill-push
 ARMKEYPUSH  := build/arm/blit-copy-key-push
 ARMBENCH    := build/arm/bench
+ARMCOPYSWEEP:= build/arm/copy-sweep
 ARMPRESENT  := build/arm/present-demo
 ARMSPRITE   := build/arm/sprite-demo
 ARMLOADBMP  := build/arm/load-bmp
@@ -41,6 +42,7 @@ HOSTCOPYPUSH:= build/host/blit-copy-push
 HOSTFILLPUSH:= build/host/solid-fill-push
 HOSTKEYPUSH := build/host/blit-copy-key-push
 HOSTBENCH   := build/host/bench
+HOSTCOPYSWEEP:= build/host/copy-sweep
 HOSTPRESENT := build/host/present-demo
 HOSTSPRITE  := build/host/sprite-demo
 HOSTLOADBMP := build/host/load-bmp
@@ -79,7 +81,7 @@ BLEND_RTL         := rtl/blend_px.sv rtl/blend_walk.sv rtl/blit_blend.sv
 
 .PHONY: all host deploy sim formal test-host test-timing test-sdk-install sdk sdk-host install-sdk clean
 
-all: sdk $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS) $(ARMTILECACHE) $(ARMBLEND) $(ARMPRESENTPROBE)
+all: sdk $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMCOPYSWEEP) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS) $(ARMTILECACHE) $(ARMBLEND) $(ARMPRESENTPROBE)
 
 sdk: build/arm/libnoodles.a build/arm/sdk-smoke
 sdk-host: build/host/libnoodles.a build/host/sdk-smoke
@@ -191,11 +193,11 @@ $(DDRAM_INGRESS_SIM): rtl/ddram_adapter.sv sim/tb_ddram_ingress.cpp
 		--Wall --Wno-fatal \
 		rtl/ddram_adapter.sv sim/tb_ddram_ingress.cpp -o $(notdir $@)
 
-$(BLIT_COPY_SIM): rtl/cmdq.sv rtl/blit.sv rtl/blit_copy.sv rtl/blit_copy64.sv rtl/sprite_batch.sv rtl/ddram_adapter.sv sim/engine_copy_dut.sv sim/tb_blit_copy.cpp
+$(BLIT_COPY_SIM): rtl/cmdq.sv rtl/blit.sv rtl/blit_copy.sv rtl/blit_copy64.sv rtl/sprite_batch.sv rtl/ddram_adapter.sv rtl/ddram_read_owner.sv sim/engine_copy_dut.sv sim/tb_blit_copy.cpp
 	@mkdir -p $(dir $@)
 	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module engine_copy_dut \
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
-		rtl/cmdq.sv rtl/blit.sv rtl/blit_copy.sv rtl/blit_copy64.sv rtl/sprite_batch.sv rtl/ddram_adapter.sv sim/engine_copy_dut.sv sim/tb_blit_copy.cpp -o $(notdir $@)
+		rtl/cmdq.sv rtl/blit.sv rtl/blit_copy.sv rtl/blit_copy64.sv rtl/sprite_batch.sv rtl/ddram_adapter.sv rtl/ddram_read_owner.sv sim/engine_copy_dut.sv sim/tb_blit_copy.cpp -o $(notdir $@)
 
 $(BLIT_COPY64_SIM): rtl/blit_copy64.sv rtl/ddram_adapter.sv sim/engine_copy64_dut.sv sim/tb_blit_copy64.cpp
 	@mkdir -p $(dir $@)
@@ -295,6 +297,9 @@ $(ARMKEYPUSH): tools/blit_copy_key_push.c build/arm/libnoodles.a lib/noodles_lin
 $(ARMBENCH): tools/bench.c build/arm/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CPPFLAGS) $(CFLAGS) -static -o $@ tools/bench.c build/arm/libnoodles.a
 
+$(ARMCOPYSWEEP): tools/copy-sweep.c build/arm/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/arm
+	$(ARMCC) $(ARMFLAGS) $(CPPFLAGS) $(CFLAGS) -static -o $@ tools/copy-sweep.c build/arm/libnoodles.a
+
 $(ARMPRESENT): tools/present_demo.c build/arm/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CPPFLAGS) $(CFLAGS) -static -o $@ tools/present_demo.c build/arm/libnoodles.a
 
@@ -313,7 +318,7 @@ $(ARMTILECACHE): tools/tile_cache_demo.c build/arm/libnoodles.a lib/noodles_link
 $(ARMBLEND): tools/blend_demo.c sim/blend_ref.h build/arm/libnoodles.a lib/noodles_link.h lib/noodles_surface.h tools/sdk_helpers.h | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CPPFLAGS) $(CFLAGS) -static -o $@ tools/blend_demo.c build/arm/libnoodles.a -lm
 
-host: sdk-host $(HOSTLINK) $(HOSTSLOTDUMP) $(HOSTMEMSCAN) $(HOSTCOPYPUSH) $(HOSTFILLPUSH) $(HOSTKEYPUSH) $(HOSTBENCH) $(HOSTPRESENT) $(HOSTSPRITE) $(HOSTLOADBMP) $(HOSTSTRESS) $(HOSTTILECACHE) $(HOSTBLEND) $(HOSTPRESENTPROBE)
+host: sdk-host $(HOSTLINK) $(HOSTSLOTDUMP) $(HOSTMEMSCAN) $(HOSTCOPYPUSH) $(HOSTFILLPUSH) $(HOSTKEYPUSH) $(HOSTBENCH) $(HOSTCOPYSWEEP) $(HOSTPRESENT) $(HOSTSPRITE) $(HOSTLOADBMP) $(HOSTSTRESS) $(HOSTTILECACHE) $(HOSTBLEND) $(HOSTPRESENTPROBE)
 
 $(HOSTLINK): tools/link_push.c build/host/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/host
 	$(HOSTCC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/link_push.c build/host/libnoodles.a
@@ -339,6 +344,9 @@ $(HOSTKEYPUSH): tools/blit_copy_key_push.c build/host/libnoodles.a lib/noodles_l
 $(HOSTBENCH): tools/bench.c build/host/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/host
 	$(HOSTCC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/bench.c build/host/libnoodles.a
 
+$(HOSTCOPYSWEEP): tools/copy-sweep.c build/host/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/host
+	$(HOSTCC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/copy-sweep.c build/host/libnoodles.a
+
 $(HOSTPRESENT): tools/present_demo.c build/host/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/host
 	$(HOSTCC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/present_demo.c build/host/libnoodles.a
 
@@ -360,7 +368,7 @@ $(HOSTBLEND): tools/blend_demo.c sim/blend_ref.h build/host/libnoodles.a lib/noo
 build/arm build/host:
 	mkdir -p $@
 
-deploy: sdk $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS) $(ARMTILECACHE) $(ARMBLEND) $(ARMPRESENTPROBE)
+deploy: sdk $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMCOPYSWEEP) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS) $(ARMTILECACHE) $(ARMBLEND) $(ARMPRESENTPROBE)
 	scripts/deploy.sh $(HOST)
 
 # Formal proofs (SymbiYosys with Z3; see docs/BUILD.md). Each .sby runs its

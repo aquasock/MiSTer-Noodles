@@ -624,7 +624,9 @@ wire [63:0] adapter_wr64_data = wr_sel_blend ? blend_wr64_data :
 // is outstanding, then passes to the highest-priority active client. The
 // previous combinational link/control priority placed link_ring's state on
 // sprite_batch's copy-address path. A request simply waits one cycle for its
-// grant. Each client's active spans every request and response it owns
+// grant; the adapter enable must remain low until that registered grant, so
+// it cannot accept a request that the client did not see accepted. Each
+// client's active spans every request and response it owns
 // (DDR-005): link_ring's and fill_batch's rd_active, sprite_batch's
 // rd_active across descriptor reads and copies, blit_blend's busy,
 // sdram_loader's rd64_active and blit_copy's busy.
@@ -646,7 +648,8 @@ wire        rd_sel_copy = rd_owner[6];
 wire [31:0] adapter_rd_addr = rd_sel_control ? control_rd_addr :
                               rd_sel_link ? link_rd_addr :
                               rd_sel_batch ? batch_rd_addr :
-                              rd_sel_fill_batch ? fill_batch_rd_addr : copy_rd_addr;
+                              rd_sel_fill_batch ? fill_batch_rd_addr :
+                              rd_sel_copy ? copy_rd_addr : 32'b0;
 wire [31:0] adapter_rd64_addr = rd_sel_batch64 ? batch_rd64_addr :
                                 rd_sel_blend64 ? blend_rd64_addr :
                                 rd_sel_loader64 ? loader_rd64_addr : 32'b0;
@@ -656,7 +659,8 @@ wire [7:0]  adapter_rd64_len = rd_sel_batch64 ? batch_rd64_len :
 wire        adapter_rd_en   = rd_sel_control ? control_rd_en :
                               rd_sel_link ? link_rd_en :
                               rd_sel_batch ? batch_rd_en :
-                              rd_sel_fill_batch ? fill_batch_rd_en : copy_rd_en;
+                              rd_sel_fill_batch ? fill_batch_rd_en :
+                              rd_sel_copy ? copy_rd_en : 1'b0;
 wire        adapter_rd64_en = rd_sel_batch64 || rd_sel_blend64 || rd_sel_loader64;
 wire        adapter_rd_ready, adapter_rd_valid;
 wire [31:0] adapter_rd_data;

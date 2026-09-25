@@ -42,6 +42,9 @@ module engine_copy_dut (
     logic        wr_en, wr_ready;
     logic [31:0] rd_addr, rd_data;
     logic        rd_en, rd_ready, rd_valid;
+    logic [31:0] adapter_rd_data;
+    logic        adapter_rd_en, adapter_rd_ready, adapter_rd_valid;
+    logic [0:0]  rd_owner;
     logic        adapter_idle;
 
     cmdq cmdq_i (
@@ -135,6 +138,28 @@ module engine_copy_dut (
         .wr_ready (wr_ready)
     );
 
+    // Match Noodles.sv's registered read-owner handoff. The copy engine
+    // raises busy and rd_en before the owner register grants it the shared
+    // port. No request may reach the adapter during that acquisition cycle,
+    // because copy_i sees rd_ready low and therefore has not reserved a FIFO
+    // slot for the response.
+    assign adapter_rd_en = rd_owner[0] && rd_en;
+    assign rd_ready = rd_owner[0] ? adapter_rd_ready : 1'b0;
+    assign rd_data = adapter_rd_data;
+    assign rd_valid = rd_owner[0] ? adapter_rd_valid : 1'b0;
+
+    ddram_read_owner #(.CLIENTS(1)) read_owner_i (
+        .clk          (clk),
+        .reset        (reset),
+        .active       (copy_busy),
+        .rd_accept    (adapter_rd_en && adapter_rd_ready),
+        .rd64_accept  (1'b0),
+        .rd64_len     (8'd1),
+        .rd_response  (adapter_rd_valid),
+        .rd64_response(1'b0),
+        .owner        (rd_owner)
+    );
+
     ddram_adapter adapter_i (
         .clk             (clk),
         .reset           (reset),
@@ -147,10 +172,10 @@ module engine_copy_dut (
         .wr64_en        (1'b0),
         .wr64_ready     (),
         .rd_addr         (rd_addr),
-        .rd_en           (rd_en),
-        .rd_ready        (rd_ready),
-        .rd_data         (rd_data),
-        .rd_valid        (rd_valid),
+        .rd_en           (adapter_rd_en),
+        .rd_ready        (adapter_rd_ready),
+        .rd_data         (adapter_rd_data),
+        .rd_valid        (adapter_rd_valid),
         .ddram_clk       (DDRAM_CLK),
         .ddram_busy      (DDRAM_BUSY),
         .ddram_burstcnt  (DDRAM_BURSTCNT),
