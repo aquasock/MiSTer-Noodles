@@ -415,3 +415,36 @@ Keep the accepted seed-13 protocol-1.6 image as the consumer baseline and preser
 - [x] Passed
 
 ---
+
+## 10 COMMIT Unreleased ??? 2026-09-25T03:31:49-07:00
+
+#### Coming From:
+
+Unreleased d1702b4
+
+#### Purpose:
+
+Allow one queued frame to cross a pending presentation fence without serializing safe managed-surface work or selecting the wrong back buffer.
+
+#### Outcome:
+
+The proposed SDK-only change permits non-presentation commands to remain ordered behind one pending `PRESENT`, predicts the back-buffer parity those commands will observe after the flip, and lets managed-surface transfers wait only for the surface's last-use fence. A second presentation and direct back-buffer CPU transfers remain blocked until the pending presentation completes, and descriptor ownership continues to protect batch tables. The protocol and RBF remain unchanged.
+
+#### Next Steps:
+
+Add native tests for post-present command ordering, predicted back-buffer selection, managed transfer safety, descriptor batches and the retained second-present and back-buffer-transfer guards. Run the full SDK, simulator, sanitizer and ARM build suite, then pin the accepted SDK source in MiSTer-GemRB and repeat its exact-pixel diagnostic before measuring overlap.
+
+#### Files Modified:
+
+- README.md
+- docs/SDK.md
+- lib/noodles_link.c
+- lib/noodles_surface.c
+- sim/test_noodles_sdk.c
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
