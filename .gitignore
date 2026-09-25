@@ -42,3 +42,5 @@ c5_pin_model_dump.txt
 # All build output (rebuilt by `make`/`make host`/`make sim`; nothing generated
 # belongs in the source tree -- see docs/BUILD.md).
 /build/
+# SymbiYosys work directories (rebuilt by `make formal`).
+/fv/*/

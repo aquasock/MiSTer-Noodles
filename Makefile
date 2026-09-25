@@ -76,7 +76,7 @@ BLEND_PX_SIM      := $(SIM_DIR)/blend_px/Vblend_px
 BLIT_BLEND_SIM    := $(SIM_DIR)/blit_blend/Vengine_blend_dut
 BLEND_RTL         := rtl/blend_px.sv rtl/blend_walk.sv rtl/blit_blend.sv
 
-.PHONY: all host deploy sim test-host test-timing test-sdk-install sdk sdk-host install-sdk clean
+.PHONY: all host deploy sim formal test-host test-timing test-sdk-install sdk sdk-host install-sdk clean
 
 all: sdk $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS) $(ARMTILECACHE) $(ARMBLEND) $(ARMPRESENTPROBE)
 
@@ -353,5 +353,15 @@ build/arm build/host:
 deploy: sdk $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS) $(ARMTILECACHE) $(ARMBLEND) $(ARMPRESENTPROBE)
 	scripts/deploy.sh $(HOST)
 
+# Formal proofs (SymbiYosys with Z3; see docs/BUILD.md). Each .sby runs its
+# k-induction proofs and a cover task that shows the assumptions still reach
+# the behavior the properties describe.
+SBY ?= sby
+FORMAL_JOBS := cmdq present link_ring
+
+formal:
+	cd fv && for job in $(FORMAL_JOBS); do $(SBY) -f $$job.sby || exit 1; done
+
 clean:
 	rm -rf build
+	rm -rf $(addprefix fv/,$(addsuffix _*/,$(FORMAL_JOBS)))

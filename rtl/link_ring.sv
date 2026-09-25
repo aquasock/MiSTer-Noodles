@@ -172,4 +172,87 @@ module link_ring #(
         end
     end
 
+`ifdef FORMAL
+    // Properties proved by fv/link_ring.sby. The memory adapter accepts a
+    // read when rd_ready is high and returns exactly one later response per
+    // accepted read; its data, readiness, enable and CMDQ's cmd_ready are
+    // otherwise unconstrained.
+    logic f_past_valid = 1'b0;
+    always_ff @(posedge clk) f_past_valid <= 1'b1;
+    always_comb if (!f_past_valid) assume(reset);
+
+    logic        f_rd_pending;
+    logic [31:0] f_rd_addr;
+    always_ff @(posedge clk or posedge reset) begin
+        if (reset) begin
+            f_rd_pending <= 1'b0;
+            f_rd_addr    <= '0;
+        end else if (rd_en && rd_ready) begin
+            f_rd_pending <= 1'b1;
+            f_rd_addr    <= rd_addr;
+        end else if (rd_valid) begin
+            f_rd_pending <= 1'b0;
+        end
+    end
+    always_comb if (!f_rd_pending) assume(!rd_valid);
+
+    // Shadow of the slot being fetched, built from the responses to the
+    // addresses link_ring actually requested, and the last polled write_ptr.
+    logic [255:0] f_slot;
+    logic [SLOT_INDEX_WIDTH-1:0] f_wptr, f_handshakes;
+    always_ff @(posedge clk or posedge reset) begin
+        if (reset) begin
+            f_slot       <= '0;
+            f_wptr       <= '0;
+            f_handshakes <= '0;
+        end else begin
+            if (rd_valid && f_rd_addr == HEADER_ADDR) f_wptr <= rd_data[SLOT_INDEX_WIDTH-1:0];
+            if (rd_valid && f_rd_addr != HEADER_ADDR) f_slot[{f_rd_addr[4:2], 5'd0} +: 32] <= rd_data;
+            if (cmd_valid && cmd_ready) f_handshakes <= f_handshakes + 1'b1;
+        end
+    end
+
+    always_ff @(posedge clk) if (f_past_valid && !reset && !$past(reset)) begin
+        // An offered command stays offered, unchanged, until CMDQ takes it.
+        if ($past(cmd_valid && !cmd_ready)) assert(cmd_valid && cmd_data == $past(cmd_data));
+    end
+
+    always_comb if (f_past_valid && !reset) begin
+        // One read outstanding at a time, and its address stays pinned until
+        // the response returns so the adapter selects the right half.
+        if (rd_en) assert(!f_rd_pending);
+        if (f_rd_pending) assert(rd_active && rd_addr == f_rd_addr);
+        // Slot words are requested in order from the slot at read_ptr.
+        if (state == FETCH_REQ || state == FETCH_WAIT)
+            assert(rd_addr == SLOT_BASE_ADDR + (32'(read_ptr) << 5) + {27'd0, word_idx, 2'b00});
+        // A command is offered only after a poll found new work, carries
+        // exactly the eight words fetched for it, and read_ptr advances once
+        // per accepted command, which is what WRITE_BACK publishes.
+        if (cmd_valid) assert(initialized && f_wptr != read_ptr && cmd_data == f_slot);
+        assert(read_ptr == f_handshakes);
+        if (wr_en && state == WRITE_BACK) assert(wr_addr == HEADER_ADDR + 32'd8 &&
+                                                 wr_data == 32'(f_handshakes));
+        // Inductive link between the model and the state machine.
+        if (state == INIT_WPTR || state == INIT_RPTR) assert(!initialized && !f_rd_pending &&
+                                                               f_handshakes == '0);
+        if (state == IDLE || state == DISPATCH || state == WRITE_BACK) assert(!f_rd_pending);
+        if (state == POLL_WAIT || state == FETCH_WAIT) assert(f_rd_pending);
+        if (state == POLL_REQ || state == POLL_WAIT || state == FETCH_REQ || state == FETCH_WAIT ||
+            state == DISPATCH || state == WRITE_BACK || state == IDLE) assert(initialized);
+        if (state == FETCH_REQ || state == FETCH_WAIT || state == DISPATCH) begin
+            assert(f_wptr != read_ptr);
+            for (int w = 0; w < 8; w++)
+                if (w < word_idx || state == DISPATCH)
+                    assert(f_slot[w*32 +: 32] == slot_reg[w*32 +: 32]);
+        end
+        if (state == FETCH_REQ || state == POLL_REQ) assert(!f_rd_pending);
+    end
+
+    always_comb if (f_past_valid && !reset) begin
+        cover(cmd_valid && cmd_ready);
+        cover(state == WRITE_BACK && wr_en && wr_ready && read_ptr == 1);
+        cover(cmd_valid && !cmd_ready);
+    end
+`endif
+
 endmodule

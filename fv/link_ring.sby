@@ -1,0 +1,22 @@
+[tasks]
+prove_small prove
+prove_full prove
+cover
+
+[options]
+prove: mode prove
+prove: depth 24
+cover: mode cover
+cover: depth 30
+
+[engines]
+smtbmc z3
+
+[script]
+read_verilog -sv -formal link_ring.sv
+prove_small: chparam -set RING_SLOTS 4 link_ring
+cover: chparam -set RING_SLOTS 4 link_ring
+prep -top link_ring
+
+[files]
+../rtl/link_ring.sv

@@ -194,3 +194,23 @@ engine (CMDQ/BLIT/LINK/DDRAM adapter/PRESENT/SPRITE_BATCH/FILL_BATCH) with no Qu
 or hardware required; it is the fast, iterate-on-RTL check. It does not
 replace a full Quartus build's timing pass, and neither replaces hardware
 acceptance of a new bitstream.
+
+`make formal` runs the SymbiYosys proofs under `fv/` for `link_ring`, `cmdq`
+and `present` (reference record CMDQ-004). Each module states its handshake,
+completion and retirement contract as properties in an `ifdef FORMAL` block
+that synthesis never sees; each `.sby` proves them by k-induction for every
+reachable cycle and runs a cover task showing the assumptions still reach the
+behavior the properties describe. A failure writes a counterexample waveform
+under `fv/<job>_<task>/engine_0/`. The proofs were qualified with Ubuntu 26.04's
+Yosys 0.52 (including `yosys-smtbmc`) and Z3 4.13.3, and SymbiYosys built from
+its `v0.52` tag:
+
+```sh
+sudo apt install yosys z3 python3-click git make
+git clone --depth 1 --branch v0.52 https://github.com/YosysHQ/sby.git /tmp/sby
+sudo make -C /tmp/sby install PREFIX=/usr/local
+make formal
+```
+
+Ubuntu's Boolector 1.5.118 rejects the SMT-LIB `set-option` command that
+`yosys-smtbmc` issues, so the jobs use Z3.

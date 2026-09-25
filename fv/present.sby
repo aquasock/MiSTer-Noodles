@@ -1,0 +1,23 @@
+[tasks]
+prove_retire0 prove
+prove_retire1 prove
+cover
+
+[options]
+prove: mode prove
+prove: depth 12
+cover: mode cover
+cover: depth 16
+
+[engines]
+smtbmc z3
+
+[script]
+read_verilog -sv -formal present.sv
+prove_retire0: chparam -set RETIRE_VBLANKS 0 present
+prove_retire1: chparam -set RETIRE_VBLANKS 1 present
+cover: chparam -set RETIRE_VBLANKS 0 present
+prep -top present
+
+[files]
+../rtl/present.sv

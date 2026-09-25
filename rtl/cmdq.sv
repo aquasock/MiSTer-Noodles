@@ -323,4 +323,172 @@ module cmdq #(
 
     assign cmd_ready = (state == IDLE) && !engine_busy && !present_blocked;
 
+`ifdef FORMAL
+    // Properties proved by fv/cmdq.sby. Engines are abstract: each may raise
+    // busy and pulse done only while a command it was started for is still
+    // outstanding. The display flip follows present.sv's contract: busy from
+    // the cycle after start until it finishes, done only for a legacy
+    // PRESENT and only on the cycle busy falls. Everything else, including
+    // cmd_data, is unconstrained.
+    logic f_past_valid = 1'b0;
+    always_ff @(posedge clk) f_past_valid <= 1'b1;
+    always_comb if (!f_past_valid) assume(reset);
+
+    // A command is recognized when CMDQ must complete it exactly once; any
+    // other offered command is accepted and dropped without a completion.
+    wire f_batch_ok = c_width != 0 && c_width <= 64 && c_dst_addr >= DESCRIPTOR_BASE &&
+                      c_dst_addr < DESCRIPTOR_END && c_dst_addr[10:0] == 11'd0;
+    wire f_recognized = op == OP_SOLID_FILL || op == OP_BLIT_COPY || op == OP_BLIT_COPY_KEY ||
+                        op == OP_BLIT_BLEND || op == OP_BLEND_FILL || op == OP_PRESENT ||
+                        op == OP_LOAD_SDRAM || (op == OP_PRESENT_QUEUED && c_dst_addr <= 32'd3) ||
+                        ((op == OP_SPRITE_BATCH || op == OP_FILL_BATCH) && f_batch_ok);
+    wire f_accept = cmd_valid && cmd_ready;
+
+    logic f_blit, f_copy, f_blend, f_batch, f_fill, f_load, f_flip, f_legacy;
+    always_ff @(posedge clk or posedge reset) begin
+        if (reset) begin
+            {f_blit, f_copy, f_blend, f_batch, f_fill, f_load, f_flip, f_legacy} <= '0;
+        end else begin
+            if (blit_start) f_blit <= 1'b1; else if (blit_done) f_blit <= 1'b0;
+            if (copy_start) f_copy <= 1'b1; else if (copy_done) f_copy <= 1'b0;
+            if (blend_start) f_blend <= 1'b1; else if (blend_done) f_blend <= 1'b0;
+            if (batch_start) f_batch <= 1'b1; else if (batch_done) f_batch <= 1'b0;
+            if (fill_batch_start) f_fill <= 1'b1; else if (fill_batch_done) f_fill <= 1'b0;
+            if (loader_start) f_load <= 1'b1; else if (loader_done) f_load <= 1'b0;
+            if (present_start) begin
+                f_flip   <= 1'b1;
+                f_legacy <= !present_queued;
+            end else if (f_flip && f_past_start && !present_busy) begin
+                f_flip   <= 1'b0;
+            end
+        end
+    end
+    // f_past_start: the flip has been busy at least once since its start.
+    logic f_past_start;
+    always_ff @(posedge clk or posedge reset)
+        if (reset) f_past_start <= 1'b0;
+        else if (present_start) f_past_start <= 1'b0;
+        else if (f_flip) f_past_start <= 1'b1;
+
+    always_comb begin
+        if (!f_blit) assume(!blit_busy && !blit_done);
+        if (!f_copy) assume(!copy_busy && !copy_done);
+        if (!f_blend) assume(!blend_busy && !blend_done);
+        if (!f_batch) assume(!batch_busy && !batch_done);
+        if (!f_fill) assume(!fill_batch_busy && !fill_batch_done);
+        if (!f_load) assume(!loader_busy && !loader_done);
+        if (!f_flip) assume(!present_busy && !present_done);
+        if (f_flip && !f_past_start) assume(present_busy);
+        if (present_done) assume(f_flip && f_legacy && f_past_start && !present_busy);
+    end
+    logic f_busy_q;
+    always_ff @(posedge clk or posedge reset)
+        if (reset) f_busy_q <= 1'b0;
+        else f_busy_q <= present_busy;
+    // A finished flip does not become busy again by itself, and a legacy
+    // flip ends exactly when it reports done.
+    always_comb if (f_past_valid && !reset) begin
+        if (f_flip && f_past_start && !f_busy_q) assume(!present_busy);
+        if (f_flip && f_legacy && f_past_start && f_busy_q && !present_busy) assume(present_done);
+    end
+
+    // Completion accounting, as link_fence counts it for CMDQ's commands.
+    wire f_complete = blit_done || copy_done || blend_done || batch_done || fill_batch_done ||
+                      loader_done || present_done || present_accept;
+    wire [6:0] f_engine_starts = {blit_start, copy_start, blend_start, batch_start,
+                                  fill_batch_start, loader_start, present_start};
+    wire f_launch = (|f_engine_starts) || state == ACCEPT_PRESENT;
+    // An engine counts as running from its start pulse until its done.
+    wire [6:0] f_running = {f_blit || blit_start, f_copy || copy_start, f_blend || blend_start,
+                            f_batch || batch_start, f_fill || fill_batch_start,
+                            f_load || loader_start,
+                            (f_flip && f_legacy) || (present_start && !present_queued)};
+    wire [6:0] f_active_onehot =
+        active_engine == ENGINE_BLIT ? 7'b1000000 : active_engine == ENGINE_COPY ? 7'b0100000 :
+        active_engine == ENGINE_BLEND ? 7'b0010000 : active_engine == ENGINE_BATCH ? 7'b0001000 :
+        active_engine == ENGINE_FILL_BATCH ? 7'b0000100 : active_engine == ENGINE_LOAD ? 7'b0000010 :
+        active_engine == ENGINE_PRESENT ? 7'b0000001 : 7'b0000000;
+    logic [1:0] f_outstanding;
+    logic       f_accepted_recognized;
+    always_ff @(posedge clk or posedge reset) begin
+        if (reset) begin
+            f_outstanding <= 2'd0;
+            f_accepted_recognized <= 1'b0;
+        end else begin
+            f_outstanding <= f_outstanding + {1'b0, f_accept && f_recognized} - {1'b0, f_complete};
+            f_accepted_recognized <= f_accept && f_recognized;
+        end
+    end
+
+    always_comb if (f_past_valid && !reset) begin
+        // cmd_ready never depends on cmd_data while no command is offered.
+        if (!cmd_valid) assert(cmd_ready == (state == IDLE && !engine_busy));
+        // At most one command is in flight, and a completion never arrives
+        // without one. CMDQ offers ready only once its command has completed
+        // or completes on that same cycle (a queued PRESENT's acceptance).
+        assert(f_outstanding <= 2'd1);
+        if (f_complete) assert(f_outstanding == 2'd1);
+        if (cmd_ready) assert(f_outstanding == {1'b0, f_complete});
+        // Exactly one engine start or queued-flip acceptance follows each
+        // recognized command, and nothing else starts an engine.
+        assert($onehot0(f_engine_starts));
+        assert(f_launch == f_accepted_recognized);
+        // A PRESENT of either kind is never accepted while a flip is pending,
+        // and no engine is started while it is still running a command.
+        if (f_accept && present_op) assert(!present_busy);
+        if (present_start) assert(!present_busy && !f_flip);
+        if (blit_start) assert(!f_blit);
+        if (copy_start) assert(!f_copy);
+        if (blend_start) assert(!f_blend);
+        if (batch_start) assert(!f_batch);
+        if (fill_batch_start) assert(!f_fill);
+        if (loader_start) assert(!f_load);
+        // Inductive link between the model and CMDQ's own state; a queued
+        // flip may still be running in the background.
+        if (state == IDLE) assert(f_outstanding == {1'b0, present_accept} && f_running == 7'd0);
+        if (state == ACCEPT_PRESENT) assert(f_outstanding == 2'd1 && f_running == 7'd0 &&
+                                            active_engine == ENGINE_NONE && !present_accept);
+        // CMDQ acts on an offered command exactly when it reports ready, so
+        // link_ring's handshake and CMDQ's dispatch always agree.
+        if (state == IDLE && cmd_valid)
+            assert(cmd_ready == (!blit_busy && !copy_busy && !blend_busy && !present_blocked));
+        // A background queued flip never coexists with a legacy PRESENT as
+        // CMDQ's last engine, since no PRESENT is accepted while one is busy.
+        if (f_flip && !f_legacy) assert(active_engine != ENGINE_PRESENT);
+        // A remembered completion never outlives the command it belongs to,
+        // so a new command cannot inherit an earlier engine's done.
+        if (state != WAIT_DONE) assert(!engine_done_seen);
+        // A start pulse occurs only on the first cycle after acceptance: a
+        // queued flip's in ACCEPT_PRESENT, any other in WAIT_DONE for the
+        // engine that pulse starts.
+        if (present_start && present_queued) assert(state == ACCEPT_PRESENT);
+        if ((|f_engine_starts) && !(present_start && present_queued))
+            assert(state == WAIT_DONE && !engine_done_seen && f_outstanding == 2'd1 &&
+                   f_engine_starts == f_active_onehot);
+        if (state == WAIT_DONE) begin
+            assert(active_engine != ENGINE_NONE && !present_accept);
+            assert(f_outstanding == {1'b0, !engine_done_seen});
+            assert(f_running == (engine_done_seen ? 7'd0 : f_active_onehot));
+        end
+    end
+
+    // Reachability checks (fv/cmdq.sby cover task): the assumptions still
+    // allow every command kind to complete, unknown commands to be dropped
+    // and drawing to proceed while a queued flip waits for vertical blank.
+    always_comb if (f_past_valid && !reset) begin
+        cover(f_accept && !f_recognized);
+        cover(blit_done);
+        cover(copy_done);
+        cover(blend_done);
+        cover(batch_done);
+        cover(fill_batch_done);
+        cover(loader_done);
+        cover(present_done);
+        cover(present_accept && !present_busy);
+        cover(state == WAIT_DONE && engine_done_seen);
+        cover(f_flip && !f_legacy && present_busy && (blit_start || copy_start || batch_start));
+        cover(f_flip && !f_legacy && present_busy && cmd_valid && present_op && !cmd_ready);
+    end
+`endif
+
 endmodule

@@ -134,4 +134,81 @@ module present #(
         end
     end
 
+`ifdef FORMAL
+    // Properties proved by fv/present.sby. fb_vbl and fb_retired are
+    // unconstrained; start follows CMDQ's proved contract (never while busy,
+    // and a queued flip names buffer 0-2).
+    logic f_past_valid = 1'b0;
+    always_ff @(posedge clk) f_past_valid <= 1'b1;
+    always_comb begin
+        if (!f_past_valid) assume(reset);
+        if (start) assume(!busy);
+        if (start && queued) assume(target != 2'd3);
+    end
+
+    // f_pending: a flip was started and has not yet retired. f_flipped: its
+    // new buffer has been selected. f_level is the acknowledgement level the
+    // flip must see change before it retires: sampled at start for a legacy
+    // PRESENT and at the flip for a queued one, f_changed records a change.
+    logic f_pending, f_flipped, f_queued, f_changed, f_level;
+    logic [1:0] f_target;
+    wire f_flip_now = state == WAIT_VBL && vbl_rising;
+    always_ff @(posedge clk or posedge reset) begin
+        if (reset) begin
+            {f_pending, f_flipped, f_queued, f_changed, f_level} <= '0;
+            f_target <= 2'd0;
+        end else if (start) begin
+            f_pending <= 1'b1;
+            f_flipped <= 1'b0;
+            f_queued  <= queued;
+            f_target  <= target;
+            f_level   <= fb_retired;
+            f_changed <= 1'b0;
+        end else begin
+            if (retired) f_pending <= 1'b0;
+            if (f_flip_now) begin
+                f_flipped <= 1'b1;
+                if (f_queued) begin
+                    f_level   <= fb_retired;
+                    f_changed <= 1'b0;
+                end
+            end else if (fb_retired != f_level) begin
+                f_changed <= 1'b1;
+            end
+        end
+    end
+
+    always_ff @(posedge clk) if (f_past_valid && !reset && !$past(reset)) begin
+        // The displayed buffer changes only at the start of vertical blank.
+        if (front_idx != $past(front_idx)) assert($past(f_flip_now));
+    end
+
+    always_comb if (f_past_valid && !reset) begin
+        assert(front_idx != 2'd3 && next_idx != 2'd3);
+        // busy spans exactly the flips that have started and not retired.
+        assert(busy == (f_pending && !retired));
+        // Each flip retires once, only after its buffer was selected and the
+        // scaler acknowledged a boundary after the relevant sample; a queued
+        // flip shows the buffer it named. Only a legacy PRESENT reports done.
+        if (retired) assert(f_pending && f_flipped && f_changed);
+        if (retired && f_queued) assert(front_idx == f_target);
+        if (done) assert(retired && !f_queued);
+        // Inductive link between the model and the state machine.
+        assert((state == IDLE) == (!f_pending || retired));
+        if (state == WAIT_VBL) assert(!f_flipped && notify == !f_queued && ack_baseline == f_level &&
+                                      capture_at_flip == f_queued &&
+                                      (f_queued ? next_idx == f_target : 1'b1));
+        if (state == WAIT_ACK || state == RETIRE || state == FINISH)
+            assert(f_flipped && ack_baseline == f_level && (!f_queued || front_idx == f_target) &&
+                   notify == !f_queued && capture_at_flip == f_queued);
+        if (state == RETIRE || state == FINISH) assert(f_changed);
+    end
+
+    always_comb if (f_past_valid && !reset) begin
+        cover(retired && f_queued);
+        cover(done);
+        cover(f_pending && f_flipped && !retired && start == 1'b0 && state == WAIT_ACK);
+    end
+`endif
+
 endmodule
