@@ -185,7 +185,8 @@ uint32_t RandomPixel() {
 }
 
 // Seeds src/dst, runs, and checks a one-pixel-plus margin around dst.
-void CheckCase(Testbench &tb, AvalonMemory &mem, const Rect &r, const char *label) {
+void CheckCase(Testbench &tb, AvalonMemory &mem, const Rect &r, const char *label,
+               int fixed_alpha = -1) {
     const int margin = 3;
     std::unordered_map<uint32_t, uint32_t> expect;
     for (int y = -1; y <= int(r.height); ++y) {
@@ -201,7 +202,8 @@ void CheckCase(Testbench &tb, AvalonMemory &mem, const Rect &r, const char *labe
         for (uint32_t y = 0; y < r.height; ++y) {
             for (uint32_t x = 0; x < r.width; ++x) {
                 const uint32_t addr = r.src + y * r.src_pitch + x * 4;
-                const uint32_t value = (r.key && Rand(3) == 0) ? r.key_value : RandomPixel();
+                const uint32_t value = (r.key && Rand(3) == 0) ? r.key_value :
+                    fixed_alpha >= 0 ? (uint32_t(fixed_alpha) << 24) | Rand(1u << 24) : RandomPixel();
                 mem.Write32(addr, value);
                 source[addr] = value;
             }
@@ -315,6 +317,24 @@ int main(int argc, char **argv) {
                 CheckCase(tb, mem, r, "alignment");
             }
 
+    // The dynamic alpha shortcuts cover every source/destination alignment,
+    // both mirror axes, one- and two-lane row edges, variable response
+    // latency, and injected DDRAM_BUSY stalls.
+    for (int alpha : {0, 255})
+        for (uint32_t so = 0; so < 2; ++so)
+            for (uint32_t d = 0; d < 2; ++d)
+                for (int mirror = 0; mirror < 4; ++mirror)
+                    for (uint16_t width : {uint16_t(1), uint16_t(2), uint16_t(5)}) {
+                        mem.SetLatency(Rand(12), Rand(8));
+                        tb.SetBusy(true);
+                        Rect r{0x31180000u + d * 4, uint32_t(width + 3) * 4,
+                               0x33180000u + so * 4, uint32_t(width + 2) * 4,
+                               width, 5, 0xffffffffu};
+                        r.mirror_x = mirror & 1;
+                        r.mirror_y = mirror & 2;
+                        CheckCase(tb, mem, r, "fast-alpha-geometry", alpha);
+                    }
+
     // BLIT-010 constant-source fills cover alignment, explicit blend modes,
     // arbitrary colour/alpha and omit all source-memory reads.
     for (int i = 0; i < 1000; ++i) {
@@ -349,7 +369,8 @@ int main(int argc, char **argv) {
         }
     }
 
-    // Fully transparent source: no DDRAM writes at all.
+    // Fully transparent source: source reads only, with no destination reads
+    // or writes.
     tb.SetBusy(false);
     mem.SetLatency(4, 0);
     {
@@ -357,10 +378,15 @@ int main(int argc, char **argv) {
         for (uint32_t y = 0; y < r.height; ++y)
             for (uint32_t x = 0; x < r.width; ++x)
                 mem.Write32(r.src + y * r.src_pitch + x * 4, 0x00abcdefu);
-        const size_t before = mem.writes();
+        const size_t before = mem.writes(), reads = mem.reads();
         Run(tb, mem, r);
         if (mem.writes() != before) {
             std::fprintf(stderr, "FAIL: transparent blend issued %zu writes\n", mem.writes() - before);
+            return 1;
+        }
+        if (mem.reads() - reads != 128) {
+            std::fprintf(stderr, "FAIL: transparent blend issued %zu reads, expected 128 source reads\n",
+                         mem.reads() - reads);
             return 1;
         }
     }
@@ -379,7 +405,8 @@ int main(int argc, char **argv) {
         }
     }
 
-    // Opaque source copies exactly, including destination alpha 255.
+    // Opaque source copies exactly, including destination alpha 255, without
+    // reading any destination words.
     {
         Rect r{0x31300004u, 33 * 4, 0x33300000u, 40 * 4, 31, 3, AlphaMod(255)};
         for (uint32_t y = 0; y < r.height; ++y)
@@ -387,7 +414,18 @@ int main(int argc, char **argv) {
                 mem.Write32(r.src + y * r.src_pitch + x * 4, 0xff000000u | (y << 16) | x);
                 mem.Write32(r.dst + y * r.dst_pitch + x * 4, 0x12345678u);
             }
+        const size_t reads = mem.reads(), writes = mem.writes();
         Run(tb, mem, r);
+        if (mem.reads() - reads != 48) {
+            std::fprintf(stderr, "FAIL: opaque blend issued %zu reads, expected 48 source reads\n",
+                         mem.reads() - reads);
+            return 1;
+        }
+        if (mem.writes() - writes != 48) {
+            std::fprintf(stderr, "FAIL: opaque blend issued %zu writes, expected 48 destination writes\n",
+                         mem.writes() - writes);
+            return 1;
+        }
         for (uint32_t y = 0; y < r.height; ++y)
             for (uint32_t x = 0; x < r.width; ++x)
                 if (mem.Read32(r.dst + y * r.dst_pitch + x * 4) != (0xff000000u | (y << 16) | x)) {

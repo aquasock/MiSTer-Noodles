@@ -30,6 +30,10 @@ module blend_walk #(
     input  logic [15:0] pitch,
     input  logic        pitch_neg,
     input  logic        reverse,
+    // Clamp each prepared burst to one word. The blend engine uses this on
+    // the destination walk when it must inspect the corresponding source
+    // pair before deciding whether a destination read is necessary.
+    input  logic        single,
     input  logic [15:0] width,
     input  logic [15:0] height,
     input  logic        step,
@@ -48,8 +52,9 @@ module blend_walk #(
     logic        in_row, setup, first, off, pitch_neg_r, reverse_r, fresh;
 
     // Preparation from the current state.
-    wire [4:0]  len = (left < 17'(BURST)) ? left[4:0] : 5'(BURST);
-    wire        ends_row = (left <= 17'(BURST));
+    wire [4:0]  len = single ? 5'd1 :
+                            (left < 17'(BURST)) ? left[4:0] : 5'(BURST);
+    wire        ends_row = single ? (left == 17'd1) : (left <= 17'(BURST));
     wire        first_word_lo = !off;
     wire        last_word_hi = (off == width[0]);
     wire        lo = reverse_r ? (!ends_row || first_word_lo) : (!first || first_word_lo);

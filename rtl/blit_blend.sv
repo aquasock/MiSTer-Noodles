@@ -102,7 +102,7 @@ module blit_blend #(
     logic [31:0] dst_r, src_r, src_base_r, mod_r, solid_color_r;
     logic [31:0] src_span_r;
     logic [15:0] dst_pitch_r, src_pitch_r, width_r, height_r;
-    logic        mirror_x_r, mirror_y_r, key_enable_r, solid_r;
+    logic        mirror_x_r, mirror_y_r, key_enable_r, solid_r, fast_alpha_r;
     logic [23:0] mode_r;
     logic [31:0] key_r;
     logic [1:0]  prep;
@@ -116,11 +116,15 @@ module blit_blend #(
     // In-rectangle pixels carried by the source burst being formed.
     logic [5:0]  s_px;
     logic        s_lo, d_lo, s_hi, d_hi;
-    logic        s_form, d_form;
+    logic        s_form, d_form, d_step;
+    logic        d_src_ready, d_alpha_zero, d_alpha_opaque;
+    logic        fast_decide, fast_zero, fast_opaque, launch;
+    logic        partial_pending;
 
     blend_walk #(.BURST(BURST)) src_walk (
         .clk(clk), .reset(reset), .start(walk_start),
         .base(src_base_r), .pitch(src_pitch_r), .pitch_neg(mirror_y_r), .reverse(mirror_x_r),
+        .single(1'b0),
         .width(width_r), .height(height_r),
         .step(s_form),
         .valid(s_valid), .burst_addr(s_addr), .burst_len(s_len), .burst_px(s_px),
@@ -130,8 +134,9 @@ module blit_blend #(
     blend_walk #(.BURST(BURST)) dst_walk (
         .clk(clk), .reset(reset), .start(walk_start),
         .base(dst_r), .pitch(dst_pitch_r), .pitch_neg(1'b0), .reverse(1'b0),
+        .single(fast_alpha_r),
         .width(width_r), .height(height_r),
-        .step(d_form),
+        .step(d_step),
         .valid(d_valid), .burst_addr(d_addr), .burst_len(d_len),
         /* verilator lint_off PINCONNECTEMPTY */
         .burst_px(),
@@ -162,7 +167,9 @@ module blit_blend #(
     // new command's registered setup and walk_start are still in flight.
     wire can_form = busy && prep == 2'd0 && !walk_start && !req_valid &&
                     (tag_count < (TAG_W+1)'(TAG_DEPTH));
-    assign d_form = can_form && d_ok && (!s_ok || prefer_dst);
+    assign d_form = can_form && d_ok &&
+                    (fast_alpha_r ? partial_pending
+                                : (!s_ok || prefer_dst));
     assign s_form = can_form && s_ok && !d_form;
 
     assign rd64_en = req_valid;
@@ -211,6 +218,28 @@ module blit_blend #(
     wire [31:0] px0 = px_mem[px_rp];
     wire [31:0] px1 = px_mem[px_rp + 1'b1];
 
+    // Identity-modulated SDL alpha blending has two exact shortcuts. With
+    // one destination word exposed at a time, inspect its source-aligned
+    // lanes before asking DDRAM for the destination: alpha zero leaves it
+    // untouched, while alpha 255 makes the blend result equal to source.
+    wire [1:0] d_pop_n = {1'b0, d_lo} + {1'b0, d_hi};
+    wire [31:0] d_src_lo = px0;
+    wire [31:0] d_src_hi = d_lo ? px1 : px0;
+    assign d_src_ready = ({1'b0, px_count} >= (PX_W+2)'(d_pop_n));
+    assign d_alpha_zero = (!d_lo || d_src_lo[31:24] == 8'd0) &&
+                          (!d_hi || d_src_hi[31:24] == 8'd0);
+    assign d_alpha_opaque = (!d_lo || d_src_lo[31:24] == 8'hff) &&
+                            (!d_hi || d_src_hi[31:24] == 8'hff);
+    // Do not inspect the same FIFO head that an ordinary launch consumes,
+    // or contend with the destination response FIFO's single write port.
+    assign fast_decide = busy && prep == 2'd0 && !walk_start && fast_alpha_r &&
+                         d_valid && d_src_ready && (dst_res == 0) && !launch && !r_dst &&
+                         !partial_pending;
+    assign fast_zero = fast_decide && d_alpha_zero;
+    assign fast_opaque = fast_decide && d_alpha_opaque && !d_alpha_zero &&
+                         (dst_res < (DST_W+1)'(DST_DEPTH));
+    assign d_step = d_form || fast_zero || fast_opaque;
+
     // Response stage: each beat, with its pixel slots and destination
     // metadata already decoded from the tag, is registered here and written
     // into the pixel or destination FIFO on the following cycle. Counters
@@ -234,9 +263,9 @@ module blit_blend #(
     wire       head_hi = dw_hi[dw_rp];
     wire [1:0] pop_n = {1'b0, head_lo} + {1'b0, head_hi};
 
-    wire launch = (dw_count != 0) &&
-                  (solid_r || ({1'b0, px_count} >= (PX_W+2)'(pop_n))) &&
-                  (out_res < (OUT_W+1)'(OUT_DEPTH));
+    assign launch = (dw_count != 0) &&
+                    (solid_r || ({1'b0, px_count} >= (PX_W+2)'(pop_n))) &&
+                    (out_res < (OUT_W+1)'(OUT_DEPTH));
     wire [31:0] lane_src_lo = solid_r ? solid_color_r : px0;
     wire [31:0] lane_src_hi = solid_r ? solid_color_r : (head_lo ? px1 : px0);
 
@@ -316,11 +345,13 @@ module blit_blend #(
             px_mem[r_slot_lo] <= r_data[31:0];
         if (r_we_hi)
             px_mem[r_slot_hi] <= r_data[63:32];
-        if (r_dst) begin
-            dw_mem[dw_wp] <= r_data;
-            dw_word[dw_wp] <= r_word;
-            dw_lo[dw_wp] <= r_dlo;
-            dw_hi[dw_wp] <= r_dhi;
+        if (r_dst || fast_opaque) begin
+            // A synthetic zero destination lets the existing exact blend
+            // pipeline and edge-lane write path emit the opaque source pair.
+            dw_mem[dw_wp] <= r_dst ? r_data : 64'd0;
+            dw_word[dw_wp] <= r_dst ? r_word : d_addr[31:3];
+            dw_lo[dw_wp] <= r_dst ? r_dlo : d_lo;
+            dw_hi[dw_wp] <= r_dst ? r_dhi : d_hi;
         end
         sb_dst[0] <= dw_mem[dw_rp];
         sb_word[0] <= dw_word[dw_rp];
@@ -351,7 +382,7 @@ module blit_blend #(
             prep <= '0;
             walk_start <= 1'b0;
             dst_r <= '0; src_r <= '0; src_base_r <= '0; mod_r <= '0;
-            solid_r <= 1'b0; solid_color_r <= '0;
+            solid_r <= 1'b0; solid_color_r <= '0; fast_alpha_r <= 1'b0;
             dst_pitch_r <= '0; src_pitch_r <= '0;
             width_r <= '0; height_r <= '0;
             mode_r <= MODE_NONE; mirror_x_r <= 1'b0; mirror_y_r <= 1'b0;
@@ -362,6 +393,7 @@ module blit_blend #(
             px_res <= '0; dst_res <= '0; out_res <= '0;
             tag_count <= '0; tag_head <= '0; tag_tail <= '0; beat <= '0; burst_px <= '0;
             r_src <= 1'b0; r_dst <= 1'b0; r_we_lo <= 1'b0; r_we_hi <= 1'b0; r_publish <= 1'b0;
+            partial_pending <= 1'b0;
             px_wp <= '0; px_rp <= '0; px_count <= '0;
             dw_wp <= '0; dw_rp <= '0; dw_count <= '0;
             of_wp <= '0; of_rp <= '0; of_count <= '0;
@@ -378,9 +410,12 @@ module blit_blend #(
                 solid_r <= solid;
                 solid_color_r <= solid_color;
                 mode_r <= mode_en ? mode : blend ? MODE_BLEND : MODE_NONE;
+                fast_alpha_r <= !solid && !key_enable && (&mod) &&
+                                ((mode_en && mode == MODE_BLEND) || (!mode_en && blend));
                 mirror_x_r <= mirror_x; mirror_y_r <= mirror_y;
                 key_enable_r <= key_enable; key_r <= key_value;
                 prefer_dst <= 1'b1;
+                partial_pending <= 1'b0;
             end else if (prep != 2'd0) begin
                 // prep 3: span multiply settles; 2: base add; 1: start walkers.
                 prep <= prep - 2'd1;
@@ -401,6 +436,14 @@ module blit_blend #(
             end else if (req_fire) begin
                 req_valid <= 1'b0;
             end
+
+            // Only partial-alpha pairs need a destination request. Register
+            // that classification before request formation so the pixel-FIFO
+            // lookup is not on the req_addr timing path.
+            if (d_form)
+                partial_pending <= 1'b0;
+            else if (fast_decide && !d_alpha_zero && !d_alpha_opaque)
+                partial_pending <= 1'b1;
 
             if (s_form || d_form) tag_tail <= tag_tail + 1'b1;
             if (rd64_valid) begin
@@ -423,17 +466,22 @@ module blit_blend #(
             r_publish <= src_beat && h_last;
 
             if (s_form) px_wp <= px_wp + PX_W'(s_px);
-            if (launch && !solid_r) px_rp <= px_rp + PX_W'(pop_n);
+            if ((launch && !solid_r) || fast_zero)
+                px_rp <= px_rp + PX_W'(fast_zero ? d_pop_n : pop_n);
             px_count <= px_count + (r_publish ? (PX_W+1)'(r_px) : '0)
-                                 - ((launch && !solid_r) ? (PX_W+1)'(pop_n) : '0);
+                                 - ((launch && !solid_r) ? (PX_W+1)'(pop_n) : '0)
+                                 - (fast_zero ? (PX_W+1)'(d_pop_n) : '0);
             px_res <= px_res + (s_form ? (PX_W+1)'(s_px) : '0)
-                             - ((launch && !solid_r) ? (PX_W+1)'(pop_n) : '0);
+                             - ((launch && !solid_r) ? (PX_W+1)'(pop_n) : '0)
+                             - (fast_zero ? (PX_W+1)'(d_pop_n) : '0);
 
-            if (r_dst) dw_wp <= dw_wp + 1'b1;
+            if (r_dst || fast_opaque) dw_wp <= dw_wp + 1'b1;
             if (launch) dw_rp <= dw_rp + 1'b1;
             dw_count <= dw_count + (r_dst ? (DST_W+1)'(1) : '0)
+                                 + (fast_opaque ? (DST_W+1)'(1) : '0)
                                  - (launch ? (DST_W+1)'(1) : '0);
             dst_res <= dst_res + (d_form ? (DST_W+1)'(d_len) : '0)
+                               + (fast_opaque ? (DST_W+1)'(1) : '0)
                                - (launch ? (DST_W+1)'(1) : '0);
 
             if (result_write) of_wp <= of_wp + 1'b1;
