@@ -416,7 +416,7 @@ Keep the accepted seed-13 protocol-1.6 image as the consumer baseline and preser
 
 ---
 
-## 10 COMMIT Unreleased ??? 2026-09-25T03:31:49-07:00
+## 10 COMMIT Unreleased 8846a6d 2026-09-25T03:31:49-07:00
 
 #### Coming From:
 
@@ -428,11 +428,11 @@ Allow one queued frame to cross a pending presentation fence without serializing
 
 #### Outcome:
 
-The proposed SDK-only change permits non-presentation commands to remain ordered behind one pending `PRESENT`, predicts the back-buffer parity those commands will observe after the flip, and lets managed-surface transfers wait only for the surface's last-use fence. A second presentation and direct back-buffer CPU transfers remain blocked until the pending presentation completes, and descriptor ownership continues to protect batch tables. The protocol and RBF remain unchanged.
+Source `8846a6d` permits non-presentation commands to remain ordered behind one pending `PRESENT`, predicts the back-buffer parity those commands observe after the flip, allows descriptor uploads behind that flip and lets managed-surface transfers wait only for the surface's last-use fence. A second presentation, arbitrary raw uploads and direct back-buffer CPU transfers remain blocked until the pending presentation completes, while descriptor ownership continues to protect batch tables. Native lifecycle and SDK tests, installed native, C++ and ARM consumers, the ARM static build, ASan/UBSan and the complete RTL simulation suite passed. MiSTer-GemRB source `b77f77c` pins this SDK, twice passed its expanded exact-pixel diagnostic with hash `93f8e614` and passed audio, and reached the 30fps menu cap by queuing rendering behind presentation. In the paused and combat workload, per-texture surface rotation removed the previous 30-38ms managed-update wait, but the resulting overlap exposed 21-32ms of renderer submission backpressure because SDL drains the complete stream whenever the 64-slot command or descriptor ring reports `EAGAIN`. The protocol and RBF remain unchanged.
 
 #### Next Steps:
 
-Add native tests for post-present command ordering, predicted back-buffer selection, managed transfer safety, descriptor batches and the retained second-present and back-buffer-transfer guards. Run the full SDK, simulator, sanitizer and ARM build suite, then pin the accepted SDK source in MiSTer-GemRB and repeat its exact-pixel diagnostic before measuring overlap.
+Add a generic bounded progress wait that retires or live-confirms only the next necessary command, then let MiSTer-GemRB retry ring and descriptor pressure without draining through the pending presentation. Repeat the exact-pixel diagnostic and the same paused and combat measurements before selecting an RBF throughput change.
 
 #### Files Modified:
 
@@ -444,7 +444,7 @@ Add native tests for post-present command ordering, predicted back-buffer select
 
 #### Status:
 
-- [ ] Built
-- [ ] Passed
+- [x] Built
+- [x] Passed
 
 ---
