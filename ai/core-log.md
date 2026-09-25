@@ -563,7 +563,7 @@ Keep the image as the three-buffer candidate while MiSTer-GemRB measures whether
 
 ---
 
-## 14 COMMIT Unreleased ??? 2026-09-25T11:00:34-07:00
+## 14 COMMIT Unreleased be5b058 2026-09-25T11:00:34-07:00
 
 #### Coming From:
 
@@ -575,23 +575,27 @@ Add formal verification of the core's handshake logic and registered pipeline st
 
 #### Outcome:
 
-This is a handoff proposal; no Noodles source has changed since `26acb9c`. The protocol-1.7 image from seed 13 passed all four corners with only +0.100ns worst setup and +0.009ns worst hold, seed 7 failed at -0.047ns, and the limiting path runs from link_ring's combinational read priority through the DDR3 read mux into `blit_copy64` request commit. Protocol 1.7 also exposed a handshake defect that simulation missed, in which `cmd_ready` depended on a retained PRESENT in `cmd_data` without `cmd_valid`. The user approved two follow-on cycles and directed that CERN's colibri library, released on 2026-09-24 under CERN-OHL-W-2.0, be used only as a reference for good FPGA practice, with project-owned SystemVerilog rather than imported colibri files, and will add a release disclaimer noting that reference. The proposed first cycle adds SymbiYosys properties, following colibri's `fv` approach, for `cmdq`, `present`, the registered read-port owner and `link_ring`: `cmd_ready` independent of `cmd_data` while `cmd_valid` is low, exactly one fence completion per accepted command including queued PRESENT acceptance, no owner change while a read response is outstanding, no flip retirement before the acknowledgement it captured and no loss of an offered command. The proposed second cycle registers link_ring and control read priority and adds fully registered valid/ready pipeline stages, the pattern of colibri's `pipeline_buffer`, on the adapter request and ready paths, then requires the complete simulation suite, formal proofs and seed-13 and seed-7 four-corner fits with improved margin. MiSTer-GemRB source `c904d9a` subsequently corrected two independent depleted-ammunition use-after-free faults, and its diagnostics-off hybrid affinity test kept the main thread on CPU 0 while allowing non-main threads on CPUs 0-1; panning was essentially perfect, combat, loading and area transitions improved over CPU-0-only, and the Kobold encounter completed without a crash. That session later ended in a separate Linux OOM kill at 463496 KiB anonymous resident memory because no swap was active, so future GemRB qualification still requires USB swap or a dedicated host-memory investigation and must not attribute that failure to the Noodles core.
+The protocol-1.7 image from seed 13 passed all four corners with only +0.100ns worst setup and seed 7 failed, and protocol 1.7 had exposed a handshake defect that simulation missed, so the user approved formal verification before registered pipeline stages; CERN's colibri library remains a practice reference only, with project-owned SystemVerilog. At the user's direction the formal tools were installed system-wide: Ubuntu 26.04's Yosys 0.52 with `yosys-smtbmc`, Z3 4.13.3 and Boolector 1.5.118, plus SymbiYosys built from its `v0.52` tag; Boolector rejects the SMT-LIB `set-option` command that `yosys-smtbmc` issues, so every job uses Z3, and a user-space OSS CAD Suite 20260925 bundle downloaded earlier is unused. Source `be5b058` adds each module's properties in an `ifdef FORMAL` block, `fv/link_ring.sby`, `fv/cmdq.sby` and `fv/present.sby`, and `make formal`, which ran all eight proof and cover tasks in about a minute. `link_ring` is proved for 4 and 64 ring slots to keep one read outstanding with its address held, fetch only the slot at read_ptr after a poll finds new work, offer exactly the fetched words and hold them stable until accepted, and advance and write back read_ptr once per accepted command. `cmdq`, with abstract engines and the present contract, is proved to keep cmd_ready independent of cmd_data while cmd_valid is low, dispatch exactly when it reports ready, give each recognized command exactly one start or queued-flip acceptance and one completion, drop other commands without completion, accept no PRESENT while a flip is pending and never restart a running engine; the proof needed explicit invariants that a remembered done never outlives its WAIT_DONE and that a background queued flip never coexists with a legacy PRESENT as last engine, both of which hold. `present` is proved for RETIRE_VBLANKS 0 and 1 to change FB_BASE only on an FB_VBL rising edge and to retire each flip once, after its buffer is selected and FB_RETIRED differs from the level sampled at start for opcode 4 or at the flip for opcode 11. Cover tasks reached every command kind's completion, dropped commands, drawing and a held PRESENT during a queued flip, and full ring dispatch and write-back. Three reintroduced historical defects were each rejected: the protocol-1.7 stale-data cmd_ready, a queued flip without its flip-time acknowledgement capture and an unpinned ring poll address. The top-level read-port owner and fence composition in `Noodles.sv` remain outside the proofs. Reference record CMDQ-004 states the proved contracts and `docs/BUILD.md` documents the flow. The Verilator suite passed unchanged, and an isolated seed-13 Quartus build of this tree with `SOURCE_DATE_EPOCH=1790121600` reproduced the hardware-accepted RBF bit for bit, SHA256 `ae0159da05a78b3209a6f3619173bb83cff84ca319d24c62159b2156a7e0fcd9`, confirming synthesis never sees the properties.
 
 #### Next Steps:
 
-Resume the already approved formal-verification cycle from Noodles source `26acb9c`, install the open-source formal tools, write properties against the existing RTL before changing it and record any property failure as a defect; then propose the pipeline-buffer timing cycle with its own qualification, using USB swap for any sustained MiSTer-GemRB regression so host-memory exhaustion remains separate from FPGA results.
+MiSTer-GemRB now reaches 25-30fps across tested scenes with the engine near its limit, and the user has directed a clock increase targeting 150MHz, falling back to 120MHz if closure proves too costly. Measure which paths of the current fit exceed a 6.67ns period, then propose the registered pipeline-stage cycle that extracts and proves the top-level read-port arbiter, registers link_ring and control read priority, adds valid/ready pipeline stages on the adapter paths and resynchronizes FB_VBL and FB_RETIRED, which present.sv currently samples unsynchronized because CLK_VIDEO equals clk_sys, before any clock change.
 
 #### Files Modified:
 
+- .gitignore
 - Makefile
+- docs/BUILD.md
 - fv/cmdq.sby
+- fv/link_ring.sby
 - fv/present.sby
 - rtl/cmdq.sv
+- rtl/link_ring.sv
 - rtl/present.sv
 
 #### Status:
 
-- [ ] Built
-- [ ] Passed
+- [x] Built
+- [x] Passed
 
 ---
