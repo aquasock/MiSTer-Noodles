@@ -656,3 +656,38 @@ Keep the accepted 100MHz image loaded and obtain approval for a diagnostic-only 
 - [ ] Passed
 
 ---
+
+## 16 COMMIT Unreleased ??? 2026-09-25T16:44:05-07:00
+
+#### Coming From:
+
+Unreleased d5051f4
+
+#### Purpose:
+
+Find and correct the 120MHz full-screen copy completion failure without weakening the accepted timing or command-order contracts.
+
+#### Outcome:
+
+Planned. Add a bounded hardware diagnostic that varies copy width, height, alignment and repetition while reporting the last completed fence, then expose only the request, response, FIFO and terminal state needed to distinguish a DDRAM handshake loss from a copy-engine counter defect. Reproduce the first failing boundary on the seed-3 candidate, encode it as a simulation regression, correct the smallest responsible RTL contract and retain protocol 1.7 and SDK compatibility.
+
+#### Next Steps:
+
+Run the complete Verilator and formal suites, rebuild the pinned 120MHz seed 3 and require positive four-corner setup and hold slack, then require bounded-copy, exact-pixel, audio and full throughput diagnostics to pass on hardware before repeating the AR0015 GemRB comparison. Restore the accepted 100MHz image after every failed candidate test and do not resume the 150MHz target until this cycle passes.
+
+#### Files Modified:
+
+- Makefile
+- Noodles.sv
+- rtl/blit_copy64.sv
+- rtl/ddram_adapter.sv
+- sim/tb_blit_copy64.cpp
+- sim/tb_ddram_ingress.cpp
+- tools/copy-sweep.c
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
