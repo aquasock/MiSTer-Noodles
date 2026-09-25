@@ -515,7 +515,7 @@ Retain the correct binary-alpha shortcuts, but do not expect them to remove the 
 
 ---
 
-## 13 COMMIT Unreleased ??? 2026-09-25T07:39:14-07:00
+## 13 COMMIT Unreleased ??? 2026-09-25T08:46:09-07:00
 
 #### Coming From:
 
@@ -523,35 +523,26 @@ Unreleased eb5886f
 
 #### Purpose:
 
-Increase shared framebuffer throughput by replacing separate full-width DDR3 writes with explicitly declared contiguous Avalon write bursts.
+Let draw work continue while a flip waits for vertical blank by adding an opt-in third display buffer and a queued PRESENT.
 
 #### Outcome:
 
-The approved proposal follows a valid 15.036-second active-combat profile from MiSTer-GemRB that collected 2,508 main-thread samples with none lost. GemRB used about 60% of one Cortex-A9 core in that window, main-thread user work rose from about 20% of one core while paused to 33% in combat, audio decoding and resampling accounted for about 6.5% of one core, and named Noodles ARM work remained approximately 3.6% in both states. Renderer windows ran at 15.7-19.8fps with 5.9-6.7ms of queue work and 21.0-27.3ms of presentation completion wait, so ARM saturation and Noodles command construction are not the main limit. The current DDR adapter already accepts producer-declared multiword reads but forces every write to `DDRAM_BURSTCNT=1`; the proposed internal change gives solid-fill, paired copy and blend output producers bounded buffers that declare contiguous full-word write runs before the first beat, while scalar edge writes, transparent or unchanged holes, colour keys, read/write fairness and exact command order retain their current behavior. The host protocol and SDL contract are expected to remain unchanged.
+The previously proposed DDR3 write-burst change is superseded before implementation. MiSTer-GemRB source `cd506c8` measured the accepted protocol-1.6 image with a standalone SDK client: full-surface solid fills ran at 175 Mpixel/s or 0.57 clocks per pixel, about 88% of the 64-bit 100MHz port's one-write-per-cycle ceiling that bursts cannot exceed, plain sprite-batch draws at 83 Mpixel/s and standard-alpha blends at 69 Mpixel/s regardless of source alpha, so blends are pipeline-limited rather than write-limited. With `RETIRE_VBLANKS(0)`, PRESENT behaves as ordinary vertical-sync double buffering with no extra retirement frame, but CMDQ holds every later command until the flip completes, and the SDK's confirmed wait trails raw completion by the remainder of the executing command. In GemRB's paused AR4000 scene each frame occupies the engine for about 35ms after the previous flip, just beyond the 33.3ms two-refresh budget, so the engine idles for about 15.6ms until the third refresh and the rate locks at 20fps. The proposed change adds protocol 1.7 with capability bit 11: a third fixed 800x600 surface `BUFFER_C` at `0x31600000`, clear of tool scratch at `0x31400000` and the managed arena at `0x32000000`; a two-bit front-buffer index driving a three-way `FB_BASE` mux; and a new `PRESENT_QUEUED` opcode carrying an explicit buffer index. CMDQ dispatches `PRESENT_QUEUED` only when the present engine is idle, so a new flip waits until the previous one has retired, then completes the command's fence on acceptance while the present engine performs the vertically synchronized flip and retirement handshake in the background; later non-PRESENT commands no longer wait on `present_busy`. Legacy opcode-4 PRESENT keeps its blocking double-buffer behavior between buffers A and B. SDK 0.12 adds an opt-in three-buffer mode that rotates A, B and C, keeps at most one unaccepted presentation and permits back-buffer CPU transfers while a queued flip is pending, because the back buffer is then neither displayed nor awaiting display.
 
 #### Next Steps:
 
-Confirm the Avalon write-burst handshake used by the MiSTer DDR bridge, extend the behavioral memory models for backpressure on every burst beat, and implement an explicit burst descriptor plus data stream rather than post-hoc adapter contiguity detection. Add directed tests for full and partial rows, discontinuous pitch, scalar boundaries, skipped blend output, alternating reads and writes and reset or busy conditions, then run the complete simulation, SDK, sanitizer and ARM suites. Require a local seed-13 fit and all four timing corners before publishing source, run no more than two Quartus builds in parallel, and accept the result only after exact pixels, audio, synthetic fill/copy/blend throughput and controlled stationary, panning and combat comparisons on MiSTer.
+Implement the RTL and SDK change with simulation coverage for queued acceptance, three-way rotation, a second queued PRESENT stalling until the first retires, draws proceeding behind a pending flip, fence counting, first-present blanking and unchanged legacy PRESENT, then run the complete simulation, native, installed-consumer, sanitizer and ARM suites. Require a local seed-13 fit and all four timing corners before publishing, with no more than two Quartus builds in parallel, deploy under a distinct RBF name, and accept it only after MiSTer-GemRB shows exact pixels, audio, no ghosting and improved stationary pacing against the 20fps baseline.
 
 #### Files Modified:
 
 - Noodles.sv
-- rtl/blit.sv
-- rtl/blit_blend.sv
-- rtl/blit_copy64.sv
-- rtl/ddram_adapter.sv
-- rtl/sprite_batch.sv
-- sim/engine_blend_dut.sv
-- sim/engine_copy64_dut.sv
-- sim/engine_ddram_dut.sv
-- sim/engine_dut.sv
-- sim/engine_fill_batch_dut.sv
-- sim/engine_sprite_batch_dut.sv
-- sim/engine_sprite_batch_sdram_dut.sv
-- sim/tb_blit_blend.cpp
-- sim/tb_blit_copy64.cpp
-- sim/tb_ddram_adapter.cpp
-- sim/tb_solid_fill.cpp
+- rtl/cmdq.sv
+- rtl/present.sv
+- lib/noodles_link.h
+- lib/noodles_link.c
+- lib/noodles_surface.c
+- sim/tb_present.cpp
+- sim/tb_cmdq_batch.cpp
 
 #### Status:
 
