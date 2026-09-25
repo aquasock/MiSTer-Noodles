@@ -449,7 +449,7 @@ Add a generic bounded progress wait that retires or live-confirms only the next 
 
 ---
 
-## 11 COMMIT Unreleased ??? 2026-09-25T03:55:03-07:00
+## 11 COMMIT Unreleased 973dfb6 2026-09-25T03:55:03-07:00
 
 #### Coming From:
 
@@ -461,11 +461,11 @@ Replace whole-stream drains under transient queue pressure with a bounded wait f
 
 #### Outcome:
 
-The proposed SDK 0.11 API waits for one command of verified forward progress, or live-confirms the latest raw completion when hardware has already caught up, without changing the nonblocking submission contract. This gives consumers a safe retry primitive for command-ring and descriptor-table `EAGAIN` responses while preserving queued presentation overlap, timeout faulting and fence wraparound behavior. The protocol and RBF remain unchanged.
+Source `973dfb6` adds SDK 0.11 and `noodles_link_wait_progress`, which waits for one command of verified forward progress or live-confirms the latest raw completion when hardware has already caught up without changing the nonblocking submission contract. Native lifecycle tests cover idle, outstanding, already-retired, pending-presentation and fence-wrap states; native and installed C/C++ consumers, the ARM static build, ASan/UBSan and the complete RTL simulation suite passed. MiSTer-GemRB source `b404508` pins the API and replaces full-stream renderer drains with bounded progress-and-retry loops. Its exact-pixel diagnostic twice produced hash `93f8e614` and audio passed. A clean paused Throne of Bhaal sample held 20.1fps: renderer queue time fell from 21-24ms to 3.8-4.5ms per frame with zero drains, while presentation wait rose to 32-35ms and visible pacing remained unchanged. This proves the host-side full drain was removed and isolates the remaining approximately 50ms frame interval to FPGA rendering throughput plus the stable 11-13ms of other frame work. The protocol and RBF remain unchanged.
 
 #### Next Steps:
 
-Add native coverage for outstanding work, already-retired but unconfirmed work, idle calls, presentation state and fence wraparound; run the full host, installed-consumer, sanitizer and ARM suites; then pin the SDK in MiSTer-GemRB and replace renderer submission drains with bounded progress-and-retry loops before repeating hardware validation and frame measurements.
+Keep the bounded progress API as the generic pressure path and benchmark the accepted RBF's solid-fill, copy and blend engines independently. Use the measured engine rates and the captured per-frame workload to select the first reusable RTL throughput change, then require exact-pixel, audio and identical paused-scene comparisons before retaining it.
 
 #### Files Modified:
 
@@ -479,7 +479,7 @@ Add native coverage for outstanding work, already-retired but unconfirmed work, 
 
 #### Status:
 
-- [ ] Built
-- [ ] Passed
+- [x] Built
+- [x] Passed
 
 ---
