@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define NOODLES_SDK_VERSION "0.10.0"
+#define NOODLES_SDK_VERSION "0.11.0"
 /* Newest protocol this SDK knows. Verified open accepts any 1.x core;
  * optional operations are gated by capability bits and minor revision
  * (LINK-016). */
@@ -141,6 +141,11 @@ int noodles_link_get_info(const noodles_link_t *link, noodles_device_info_t *inf
  * A timeout faults the handle and does not cancel already submitted commands. */
 int noodles_link_close(noodles_link_t *link, uint32_t timeout_ms);
 int noodles_link_drain(noodles_link_t *link, uint32_t timeout_ms);
+/* Wait for one command beyond the currently observed raw completion, or
+ * live-confirm already-retired work. Returns immediately when the session has
+ * no unconfirmed submissions. Useful before retrying submission EAGAIN without
+ * draining later commands or a queued presentation. */
+int noodles_link_wait_progress(noodles_link_t *link, uint32_t timeout_ms);
 int noodles_link_wait(noodles_link_t *link, noodles_fence_t target, uint32_t timeout_ms);
 int noodles_link_poll(noodles_link_t *link, noodles_fence_t target, int *complete);
 

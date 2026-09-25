@@ -72,6 +72,9 @@ Direct memory writes bypass this protection.
 Protocol 1.6 and SDK 0.10 add `noodles_push_fill_batch()` and
 `noodles_surface_fill_batch()`. A batch contains up to 64 clipped opaque
 rectangles, executes strictly in descriptor order and retires as one fence.
+SDK 0.11 adds `noodles_link_wait_progress()`, which lets a consumer retry
+transient ring or descriptor pressure after one verified completion instead of
+draining every later command.
 
 The SDK permits one pending `PRESENT` while the next frame's commands queue
 behind it. `noodles_link_back_buffer()` predicts the post-flip writable buffer

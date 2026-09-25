@@ -1,7 +1,7 @@
 # Host SDK
 
 `libnoodles.a` is a C99 static library with C++-compatible public headers
-`noodles_link.h` and `noodles_surface.h`. SDK 0.10.0 uses hardware protocol 1.x to identify the live
+`noodles_link.h` and `noodles_surface.h`. SDK 0.11.0 uses hardware protocol 1.x to identify the live
 800x600 core, claim one host session and detect reset before accepting a
 fence as completed. Protocol 1.1 cores add opcode 7, BLIT_BLEND; 1.2 cores add
 flagged batch draws (blend, mirroring and RGBA modulation per draw); 1.3 cores
@@ -146,6 +146,13 @@ therefore report incomplete once after the raw count reaches its target.
 It reports complete only after the matching live response arrives. Use
 `noodles_link_wait(device, fence, timeout_ms)` for a monotonic deadline, or
 `noodles_link_drain(device, timeout_ms)` for the last submitted command.
+After a submission returns `EAGAIN`,
+`noodles_link_wait_progress(device, timeout_ms)` waits for one command beyond
+the currently observed raw completion. If hardware has already retired all
+submitted work, it performs only the live confirmation needed to release SDK
+ownership records; if no unconfirmed work exists, it returns immediately.
+Consumers can retry after each successful progress wait without draining later
+commands or a queued presentation.
 A zero timeout checks once and faults the handle if not complete; use poll
 for ordinary nonblocking checks. Interrupted sleeps do not restart deadlines.
 Waits sleep between checks with a backoff from 20us to a 0.1ms cap, and drop
@@ -337,6 +344,8 @@ and descriptor-ring selection for protocol 1.5 while retaining the fixed-table
 path on older cores.
 SDK 0.10 adds ordered opaque fill descriptors for protocol 1.6 and shares the
 existing descriptor-ring ownership between sprite and fill batches.
+SDK 0.11 adds a bounded forward-progress wait for retrying transient command
+ring and descriptor-table pressure without draining the complete stream.
 
 ## Stage-2A hardware execution
 

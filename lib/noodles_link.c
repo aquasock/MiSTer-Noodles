@@ -409,6 +409,16 @@ int noodles_link_drain(noodles_link_t *link, uint32_t timeout_ms) {
     return noodles_link_wait(link, noodles_link_last_fence(link), timeout_ms);
 }
 
+int noodles_link_wait_progress(noodles_link_t *link, uint32_t timeout_ms) {
+    if (noodles_link_check(link) != 0) return -1;
+    noodles_fence_t last = noodles_link_last_fence(link);
+    if (confirmed_fence_reached(link, last)) return 0;
+    noodles_fence_t raw = noodles_link_done_count(link);
+    noodles_fence_t target = noodles_link_fence_reached(link, last)
+        ? last : (raw + 1u) & NOODLES_FENCE_MASK;
+    return noodles_link_wait(link, target, timeout_ms);
+}
+
 static int overlaps_managed_arena(uint32_t address, uint64_t bytes) {
     uint64_t end = (uint64_t)address + bytes;
     uint64_t arena_end = (uint64_t)NOODLES_SURFACE_ARENA_ADDR + NOODLES_SURFACE_ARENA_BYTES;

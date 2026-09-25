@@ -231,12 +231,59 @@ int main(void) {
     assert(noodles_link_wait(a, noodles_link_last_fence(a), 0) == 0);
     closed(a);
 
+    /* A bounded progress wait is idle-safe, waits for only the next raw
+     * completion, and live-confirms work that hardware already retired. */
+    complete_on_sleep = 1;
+    interrupt_sleep = 0;
+    a = open_device(0);
+    int sleeps_before_drain = sleeps;
+    assert(noodles_link_wait_progress(a, 10) == 0 && sleeps == sleeps_before_drain);
+    assert(noodles_push_command(a, fill) == 0);
+    assert(noodles_push_command(a, fill) == 0);
+    assert(noodles_link_wait_progress(a, 10) == 0 && sleeps > sleeps_before_drain);
+    assert(noodles_link_done_count(a) == noodles_link_last_fence(a));
+    closed(a);
+
+    memory[0] = memory[2] = memory[3] = 0;
+    seed_identity();
+    complete_on_sleep = 0;
+    a = open_verified();
+    assert(noodles_push_command(a, fill) == 0);
+    memory[2] = memory[0];
+    memory[3] = 1;
+    sleeps_before_drain = sleeps;
+    assert(noodles_link_wait_progress(a, 10) == 0 && sleeps > sleeps_before_drain);
+    closed(a);
+
+    memory[0] = memory[2] = memory[3] = 0;
+    seed_identity();
+    complete_on_sleep = 1;
+    a = open_verified();
+    assert(noodles_push_present(a, &fence) == 0);
+    assert(noodles_push_command(a, next_fill) == 0);
+    assert(noodles_link_back_buffer(a) == NOODLES_BUFFER_A_ADDR);
+    assert(noodles_link_wait_progress(a, 10) == 0);
+    assert(noodles_link_back_buffer(a) == NOODLES_BUFFER_A_ADDR);
+    assert(noodles_push_present(a, &second_fence) == 0);
+    closed(a);
+
+    memset(memory, 0, sizeof(memory));
+    control_active = 0;
+    memory[3] = 0x7ffffffeu;
+    complete_on_sleep = 1;
+    a = open_device(0);
+    assert(noodles_push_command(a, fill) == 0);
+    assert(noodles_push_command(a, fill) == 0);
+    assert(noodles_link_last_fence(a) == 0);
+    assert(noodles_link_wait_progress(a, 10) == 0);
+    closed(a);
+
     /* Exact deadline, faulted handle, late completion does not authorize reuse. */
     complete_on_sleep = interrupt_sleep = 0;
     a = open_device(0);
     assert(noodles_push_command(a, fill) == 0);
     uint64_t start = now_ns;
-    int sleeps_before_drain = sleeps;
+    sleeps_before_drain = sleeps;
     max_pause_ns = 0;
     assert(noodles_link_drain(a, 3) == -1 && errno == ETIMEDOUT);
     assert(now_ns - start == 3000000);
