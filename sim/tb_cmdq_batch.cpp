@@ -24,6 +24,12 @@ void Draw(Vcmdq_batch_dut &dut, uint32_t dst) {
     dut.eval();
 }
 
+// Offers the prepared command; cmd_ready depends on cmd_valid.
+void Offer(Vcmdq_batch_dut &dut) {
+    dut.cmd_valid = 1;
+    dut.eval();
+}
+
 void Vblank(Vcmdq_batch_dut &dut) {
     dut.fb_vbl = 0; Tick(dut);
     dut.fb_vbl = 1; Tick(dut);
@@ -47,17 +53,19 @@ int TestPresent(Vcmdq_batch_dut &dut) {
 
     // A queued PRESENT is accepted at once and completes its command
     // through present_accept while the flip itself stays pending.
-    Command(dut, 11, 1); dut.cmd_valid = 1;
+    Command(dut, 11, 1); Offer(dut);
     if (!dut.cmd_ready) return Fail("queued PRESENT not ready on an idle engine");
     tick(); dut.cmd_valid = 0;
     if (!dut.present_start) return Fail("queued PRESENT did not start the present engine");
     tick();
-    Command(dut, 0, 0);
+    // link_ring leaves the accepted slot on cmd_data with cmd_valid low; that
+    // retained PRESENT must not hold CMDQ while its flip is pending.
+    dut.eval();
     if (accepts != 1 || !dut.present_busy || !dut.cmd_ready)
-        return Fail("queued PRESENT did not complete on acceptance");
+        return Fail("queued PRESENT did not complete on acceptance or held CMDQ");
 
     // A draw behind the pending flip runs immediately.
-    Draw(dut, 0x31600000); dut.cmd_valid = 1;
+    Draw(dut, 0x31600000); Offer(dut);
     if (!dut.cmd_ready) return Fail("draw blocked behind a pending queued flip");
     tick(); dut.cmd_valid = 0;
     if (!dut.blend_start || dut.copy_dst_addr != 0x31600000)
@@ -66,7 +74,7 @@ int TestPresent(Vcmdq_batch_dut &dut) {
     if (!dut.cmd_ready || !dut.present_busy) return Fail("draw did not retire during the flip");
 
     // A second PRESENT waits unaccepted until the first flip retires.
-    Command(dut, 11, 2); dut.cmd_valid = 1;
+    Command(dut, 11, 2); Offer(dut);
     for (int i = 0; i < 4; ++i) {
         if (dut.cmd_ready) return Fail("second PRESENT accepted while a flip is pending");
         tick();
@@ -99,9 +107,9 @@ int TestPresent(Vcmdq_batch_dut &dut) {
 
     // Index 3 is a flip barrier: held while a flip is pending, then
     // completed on acceptance without flipping.
-    Command(dut, 11, 0); dut.cmd_valid = 1; tick(); dut.cmd_valid = 0; tick();
+    Command(dut, 11, 0); Offer(dut); tick(); dut.cmd_valid = 0; tick();
     if (accepts != 3 || !dut.present_busy) return Fail("queued flip to A was not accepted");
-    Command(dut, 11, 3); dut.cmd_valid = 1;
+    Command(dut, 11, 3); Offer(dut);
     for (int i = 0; i < 3; ++i) {
         if (dut.cmd_ready) return Fail("flip barrier accepted while a flip is pending");
         tick();
@@ -118,19 +126,19 @@ int TestPresent(Vcmdq_batch_dut &dut) {
         return Fail("flip barrier did not complete without flipping");
 
     // Out-of-range indices are consumed without starting a flip.
-    Command(dut, 11, 4); dut.cmd_valid = 1; tick(); dut.cmd_valid = 0; tick();
+    Command(dut, 11, 4); Offer(dut); tick(); dut.cmd_valid = 0; tick();
     if (dut.present_busy || accepts != 4) return Fail("invalid queued buffer index started a flip");
 
     // Legacy PRESENT from buffer C shows B, holds CMDQ until retirement and
     // completes through done; the next one returns to A.
-    Command(dut, 11, 2); dut.cmd_valid = 1; tick(); dut.cmd_valid = 0; tick();
+    Command(dut, 11, 2); Offer(dut); tick(); dut.cmd_valid = 0; tick();
     Vblank(dut);
     dut.fb_retired ^= 1; tick(); tick();
     if (dut.front_idx != 2 || dut.present_busy || accepts != 5)
         return Fail("queued flip back to C failed");
     const uint8_t legacy_expected[] = {1, 0};
     for (uint8_t expected : legacy_expected) {
-        Command(dut, 4, 0); dut.cmd_valid = 1; tick(); dut.cmd_valid = 0;
+        Command(dut, 4, 0); Offer(dut); tick(); dut.cmd_valid = 0;
         if (!dut.present_start) return Fail("legacy PRESENT did not start");
         tick();
         if (dut.cmd_ready) return Fail("legacy PRESENT did not hold CMDQ");

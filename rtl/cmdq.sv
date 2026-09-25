@@ -131,7 +131,11 @@ module cmdq #(
     // A PRESENT of either kind waits in IDLE, without being accepted, while
     // an earlier flip is still pending; other commands proceed.
     wire present_op = op == OP_PRESENT || op == OP_PRESENT_QUEUED;
-    wire present_blocked = present_op && present_busy;
+    // cmd_data keeps the last presented slot after link_ring's handshake,
+    // so only a PRESENT that is actually being offered may hold cmd_ready
+    // low; otherwise the retained queued PRESENT would stop link_ring from
+    // fetching the commands that are meant to run during the flip.
+    wire present_blocked = cmd_valid && present_op && present_busy;
 
     // ENGINE_NONE follows a queued PRESENT: its flip runs in the background,
     // so nothing holds CMDQ once the command has been accepted.
