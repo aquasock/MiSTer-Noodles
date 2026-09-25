@@ -562,3 +562,36 @@ Keep the image as the three-buffer candidate while MiSTer-GemRB measures whether
 - [x] Passed
 
 ---
+
+## 14 COMMIT Unreleased ??? 2026-09-25T11:00:34-07:00
+
+#### Coming From:
+
+Unreleased 26acb9c
+
+#### Purpose:
+
+Add formal verification of the core's handshake logic and registered pipeline stages that restore timing margin before new rendering features.
+
+#### Outcome:
+
+This is a handoff proposal; no source has changed since `26acb9c`. The protocol-1.7 image from seed 13 passed all four corners with only +0.100ns worst setup and +0.009ns worst hold, seed 7 failed at -0.047ns, and the limiting path runs from link_ring's combinational read priority through the DDR3 read mux into `blit_copy64` request commit. Protocol 1.7 also exposed a handshake defect that simulation missed, in which `cmd_ready` depended on a retained PRESENT in `cmd_data` without `cmd_valid`. The user approved two follow-on cycles and directed that CERN's colibri library, released on 2026-09-24 under CERN-OHL-W-2.0, be used only as a reference for good FPGA practice, with project-owned SystemVerilog rather than imported colibri files, and will add a release disclaimer noting that reference. The proposed first cycle adds SymbiYosys properties, following colibri's `fv` approach, for `cmdq`, `present`, the registered read-port owner and `link_ring`: `cmd_ready` independent of `cmd_data` while `cmd_valid` is low, exactly one fence completion per accepted command including queued PRESENT acceptance, no owner change while a read response is outstanding, no flip retirement before the acknowledgement it captured and no loss of an offered command. The proposed second cycle registers link_ring and control read priority and adds fully registered valid/ready pipeline stages, the pattern of colibri's `pipeline_buffer`, on the adapter request and ready paths, then requires the complete simulation suite, formal proofs and seed-13 and seed-7 four-corner fits with improved margin. MiSTer-GemRB separately showed its combat stutter was mainly its inherited CPU 1 affinity and diagnostic overhead rather than this core.
+
+#### Next Steps:
+
+Obtain user approval for the formal-verification cycle, install the open-source formal tools, write properties against the existing RTL before changing it, and record any property failure as a defect; then propose the pipeline-buffer timing cycle with its own qualification.
+
+#### Files Modified:
+
+- Makefile
+- fv/cmdq.sby
+- fv/present.sby
+- rtl/cmdq.sv
+- rtl/present.sv
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
