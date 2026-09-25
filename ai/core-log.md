@@ -599,3 +599,44 @@ MiSTer-GemRB now reaches 25-30fps across tested scenes with the engine near its 
 - [x] Passed
 
 ---
+
+## 15 COMMIT Unreleased ??? 2026-09-25T15:20:57-07:00
+
+#### Coming From:
+
+Unreleased be5b058
+
+#### Purpose:
+
+Raise the core clock from 100MHz to 120MHz by separating the video clock and registering the paths that cannot meet an 8.33ns period.
+
+#### Outcome:
+
+Planned. A TimeQuest scan of the reproduced protocol-1.7 seed-13 fit found 1,245 core-clock endpoints at the slow 100C corner whose paths exceed 8.33ns, against 7,922 for 150MHz, so with user approval the 150MHz target is staged through 120MHz first; every 120MHz fix is also required for 150MHz. The failing groups are link_ring's combinational read priority into sprite_batch's copy address registers, blit_blend's partial_pending control into its pixel pipeline, sprite_batch's copy-FIFO write decode, the fill engine's column logic into the adapter's write ingress, the adapter's queue state into the HPS F2SDRAM port, a few board-SDRAM controller paths, and framework scaler and output logic that runs on the core clock only because CLK_VIDEO is tied to clk_sys. The PLL will provide clk_sys at 120MHz and a separate 100MHz CLK_VIDEO with CE_PIXEL in that domain, and FB_VBL and FB_RETIRED will pass through two-flop synchronizers into clk_sys; FB_RETIRED already arrives from the framework's own clock domain and is sampled today without one. The read-port owner selection and link and control priority will move into a registered arbiter module with SymbiYosys proofs that a client keeps the port for every outstanding response and that each response reaches only its requester; the adapter's DDRAM outputs will be registered; and the fill address, sprite FIFO and blend control paths will gain registered stages. The board-SDRAM refresh and start-up counts will be derived from the clock frequency. Protocol, capabilities, command timing semantics and the SDK are unchanged.
+
+#### Next Steps:
+
+Require the complete Verilator suite and make formal to pass, then fit seeds 13 and 7 at 120MHz and accept only four-corner closure with positive setup and hold slack. On hardware, require the exact-pixel SDL diagnostic with hash 93f8e614 and HDMI audio in both buffer modes, engine rates near 1.2 times the protocol-1.7 measurements from the throughput tool, and a MiSTer-GemRB comparison of the AR0015 fog scene with DrawFPS=1 and diagnostics off before continuing toward 150MHz.
+
+#### Files Modified:
+
+- Noodles.sv
+- Noodles.sdc
+- rtl/pll/pll_0002.v
+- rtl/ddram_adapter.sv
+- rtl/ddram_read_arbiter.sv
+- rtl/blit.sv
+- rtl/blit_blend.sv
+- rtl/sprite_batch.sv
+- rtl/sdram.sv
+- rtl/present.sv
+- fv/ddram_read_arbiter.sby
+- files.qip
+- Makefile
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
