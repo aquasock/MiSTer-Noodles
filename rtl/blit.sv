@@ -39,71 +39,71 @@ module blit #(
     typedef enum logic [1:0] {IDLE, RUN, FINISH} state_t;
     state_t state;
 
-    logic [15:0]           col, row;
-    logic [ADDR_WIDTH-1:0] row_addr;
+    // The write address and the pixels left in the row are kept as running
+    // registers so the write port's address and pair decision come straight
+    // from registers rather than from row_addr + col * 4 and col compares.
+    // A row pairs pixels only when its start is 8-byte aligned, as before.
+    logic [ADDR_WIDTH-1:0] row_addr, cur_addr;
+    logic [15:0]           remain, rows_left;
+    logic                  row_aligned;
 
     wire pixel_valid = (state == RUN);
     wire pixel_fire  = pixel_valid && wr_ready;
-    wire pair_valid = pixel_valid && (col[0] == 1'b0) &&
-                      (col + 16'd1 < width) && (row_addr[2] == 1'b0);
+    wire pair_valid = pixel_valid && row_aligned && !cur_addr[2] && remain >= 16'd2;
     wire pair_fire = pair_valid && wr64_ready;
 
-    wire last_col = (col == width  - 16'd1);
-    wire last_row = (row == height - 16'd1);
+    wire row_end  = pair_fire ? (remain == 16'd2) : (remain == 16'd1);
+    wire last_row = (rows_left == 16'd1);
+    wire [ADDR_WIDTH-1:0] next_row_addr = row_addr + ADDR_WIDTH'(dst_pitch);
 
-    assign wr_addr = row_addr + ADDR_WIDTH'(col) * BYTES_PER_PIXEL;
+    assign wr_addr = cur_addr;
     assign wr_data = color;
     assign wr_en   = pixel_valid && !pair_valid;
-    assign wr64_addr = row_addr + ADDR_WIDTH'(col) * BYTES_PER_PIXEL;
+    assign wr64_addr = cur_addr;
     assign wr64_data = {color, color};
     assign wr64_en = pair_valid;
 
     always_ff @(posedge clk or posedge reset) begin
         if (reset) begin
-            state    <= IDLE;
-            busy     <= 1'b0;
-            done     <= 1'b0;
-            col      <= '0;
-            row      <= '0;
-            row_addr <= '0;
+            state       <= IDLE;
+            busy        <= 1'b0;
+            done        <= 1'b0;
+            row_addr    <= '0;
+            cur_addr    <= '0;
+            remain      <= '0;
+            rows_left   <= '0;
+            row_aligned <= 1'b0;
         end else begin
             done <= 1'b0;
 
             unique case (state)
                 IDLE: begin
                     if (start && width != 16'd0 && height != 16'd0) begin
-                        busy     <= 1'b1;
-                        col      <= 16'd0;
-                        row      <= 16'd0;
-                        row_addr <= dst_addr;
-                        state    <= RUN;
+                        busy        <= 1'b1;
+                        row_addr    <= dst_addr;
+                        cur_addr    <= dst_addr;
+                        remain      <= width;
+                        rows_left   <= height;
+                        row_aligned <= !dst_addr[2];
+                        state       <= RUN;
                     end
                 end
 
                 RUN: begin
-                    if (pair_fire) begin
-                        if (col + 16'd2 >= width) begin
-                            col <= 16'd0;
+                    if (pair_fire || pixel_fire) begin
+                        if (row_end) begin
                             if (last_row) begin
                                 state <= FINISH;
                             end else begin
-                                row      <= row + 16'd1;
-                                row_addr <= row_addr + ADDR_WIDTH'(dst_pitch);
+                                rows_left   <= rows_left - 16'd1;
+                                row_addr    <= next_row_addr;
+                                cur_addr    <= next_row_addr;
+                                remain      <= width;
+                                row_aligned <= !next_row_addr[2];
                             end
                         end else begin
-                            col <= col + 16'd2;
-                        end
-                    end else if (pixel_fire) begin
-                        if (last_col) begin
-                            col <= 16'd0;
-                            if (last_row) begin
-                                state <= FINISH;
-                            end else begin
-                                row      <= row + 16'd1;
-                                row_addr <= row_addr + ADDR_WIDTH'(dst_pitch);
-                            end
-                        end else begin
-                            col <= col + 16'd1;
+                            cur_addr <= cur_addr + (pair_fire ? ADDR_WIDTH'(8) : ADDR_WIDTH'(4));
+                            remain   <= remain - (pair_fire ? 16'd2 : 16'd1);
                         end
                     end
                 end

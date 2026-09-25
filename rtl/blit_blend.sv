@@ -90,7 +90,7 @@ module blit_blend #(
     localparam int DST_W = $clog2(DST_DEPTH);
     localparam int OUT_W = $clog2(OUT_DEPTH);
     localparam int TAG_W = $clog2(TAG_DEPTH);
-    localparam int LATENCY = 7;  // blend_px
+    localparam int LATENCY = 8;  // blend_px
     // BLIT-009 presets, blend_px mode layout (aop, adf, asf, cop, cdf, csf,
     // reserved, single): SDL BLEND and NONE.
     localparam logic [23:0] MODE_BLEND = {3'd1, 4'd6, 4'd2, 3'd1, 4'd6, 4'd5, 2'b00};
@@ -159,6 +159,9 @@ module blit_blend #(
     // free space rather than occupancy lets request formation compare a
     // burst's size directly, without an adder on the req_len timing path.
     logic [PX_W:0]  px_space;
+    // Slots freed by this cycle's pops, credited to px_space one cycle
+    // later so its update is a single subtract of a formed burst.
+    logic [2:0]     px_freed;
     logic [DST_W:0] dst_space;
     logic [OUT_W:0] out_res;
     logic [TAG_W:0] tag_count;
@@ -220,6 +223,10 @@ module blit_blend #(
     // them in place (reversed when mirroring) and a burst is published when
     // complete. Up to two pops per cycle.
     logic [31:0] px_mem [0:PX_DEPTH-1];
+    // Each slot's alpha class, recorded when the pixel is written, so the
+    // fast-alpha decision below reads two flag bits instead of multiplexing
+    // and comparing 32-bit pixels.
+    logic [PX_DEPTH-1:0] px_a0, px_aff;
     logic [PX_W-1:0] px_wp, px_rp;
     logic [PX_W:0]   px_count;
 
@@ -242,10 +249,13 @@ module blit_blend #(
     wire [31:0] d_src_lo = px0;
     wire [31:0] d_src_hi = d_lo ? px1 : px0;
     assign d_src_ready = ({1'b0, px_count} >= (PX_W+2)'(d_pop_n));
-    assign d_alpha_zero = (!d_lo || d_src_lo[31:24] == 8'd0) &&
-                          (!d_hi || d_src_hi[31:24] == 8'd0);
-    assign d_alpha_opaque = (!d_lo || d_src_lo[31:24] == 8'hff) &&
-                            (!d_hi || d_src_hi[31:24] == 8'hff);
+    wire [PX_W-1:0] px_rp1 = px_rp + 1'b1;
+    wire d_src_lo_a0  = px_a0[px_rp];
+    wire d_src_lo_aff = px_aff[px_rp];
+    wire d_src_hi_a0  = d_lo ? px_a0[px_rp1] : px_a0[px_rp];
+    wire d_src_hi_aff = d_lo ? px_aff[px_rp1] : px_aff[px_rp];
+    assign d_alpha_zero = (!d_lo || d_src_lo_a0) && (!d_hi || d_src_hi_a0);
+    assign d_alpha_opaque = (!d_lo || d_src_lo_aff) && (!d_hi || d_src_hi_aff);
     // Do not inspect the same FIFO head that an ordinary launch consumes,
     // or contend with the destination response FIFO's single write port.
     assign opaque_emit = opaque_stage_valid &&
@@ -333,14 +343,21 @@ module blit_blend #(
     logic [OUT_W-1:0] of_wp, of_rp;
     logic [OUT_W:0]   of_count;
 
-    wire of_head_full = of_full[of_rp];
-    assign wr64_en = (of_count != 0) && of_head_full;
-    assign wr64_addr = {of_word[of_rp], 3'b000};
-    assign wr64_data = of_data[of_rp];
-    assign wr_en = (of_count != 0) && !of_head_full;
-    assign wr_addr = {of_word[of_rp], of_hi[of_rp], 2'b00};
-    assign wr_data = of_hi[of_rp] ? of_data[of_rp][63:32] : of_data[of_rp][31:0];
+    // Registered FIFO head: the write port is driven from these registers,
+    // not from the FIFO's slot multiplexers, and the FIFO pops into them
+    // whenever they are empty or being written. out_res still counts an
+    // entry until its write is accepted, so completion is unchanged.
+    logic        oh_valid, oh_full, oh_hi;
+    logic [28:0] oh_word;
+    logic [63:0] oh_data;
+    assign wr64_en = oh_valid && oh_full;
+    assign wr64_addr = {oh_word, 3'b000};
+    assign wr64_data = oh_data;
+    assign wr_en = oh_valid && !oh_full;
+    assign wr_addr = {oh_word, oh_hi, 2'b00};
+    assign wr_data = oh_hi ? oh_data[63:32] : oh_data[31:0];
     wire wr_fire = (wr64_en && wr64_ready) || (wr_en && wr_ready);
+    wire of_pop = (of_count != 0) && (!oh_valid || wr_fire);
 
     wire finished = busy && prep == 2'd0 && !walk_start && (solid_r || s_finished) && d_finished &&
                     !req_valid && (tag_count == 0) && !r_src && !r_dst && (dw_count == 0) &&
@@ -364,10 +381,16 @@ module blit_blend #(
         r_word <= tag_word[tag_head] + {24'd0, beat};
         r_dlo <= beat_lo;
         r_dhi <= beat_hi;
-        if (r_we_lo)
+        if (r_we_lo) begin
             px_mem[r_slot_lo] <= r_data[31:0];
-        if (r_we_hi)
+            px_a0[r_slot_lo]  <= r_data[31:24] == 8'd0;
+            px_aff[r_slot_lo] <= r_data[31:24] == 8'hff;
+        end
+        if (r_we_hi) begin
             px_mem[r_slot_hi] <= r_data[63:32];
+            px_a0[r_slot_hi]  <= r_data[63:56] == 8'd0;
+            px_aff[r_slot_hi] <= r_data[63:56] == 8'hff;
+        end
         if (r_dst) begin
             dw_mem[dw_wp] <= r_data;
             dw_word[dw_wp] <= r_word;
@@ -420,6 +443,7 @@ module blit_blend #(
             req_len <= '0; req_addr <= '0;
             prefer_dst <= 1'b1;
             px_space <= (PX_W+1)'(PX_DEPTH); dst_space <= (DST_W+1)'(DST_DEPTH); out_res <= '0;
+            px_freed <= '0;
             tag_count <= '0; tag_head <= '0; tag_tail <= '0; beat <= '0; burst_px <= '0;
             r_src <= 1'b0; r_dst <= 1'b0; r_we_lo <= 1'b0; r_we_hi <= 1'b0; r_publish <= 1'b0;
             partial_pending <= 1'b0;
@@ -433,6 +457,7 @@ module blit_blend #(
             px_wp <= '0; px_rp <= '0; px_count <= '0;
             dw_wp <= '0; dw_rp <= '0; dw_count <= '0;
             of_wp <= '0; of_rp <= '0; of_count <= '0;
+            oh_valid <= 1'b0; oh_full <= 1'b0; oh_hi <= 1'b0; oh_word <= '0; oh_data <= '0;
         end else begin
             done <= 1'b0;
             walk_start <= 1'b0;
@@ -543,9 +568,8 @@ module blit_blend #(
             px_count <= px_count + (r_publish ? (PX_W+1)'(r_px) : '0)
                                  - (launch_fifo ? (PX_W+1)'(pop_n) : '0)
                                  - (fast_decide ? (PX_W+1)'(d_pop_n) : '0);
-            px_space <= px_space - (s_form ? (PX_W+1)'(s_px) : '0)
-                                 + (launch_fifo ? (PX_W+1)'(pop_n) : '0)
-                                 + (fast_decide ? (PX_W+1)'(d_pop_n) : '0);
+            px_freed <= (launch_fifo ? 3'(pop_n) : 3'd0) + (fast_decide ? 3'(d_pop_n) : 3'd0);
+            px_space <= px_space - (s_form ? (PX_W+1)'(s_px) : '0) + (PX_W+1)'(px_freed);
 
             if (r_dst) dw_wp <= dw_wp + 1'b1;
             if (launch) dw_rp <= dw_rp + 1'b1;
@@ -555,10 +579,19 @@ module blit_blend #(
                                    + (launch ? (DST_W+1)'(1) : '0);
 
             if (result_write || opaque_emit) of_wp <= of_wp + 1'b1;
-            if (wr_fire) of_rp <= of_rp + 1'b1;
+            if (of_pop) begin
+                oh_valid <= 1'b1;
+                oh_full  <= of_full[of_rp];
+                oh_hi    <= of_hi[of_rp];
+                oh_word  <= of_word[of_rp];
+                oh_data  <= of_data[of_rp];
+                of_rp    <= of_rp + 1'b1;
+            end else if (wr_fire) begin
+                oh_valid <= 1'b0;
+            end
             of_count <= of_count + (result_write ? (OUT_W+1)'(1) : '0)
                                  + (opaque_emit ? (OUT_W+1)'(1) : '0)
-                                 - (wr_fire ? (OUT_W+1)'(1) : '0);
+                                 - (of_pop ? (OUT_W+1)'(1) : '0);
             out_res <= out_res + (launch ? (OUT_W+1)'(1) : '0)
                                + (opaque_emit ? (OUT_W+1)'(1) : '0)
                                - (result_skip ? (OUT_W+1)'(1) : '0)

@@ -47,7 +47,11 @@
 //     responsible for passing sane values, same as every other cmdq
 //     opcode's fields today.
 module sdram_loader #(
-    parameter int ADDR_WIDTH = 32
+    parameter int ADDR_WIDTH = 32,
+    // Registers between the page buffer and cpdin. Each one must be matched
+    // by an extra STATE_WAITCP cycle in sdram.sv (its TRCD_EXTRA), during
+    // which cprd is already high and the read address advances once more.
+    parameter int CPDIN_STAGES = 0
 ) (
     // Client-facing control (driven by cmdq.sv) and
     // the DDR3-side rd64 read port (driven into ddram_adapter, arbitrated
@@ -231,7 +235,18 @@ module sdram_loader #(
 
     assign cpsel  = 1'b1;
     assign cpaddr = b_dst_word;
-    assign cpdin  = pbuf_dout_b;
+    generate
+        if (CPDIN_STAGES == 0) begin : g_cpdin_direct
+            assign cpdin = pbuf_dout_b;
+        end else begin : g_cpdin_reg
+            logic [15:0] cpdin_q [0:CPDIN_STAGES-1];
+            always_ff @(posedge clk) begin
+                cpdin_q[0] <= pbuf_dout_b;
+                for (int i = 1; i < CPDIN_STAGES; i++) cpdin_q[i] <= cpdin_q[i-1];
+            end
+            assign cpdin = cpdin_q[CPDIN_STAGES-1];
+        end
+    endgenerate
 
     always_ff @(posedge clk or posedge reset) begin
         if (reset) begin

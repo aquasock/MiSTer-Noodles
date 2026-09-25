@@ -27,8 +27,8 @@ proc get_clocks {args} {
     return core
 }
 proc get_clock_info {args} {
-    if {$::scenario eq "wrong-frequency"} { return 12.0 }
-    return 10.0
+    if {$::scenario eq "wrong-frequency"} { return 10.0 }
+    return [expr {1000.0 / 120.0}]
 }
 proc mock_report {check count} {
     if {$::scenario eq "negative-$check"} { return [list $count -0.001] }
@@ -69,7 +69,7 @@ foreach scenario {pass negative-setup negative-hold negative-recovery
                   ![string match {*Unexpected*result*} $message] &&
                   ![string match {*operating conditions*} $message] &&
                   ![string match {*core PLL clock*} $message] &&
-                  ![string match {*not 100MHz*} $message]} {
+                  ![string match {*not 120MHz*} $message]} {
             error "Unexpected failure for $scenario: $message"
         }
     }

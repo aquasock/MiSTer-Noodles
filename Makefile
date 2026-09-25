@@ -71,6 +71,7 @@ SPRITE_BATCH_SIM  := $(SIM_DIR)/sprite_batch/Vengine_sprite_batch_dut
 FILL_BATCH_SIM    := $(SIM_DIR)/fill_batch/Vengine_fill_batch_dut
 SDRAM_ADAPTER_SIM := $(SIM_DIR)/sdram_adapter/Vsdram_adapter_dut
 SDRAM_LOADER_SIM := $(SIM_DIR)/sdram_loader/Vsdram_loader_dut
+SDRAM_LOADER_120_SIM := $(SIM_DIR)/sdram_loader_120/Vsdram_loader_dut
 SPRITE_BATCH_SDRAM_SIM := $(SIM_DIR)/sprite_batch_sdram/Vengine_sprite_batch_sdram_dut
 BLEND_PX_SIM      := $(SIM_DIR)/blend_px/Vblend_px
 BLIT_BLEND_SIM    := $(SIM_DIR)/blit_blend/Vengine_blend_dut
@@ -133,7 +134,7 @@ $(HOSTLINKTEST): sim/test_noodles_link.c lib/noodles_link.c lib/noodles_surface.
 	$(HOSTCC) $(CPPFLAGS) $(CFLAGS) -o $@ sim/test_noodles_link.c lib/noodles_link.c lib/noodles_surface.c \
 		-Wl,--wrap=mmap -Wl,--wrap=munmap
 
-sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(DDRAM_INGRESS_SIM) $(BLIT_COPY_SIM) $(BLIT_COPY64_SIM) $(BLIT_COPY64_PIPELINE_SIM) $(LINK_RING_SIM) $(LINK_FENCE_SIM) $(LINK_CONTROL_SIM) $(PRESENT_SIM) $(BATCH_CMDQ_SIM) $(SPRITE_BATCH_SIM) $(FILL_BATCH_SIM) $(SDRAM_ADAPTER_SIM) $(SDRAM_LOADER_SIM) $(SPRITE_BATCH_SDRAM_SIM) $(BLEND_PX_SIM) $(BLIT_BLEND_SIM)
+sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(DDRAM_INGRESS_SIM) $(BLIT_COPY_SIM) $(BLIT_COPY64_SIM) $(BLIT_COPY64_PIPELINE_SIM) $(LINK_RING_SIM) $(LINK_FENCE_SIM) $(LINK_CONTROL_SIM) $(PRESENT_SIM) $(BATCH_CMDQ_SIM) $(SPRITE_BATCH_SIM) $(FILL_BATCH_SIM) $(SDRAM_ADAPTER_SIM) $(SDRAM_LOADER_SIM) $(SDRAM_LOADER_120_SIM) $(SPRITE_BATCH_SDRAM_SIM) $(BLEND_PX_SIM) $(BLIT_BLEND_SIM)
 	$(SOLID_FILL_SIM)
 	$(DDRAM_ADAPTER_SIM)
 	$(DDRAM_INGRESS_SIM)
@@ -149,6 +150,7 @@ sim: $(SOLID_FILL_SIM) $(DDRAM_ADAPTER_SIM) $(DDRAM_INGRESS_SIM) $(BLIT_COPY_SIM
 	$(FILL_BATCH_SIM)
 	$(SDRAM_ADAPTER_SIM)
 	$(SDRAM_LOADER_SIM)
+	$(SDRAM_LOADER_120_SIM)
 	$(SPRITE_BATCH_SDRAM_SIM)
 	$(BLEND_PX_SIM)
 	$(BLIT_BLEND_SIM)
@@ -207,11 +209,11 @@ $(BLIT_COPY64_PIPELINE_SIM): rtl/blit_copy64.sv sim/tb_blit_copy64_pipeline.cpp
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
 		rtl/blit_copy64.sv sim/tb_blit_copy64_pipeline.cpp -o $(notdir $@)
 
-$(SPRITE_BATCH_SIM): rtl/sprite_batch.sv rtl/blit_copy64.sv $(BLEND_RTL) rtl/ddram_adapter.sv sim/engine_sprite_batch_dut.sv sim/tb_sprite_batch.cpp sim/blend_ref.h lib/noodles_link.h
+$(SPRITE_BATCH_SIM): rtl/sprite_batch.sv rtl/blit_copy64.sv $(BLEND_RTL) rtl/ddram_adapter.sv rtl/ddram_read_owner.sv sim/engine_sprite_batch_dut.sv sim/tb_sprite_batch.cpp sim/blend_ref.h lib/noodles_link.h
 	@mkdir -p $(dir $@)
 	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module engine_sprite_batch_dut \
 		--Wall --Wno-fatal -Wno-DECLFILENAME -CFLAGS -std=c++17 \
-		rtl/sprite_batch.sv rtl/blit_copy64.sv $(BLEND_RTL) rtl/ddram_adapter.sv sim/engine_sprite_batch_dut.sv sim/tb_sprite_batch.cpp -o $(notdir $@)
+		rtl/sprite_batch.sv rtl/blit_copy64.sv $(BLEND_RTL) rtl/ddram_adapter.sv rtl/ddram_read_owner.sv sim/engine_sprite_batch_dut.sv sim/tb_sprite_batch.cpp -o $(notdir $@)
 
 $(FILL_BATCH_SIM): rtl/fill_batch.sv rtl/blit.sv rtl/ddram_adapter.sv sim/engine_fill_batch_dut.sv sim/tb_fill_batch.cpp
 	@mkdir -p $(dir $@)
@@ -253,6 +255,14 @@ $(SDRAM_LOADER_SIM): rtl/sdram_page_buffer.sv rtl/sdram_loader.sv sim/sdram_load
 	@mkdir -p $(dir $@)
 	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module sdram_loader_dut \
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
+		rtl/sdram_page_buffer.sv rtl/sdram_loader.sv sim/sdram_loader_dut.sv sim/tb_sdram_loader.cpp -o $(notdir $@)
+
+# The same bench with the 120MHz controller sequencing: one extra WAITCP
+# cycle matched by one registered cpdin stage.
+$(SDRAM_LOADER_120_SIM): rtl/sdram_page_buffer.sv rtl/sdram_loader.sv sim/sdram_loader_dut.sv sim/tb_sdram_loader.cpp
+	@mkdir -p $(dir $@)
+	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module sdram_loader_dut \
+		--Wall --Wno-fatal -Wno-DECLFILENAME -GWAITCP_EXTRA=1 \
 		rtl/sdram_page_buffer.sv rtl/sdram_loader.sv sim/sdram_loader_dut.sv sim/tb_sdram_loader.cpp -o $(notdir $@)
 
 $(SPRITE_BATCH_SDRAM_SIM): rtl/sprite_batch.sv rtl/blit_copy64.sv rtl/ddram_adapter.sv rtl/sdram_adapter.sv sim/sdram_adapter_dut.sv sim/engine_sprite_batch_sdram_dut.sv sim/tb_sprite_batch_sdram.cpp lib/noodles_link.h
@@ -357,7 +367,7 @@ deploy: sdk $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH
 # k-induction proofs and a cover task that shows the assumptions still reach
 # the behavior the properties describe.
 SBY ?= sby
-FORMAL_JOBS := cmdq present link_ring
+FORMAL_JOBS := cmdq present link_ring ddram_read_owner
 
 formal:
 	cd fv && for job in $(FORMAL_JOBS); do $(SBY) -f $$job.sby || exit 1; done

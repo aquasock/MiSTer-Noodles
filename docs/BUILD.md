@@ -51,7 +51,7 @@ Three settings must match for a build to reproduce a previously validated
 result -- all three are already pinned in `Noodles.qsf`, committed to source
 control, so an ordinary clone and build reproduces them automatically:
 
-- `SEED` (currently `13`) -- Quartus's fitter uses its seed as the starting
+- `SEED` (currently `3`) -- Quartus's fitter uses its seed as the starting
   point for placement search; a different seed can produce meaningfully
   different placement, routing and timing closure on the *same* source.
 - `NUM_PARALLEL_PROCESSORS` (currently `16`) -- fitter thread count. This
@@ -120,7 +120,9 @@ every operating condition returned by TimeQuest for the fitted device and
 configured temperature range. For the accepted device/settings these are
 slow and fast models at 1.1V, each at -40C and +100C. It checks global setup,
 hold, recovery, removal and minimum pulse width, plus core-clock setup/hold,
-and verifies exactly one 100MHz core PLL output at each corner.
+and verifies that the core PLL's first output, the core clock, is 120MHz at
+each corner. The PLL's second output is the separate 100MHz video clock, which
+`Noodles.sdc` declares asynchronous to the core clock.
 
 Reports and `summary.tsv` go into `output_files/multicorner/`. The summary's
 path count is the number of worst paths reported, not the total number of

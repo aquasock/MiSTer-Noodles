@@ -115,18 +115,14 @@ module engine_sprite_batch_dut (
     assign      blend_wr64_ready = sel_blend && adapter_wr_space;
     assign batch_wr_ready = !sel_blend && adapter_wr_space && !batch_wr64_en;
     assign batch_wr64_ready = !sel_blend && adapter_wr_space;
-    // Mirrors Noodles.sv's registered read owner: a client is granted the
-    // read port one cycle after it becomes active, batch before blend.
-    logic rd_owner_batch, rd_owner_blend;
-    always_ff @(posedge clk or posedge reset) begin
-        if (reset) begin
-            rd_owner_batch <= 1'b0;
-            rd_owner_blend <= 1'b0;
-        end else begin
-            rd_owner_batch <= batch_rd_active;
-            rd_owner_blend <= !batch_rd_active && blend_busy;
-        end
-    end
+    // Mirrors Noodles.sv's registered read owner (rtl/ddram_read_owner.sv):
+    // a client is granted the read ports one cycle after it becomes active
+    // and keeps them until it is inactive with no response outstanding,
+    // batch before blend.
+    logic [1:0] rd_owner;
+    logic       adapter_rd_en, adapter_rd_ready, adapter_rd_valid;
+    wire rd_owner_batch = rd_owner[0];
+    wire rd_owner_blend = rd_owner[1];
     wire rd_sel_batch64 = rd_owner_batch && batch_rd64_en;
     wire rd_sel_blend64 = rd_owner_blend && blend_rd64_en;
     wire [31:0] rd64_addr = rd_sel_batch64 ? batch_rd64_addr :
@@ -139,6 +135,18 @@ module engine_sprite_batch_dut (
     assign batch_rd64_data = rd64_data;
     assign batch_rd64_valid = rd_owner_batch && rd64_valid;
     assign blend_rd64_valid = rd_owner_blend && rd64_valid;
+    assign adapter_rd_en = rd_owner_batch && batch_rd_en;
+    assign batch_rd_ready = rd_owner_batch && adapter_rd_ready;
+    assign batch_rd_valid = adapter_rd_valid;
+
+    ddram_read_owner #(.CLIENTS(2)) read_owner_i (
+        .clk(clk), .reset(reset),
+        .active({blend_busy, batch_rd_active}),
+        .rd_accept(adapter_rd_en && adapter_rd_ready),
+        .rd64_accept(rd64_en && rd64_ready), .rd64_len(rd64_len),
+        .rd_response(adapter_rd_valid), .rd64_response(rd64_valid),
+        .owner(rd_owner)
+    );
 
     ddram_adapter adapter_i (
         .clk             (clk),
@@ -155,10 +163,10 @@ module engine_sprite_batch_dut (
         .wr64_en         (wr64_en),
         .wr_space        (adapter_wr_space),
         .rd_addr         (batch_rd_addr),
-        .rd_en           (batch_rd_en),
-        .rd_ready        (batch_rd_ready),
+        .rd_en           (adapter_rd_en),
+        .rd_ready        (adapter_rd_ready),
         .rd_data         (batch_rd_data),
-        .rd_valid        (batch_rd_valid),
+        .rd_valid        (adapter_rd_valid),
         .rd64_addr       (rd64_addr),
         .rd64_en         (rd64_en),
         .rd64_len        (rd64_len),

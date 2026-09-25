@@ -87,6 +87,12 @@ module ddram_adapter (
     logic [7:0]  rd_len_q  [0:DEPTH-1];
     logic [PTR_W-1:0] rd_head, rd_tail;
     logic [PTR_W:0] rd_count;
+    // Read ingress: an accepted request is captured here and committed to
+    // the queue on the next cycle, so client request logic never drives the
+    // queue's write decode. rd_count reserves the slot at acceptance.
+    logic        rd_in_valid, rd_in_is64, rd_in_half;
+    logic [31:0] rd_in_addr;
+    logic [7:0]  rd_in_len;
 
     logic        rsp_is64_q [0:DEPTH-1];
     logic        rsp_half_q [0:DEPTH-1];
@@ -143,16 +149,38 @@ module ddram_adapter (
                         (rsp_committed + {1'b0, rd64_len} <= 9'(DEPTH));
 
     wire [7:0] head_len = (rd_count != 0 && rd_is64_q[rd_head]) ? rd_len_q[rd_head] : 8'd1;
-    wire want_read = (rd_count != 0);
+    wire want_read = (rd_count != 0) && ((rd_count != 1) || !rd_in_valid);
     wire want_write = (wr_count != 0) && ((wr_count != 1) || !wr_pending);
     // Choose the payload without bridge backpressure. Gating the address
     // mux with busy creates a bridge-ready -> address -> bridge-input path.
     // Busy still gates command acceptance and queue advancement.
     wire select_read = want_read && (!want_write || rr);
     wire select_write = want_write && (!want_read || !rr);
-    wire read_issue = select_read && !ddram_busy;
-    wire write_issue = select_write && !ddram_busy;
-    wire read_rsp = ddram_dout_ready && (rsp_count != 0);
+    // Read data is registered once before it fans out to the clients.
+    logic        rsp_valid_q;
+    logic [63:0] rsp_data_q;
+    wire read_rsp = rsp_valid_q && (rsp_count != 0);
+    // Response metadata for an issued read is written one cycle after the
+    // issue, from these registered copies, so the queue's length RAM does
+    // not feed the per-word metadata writes. The command reaches the port
+    // only on the following cycle, so no response can overtake it.
+    logic        meta_valid, meta_is64, meta_half;
+    logic [7:0]  meta_len;
+
+    // Registered Avalon command stage. The queue heads' wide multiplexers
+    // feed this register rather than the HPS F2SDRAM port, and DDRAM_BUSY
+    // reaches only the stage's load enable. The stage reloads when it is
+    // empty or when the port accepts its command, so commands still issue
+    // on consecutive cycles; a queued request reaches the port one cycle
+    // later than before. Dequeueing into the stage is what "issue" means
+    // for the queues and the response metadata below.
+    logic        cmd_valid, cmd_read;
+    logic [28:0] cmd_addr;
+    logic [7:0]  cmd_burstcnt, cmd_be;
+    logic [63:0] cmd_din;
+    wire cmd_load = !cmd_valid || !ddram_busy;
+    wire read_issue = select_read && cmd_load;
+    wire write_issue = select_write && cmd_load;
 
     assign ddram_clk = clk;
     // A read command's burstcnt spans head_len contiguous words -- 1 for a
@@ -160,25 +188,19 @@ module ddram_adapter (
     // and the real Avalon-MM target auto-increments its own address and
     // streams that many beats back with no further command from this
     // adapter. Writes are always single-beat.
-    assign ddram_burstcnt = select_read ? head_len : 8'd1;
-
-    assign ddram_rd = read_issue;
-    assign ddram_we = write_issue;
-    assign ddram_addr = select_read ? rd_addr_q[rd_head][31:3] :
-                        wr_count != 0 ? wr_addr_q[wr_head][31:3] : 29'b0;
-    assign ddram_be = select_write ? (wr_full_q[wr_head] ? 8'hff :
-                                     (wr_addr_q[wr_head][2] ? 8'hf0 : 8'h0f)) : 8'b0;
-    assign ddram_din = select_write ? (wr_full_q[wr_head] ? wr_data_q[wr_head] :
-                                      (wr_addr_q[wr_head][2] ?
-                                       {wr_data_q[wr_head][31:0], 32'b0} :
-                                       {32'b0, wr_data_q[wr_head][31:0]})) : 64'b0;
+    assign ddram_burstcnt = cmd_burstcnt;
+    assign ddram_rd = cmd_valid && cmd_read;
+    assign ddram_we = cmd_valid && !cmd_read;
+    assign ddram_addr = cmd_addr;
+    assign ddram_be = cmd_be;
+    assign ddram_din = cmd_din;
     assign idle = (wr_count == 0) && (rd_count == 0) &&
-                  (rsp_count == 0) && !ddram_busy;
+                  (rsp_count == 0) && !cmd_valid && !ddram_busy;
 
     assign rd_valid = read_rsp && !rsp_is64_q[rsp_head];
     assign rd64_valid = read_rsp && rsp_is64_q[rsp_head];
-    assign rd_data = rsp_half_q[rsp_head] ? ddram_dout[63:32] : ddram_dout[31:0];
-    assign rd64_data = ddram_dout;
+    assign rd_data = rsp_half_q[rsp_head] ? rsp_data_q[63:32] : rsp_data_q[31:0];
+    assign rd64_data = rsp_data_q;
 
     always_ff @(posedge clk or posedge reset) begin
         if (reset) begin
@@ -195,8 +217,41 @@ module ddram_adapter (
             rsp_tail <= 0;
             rsp_count <= 0;
             rsp_committed <= 0;
+            rsp_valid_q <= 1'b0;
+            rsp_data_q <= '0;
+            rd_in_valid <= 1'b0;
+            rd_in_is64 <= 1'b0;
+            rd_in_half <= 1'b0;
+            rd_in_addr <= '0;
+            rd_in_len <= 8'd1;
+            meta_valid <= 1'b0;
+            meta_is64 <= 1'b0;
+            meta_half <= 1'b0;
+            meta_len <= 8'd0;
+            cmd_valid <= 1'b0;
+            cmd_read <= 1'b0;
+            cmd_addr <= '0;
+            cmd_burstcnt <= 8'd1;
+            cmd_be <= '0;
+            cmd_din <= '0;
         end else begin
             rr <= !rr;
+            rsp_valid_q <= ddram_dout_ready;
+            rsp_data_q <= ddram_dout;
+            meta_valid <= read_issue;
+            meta_is64 <= rd_is64_q[rd_head];
+            meta_half <= rd_half_q[rd_head];
+            meta_len <= head_len;
+            if (cmd_load) begin
+                cmd_valid <= read_issue || write_issue;
+                cmd_read <= select_read;
+                cmd_addr <= select_read ? rd_addr_q[rd_head][31:3] : wr_addr_q[wr_head][31:3];
+                cmd_burstcnt <= select_read ? head_len : 8'd1;
+                cmd_be <= wr_full_q[wr_head] ? 8'hff : (wr_addr_q[wr_head][2] ? 8'hf0 : 8'h0f);
+                cmd_din <= wr_full_q[wr_head] ? wr_data_q[wr_head] :
+                           (wr_addr_q[wr_head][2] ? {wr_data_q[wr_head][31:0], 32'b0} :
+                                                    {32'b0, wr_data_q[wr_head][31:0]});
+            end
             // Every accepted write reserves its slot before the next-cycle
             // commit. Producer decisions never drive the queue's wide enables.
             wr_pending <= wr_fire || wr64_fire;
@@ -222,12 +277,18 @@ module ddram_adapter (
                 default: ;
             endcase
 
+            rd_in_valid <= rd_fire || rd64_fire;
             if (rd_fire || rd64_fire) begin
-                rd_addr_q[rd_tail] <= rd64_fire ? rd64_addr : rd_addr;
-                rd_is64_q[rd_tail] <= rd64_fire;
-                rd_half_q[rd_tail] <= rd64_fire ? 1'b0 :
-                                      (rd_addr[2]);
-                rd_len_q[rd_tail] <= rd64_fire ? rd64_len : 8'd1;
+                rd_in_addr <= rd64_fire ? rd64_addr : rd_addr;
+                rd_in_is64 <= rd64_fire;
+                rd_in_half <= rd64_fire ? 1'b0 : rd_addr[2];
+                rd_in_len  <= rd64_fire ? rd64_len : 8'd1;
+            end
+            if (rd_in_valid) begin
+                rd_addr_q[rd_tail] <= rd_in_addr;
+                rd_is64_q[rd_tail] <= rd_in_is64;
+                rd_half_q[rd_tail] <= rd_in_half;
+                rd_len_q[rd_tail]  <= rd_in_len;
                 rd_tail <= rd_tail + 1'b1;
             end
             if (read_issue)
@@ -238,14 +299,14 @@ module ddram_adapter (
                 default: ;
             endcase
 
-            if (read_issue) begin
+            if (meta_valid) begin
                 for (int i = 0; i < MAX_BURST; i++) begin
-                    if (i < int'(head_len)) begin
-                        rsp_is64_q[rsp_tail + i[PTR_W-1:0]] <= rd_is64_q[rd_head];
-                        rsp_half_q[rsp_tail + i[PTR_W-1:0]] <= rd_half_q[rd_head];
+                    if (i < int'(meta_len)) begin
+                        rsp_is64_q[rsp_tail + i[PTR_W-1:0]] <= meta_is64;
+                        rsp_half_q[rsp_tail + i[PTR_W-1:0]] <= meta_half;
                     end
                 end
-                rsp_tail <= rsp_tail + head_len[PTR_W-1:0];
+                rsp_tail <= rsp_tail + meta_len[PTR_W-1:0];
             end
             if (read_rsp)
                 rsp_head <= rsp_head + 1'b1;

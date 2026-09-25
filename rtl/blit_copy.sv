@@ -24,9 +24,12 @@ module blit_copy #(
     output logic wr_en, input logic wr_ready
 );
     localparam int PTR_W = $clog2(FIFO_DEPTH);
-    logic [ADDR_WIDTH-1:0] addr_fifo [0:FIFO_DEPTH-1];
-    logic [ADDR_WIDTH-1:0] write_addr_fifo [0:FIFO_DEPTH-1];
-    logic [DATA_WIDTH-1:0] data_fifo [0:FIFO_DEPTH-1];
+    // Eight-entry FIFOs stay in registers: inferred as block RAM, their
+    // read-during-write bypass fed the write port and the key compare and
+    // limited the core clock.
+    (* ramstyle = "logic" *) logic [ADDR_WIDTH-1:0] addr_fifo [0:FIFO_DEPTH-1];
+    (* ramstyle = "logic" *) logic [ADDR_WIDTH-1:0] write_addr_fifo [0:FIFO_DEPTH-1];
+    (* ramstyle = "logic" *) logic [DATA_WIDTH-1:0] data_fifo [0:FIFO_DEPTH-1];
     logic [PTR_W-1:0] addr_wr_ptr, addr_rd_ptr, data_wr_ptr, data_rd_ptr;
     logic [PTR_W:0] addr_count, data_count;
     logic [15:0] issue_col, issue_row;

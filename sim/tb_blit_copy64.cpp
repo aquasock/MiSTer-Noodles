@@ -122,10 +122,13 @@ public:
         const auto burst = dut_->DDRAM_BURSTCNT;
         const auto data = dut_->DDRAM_DIN;
         const auto be = dut_->DDRAM_BE;
+        const auto we = dut_->DDRAM_WE;
+        const auto rd = dut_->DDRAM_RD;
         dut_->DDRAM_BUSY = 1;
         dut_->eval();
         if (dut_->DDRAM_ADDR != addr || dut_->DDRAM_BURSTCNT != burst ||
-            dut_->DDRAM_DIN != data || dut_->DDRAM_BE != be) {
+            dut_->DDRAM_DIN != data || dut_->DDRAM_BE != be ||
+            dut_->DDRAM_WE != we || dut_->DDRAM_RD != rd) {
             std::fprintf(stderr, "FAIL: DDRAM_BUSY feeds command payload at cycle %u: "
                          "addr %x/%x burst %u/%u data %llx/%llx be %x/%x\n",
                          cycles_, addr, dut_->DDRAM_ADDR, burst, dut_->DDRAM_BURSTCNT,
@@ -133,14 +136,26 @@ public:
                          static_cast<unsigned long long>(dut_->DDRAM_DIN), be, dut_->DDRAM_BE);
             std::exit(1);
         }
-        if (dut_->DDRAM_WE || dut_->DDRAM_RD) {
-            std::fprintf(stderr, "FAIL: DDRAM command accepted while busy\n");
+        // Avalon-MM: a command offered while busy is not accepted and must be
+        // held unchanged until a cycle on which busy is low.
+        if ((held_we_ || held_rd_) &&
+            (dut_->DDRAM_WE != held_we_ || dut_->DDRAM_RD != held_rd_ ||
+             dut_->DDRAM_ADDR != held_addr_ || dut_->DDRAM_BURSTCNT != held_burst_ ||
+             (held_we_ && (dut_->DDRAM_DIN != held_data_ || dut_->DDRAM_BE != held_be_)))) {
+            std::fprintf(stderr, "FAIL: DDRAM command changed or withdrawn while busy\n");
             std::exit(1);
         }
         dut_->DDRAM_BUSY = (++cycles_ % 29) < 17;
         dut_->eval();
+        const bool busy = dut_->DDRAM_BUSY;
+        held_we_ = busy && dut_->DDRAM_WE;
+        held_rd_ = busy && dut_->DDRAM_RD;
+        held_addr_ = dut_->DDRAM_ADDR;
+        held_burst_ = dut_->DDRAM_BURSTCNT;
+        held_data_ = dut_->DDRAM_DIN;
+        held_be_ = dut_->DDRAM_BE;
 
-        mem.Step(dut_->DDRAM_WE, dut_->DDRAM_RD, dut_->DDRAM_ADDR,
+        mem.Step(dut_->DDRAM_WE && !busy, dut_->DDRAM_RD && !busy, dut_->DDRAM_ADDR,
                   dut_->DDRAM_BURSTCNT, dut_->DDRAM_DIN, dut_->DDRAM_BE);
         dut_->clk = 1;
         dut_->eval();
@@ -151,6 +166,10 @@ public:
 private:
     std::unique_ptr<Vengine_copy64_dut> dut_;
     unsigned cycles_ = 0;
+    bool held_we_ = false, held_rd_ = false;
+    uint32_t held_addr_ = 0;
+    uint64_t held_data_ = 0;
+    unsigned held_burst_ = 0, held_be_ = 0;
 };
 
 int Fail(const char *msg) {

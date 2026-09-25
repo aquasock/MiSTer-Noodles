@@ -35,13 +35,13 @@ foreach_in_collection corner $corners {
     puts "Timing corner $index/$total: $corner"
     set_operating_conditions $corner
     update_timing_netlist
-    set core [get_clocks {emu|pll|*PLL_OUTPUT_COUNTER*|divclk}]
+    set core [get_clocks {emu|pll|pll_inst|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}]
     if {[get_collection_size $core] != 1} {
         error "Expected exactly one core PLL clock at $corner"
     }
     foreach_in_collection clock $core {
-        if {abs([get_clock_info -period $clock] - 10.0) > 0.001} {
-            error "Core clock is not 100MHz at $corner"
+        if {abs([get_clock_info -period $clock] - 1000.0 / 120.0) > 0.001} {
+            error "Core clock is not 120MHz at $corner"
         }
     }
     foreach check {setup hold recovery removal} {

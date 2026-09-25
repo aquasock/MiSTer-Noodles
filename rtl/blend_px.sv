@@ -1,4 +1,4 @@
-// BLIT-007/008/009 single-pixel datapath, fixed 7-cycle latency, no stalls.
+// BLIT-007/008/009 single-pixel datapath, fixed 8-cycle latency, no stalls.
 //
 // RGBA modulation, then a blend mode: per channel a source factor Fs and a
 // destination factor Fd, an operation and optional single rounding (see
@@ -18,7 +18,7 @@
 // alpha operation, in SDL_BlendFactor/SDL_BlendOperation numbering.
 // Every stage is registered so the multiplies map onto DSP input/output
 // registers at clk_sys. Callers carry their own sideband alongside
-// in_valid/out_valid with the same 7-cycle latency.
+// in_valid/out_valid with the same 8-cycle latency.
 
 module blend_px (
     input  logic        clk,
@@ -61,7 +61,7 @@ module blend_px (
         endcase
     endfunction
 
-    logic [6:0]  valid;
+    logic [7:0]  valid;
 
     // Stage 1: input capture.
     logic [31:0] s1_src, s1_dst, s1_mod;
@@ -84,14 +84,21 @@ module blend_px (
     logic [2:0]  s5_op [0:3];
     logic        s5_single;
     // Stage 6: quotients and remainders.
-    logic [7:0]  s6_qs [0:3], s6_qd [0:3], s6_rs [0:3], s6_rd [0:3];
+    // Stage 6: divided products. The low-byte sums that decide single
+    // rounding follow in stage 7, keeping div255 and that add in separate
+    // cycles.
+    logic [7:0]  s6_qs [0:3], s6_qd [0:3], s6_ls [0:3], s6_ld [0:3];
     logic [7:0]  s6_s [0:3], s6_v [0:3];
     logic [2:0]  s6_op [0:3];
     logic        s6_single;
+    logic [7:0]  s7_qs [0:3], s7_qd [0:3], s7_rs [0:3], s7_rd [0:3];
+    logic [7:0]  s7_s [0:3], s7_v [0:3];
+    logic [2:0]  s7_op [0:3];
+    logic        s7_single;
 
     always_ff @(posedge clk or posedge reset) begin
         if (reset) valid <= '0;
-        else valid <= {valid[5:0], in_valid};
+        else valid <= {valid[6:0], in_valid};
     end
 
     always_ff @(posedge clk) begin
@@ -132,12 +139,10 @@ module blend_px (
         s5_single <= s4_single;
 
         for (int c = 0; c < 4; c++) begin
-            automatic logic [7:0] qs = div255(s5_ps[c]);
-            automatic logic [7:0] qd = div255(s5_pd[c]);
-            s6_qs[c] <= qs;
-            s6_qd[c] <= qd;
-            s6_rs[c] <= s5_ps[c][7:0] + qs;
-            s6_rd[c] <= s5_pd[c][7:0] + qd;
+            s6_qs[c] <= div255(s5_ps[c]);
+            s6_qd[c] <= div255(s5_pd[c]);
+            s6_ls[c] <= s5_ps[c][7:0];
+            s6_ld[c] <= s5_pd[c][7:0];
         end
         s6_s <= s5_s;
         s6_v <= s5_v;
@@ -145,21 +150,32 @@ module blend_px (
         s6_single <= s5_single;
 
         for (int c = 0; c < 4; c++) begin
-            automatic logic [8:0] rsum = {1'b0, s6_rs[c]} + {1'b0, s6_rd[c]};
-            automatic logic [9:0] sum = {2'b00, s6_qs[c]} + {2'b00, s6_qd[c]} +
-                                        {9'd0, s6_single && rsum >= 9'd255};
-            automatic logic [8:0] diff = {1'b0, s6_qs[c]} - {1'b0, s6_qd[c]};
-            automatic logic [8:0] rdiff = {1'b0, s6_qd[c]} - {1'b0, s6_qs[c]};
-            unique case (s6_op[c])
+            s7_qs[c] <= s6_qs[c];
+            s7_qd[c] <= s6_qd[c];
+            s7_rs[c] <= s6_ls[c] + s6_qs[c];
+            s7_rd[c] <= s6_ld[c] + s6_qd[c];
+        end
+        s7_s <= s6_s;
+        s7_v <= s6_v;
+        s7_op <= s6_op;
+        s7_single <= s6_single;
+
+        for (int c = 0; c < 4; c++) begin
+            automatic logic [8:0] rsum = {1'b0, s7_rs[c]} + {1'b0, s7_rd[c]};
+            automatic logic [9:0] sum = {2'b00, s7_qs[c]} + {2'b00, s7_qd[c]} +
+                                        {9'd0, s7_single && rsum >= 9'd255};
+            automatic logic [8:0] diff = {1'b0, s7_qs[c]} - {1'b0, s7_qd[c]};
+            automatic logic [8:0] rdiff = {1'b0, s7_qd[c]} - {1'b0, s7_qs[c]};
+            unique case (s7_op[c])
                 OP_ADD:     out[8*c +: 8] <= (sum > 10'd255) ? 8'd255 : sum[7:0];
                 OP_SUB:     out[8*c +: 8] <= diff[8] ? 8'd0 : diff[7:0];
                 OP_REV_SUB: out[8*c +: 8] <= rdiff[8] ? 8'd0 : rdiff[7:0];
-                OP_MIN:     out[8*c +: 8] <= (s6_s[c] < s6_v[c]) ? s6_s[c] : s6_v[c];
-                default:    out[8*c +: 8] <= (s6_s[c] > s6_v[c]) ? s6_s[c] : s6_v[c];
+                OP_MIN:     out[8*c +: 8] <= (s7_s[c] < s7_v[c]) ? s7_s[c] : s7_v[c];
+                default:    out[8*c +: 8] <= (s7_s[c] > s7_v[c]) ? s7_s[c] : s7_v[c];
             endcase
         end
     end
 
-    assign out_valid = valid[6];
+    assign out_valid = valid[7];
 
 endmodule

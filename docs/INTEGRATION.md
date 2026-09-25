@@ -1,6 +1,6 @@
 # Noodles integration baseline
 
-This is the consumer-facing description of the 100MHz core, not
+This is the consumer-facing description of the core, not
 a new GPU ABI or an SDL implementation. Architecture decisions remain in
 [ai/core-reference.md](../ai/core-reference.md); later records override
 earlier bring-up assumptions. Relevant records include CMDQ-001, BLIT-003/004/006/007/008/009/010,
@@ -8,8 +8,9 @@ SURF-003/004/006, LINK-002/005/008/011/012/013/014/015/016 and SDR-008.
 
 ## Standard configuration: 800x600
 
-Current source renders 800x600 with a 3200-byte pitch (SURF-006), retaining
-the 100MHz GPU, 4:3 aspect ratio and existing buffer addresses. Each buffer
+Current source renders 800x600 with a 3200-byte pitch (SURF-006) and runs the
+GPU and board SDRAM at 120MHz, with a separate 100MHz video clock; the 4:3
+aspect ratio and buffer addresses are unchanged. Each buffer
 uses 1920000 bytes and still fits its reserved 2MiB slot. The HDMI mode is
 independent: MiSTer's scaler scales this framebuffer to its configured output.
 The accepted protocol 1.5 seed-13 image passes all four timing corners,

@@ -6,13 +6,13 @@ read_sdc
 update_timing_netlist
 
 report_clocks -file output_files/Noodles.clocks.rpt
-set core_clocks [get_clocks {emu|pll|*PLL_OUTPUT_COUNTER*|divclk}]
+set core_clocks [get_clocks {emu|pll|pll_inst|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}]
 if {[get_collection_size $core_clocks] != 1} {
     error "Expected exactly one core PLL clock"
 }
 foreach_in_collection clock $core_clocks {
-    if {abs([get_clock_info -period $clock] - 10.0) > 0.001} {
-        error "Core clock is not 100MHz"
+    if {abs([get_clock_info -period $clock] - 1000.0 / 120.0) > 0.001} {
+        error "Core clock is not 120MHz"
     }
 }
 

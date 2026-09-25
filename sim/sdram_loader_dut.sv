@@ -21,7 +21,11 @@
 //    idle-wait cycles (matching sdram.sv's STATE_IDLE_4..STATE_IDLE_1
 //    tail) before dropping it -- exercising the loader's edge-triggered
 //    (not fixed-count) completion detection.
-module sdram_loader_dut (
+module sdram_loader_dut #(
+    // Extra STATE_WAITCP cycles in the modeled controller (sdram.sv's
+    // TRCD_EXTRA), matched by the loader's cpdin register stages.
+    parameter int WAITCP_EXTRA = 0
+) (
     input  logic        clk,
     input  logic         reset,
     input  logic         start,
@@ -118,6 +122,7 @@ module sdram_loader_dut (
     logic        old_cpreq;
     logic [8:0]  cpcnt;
     logic [3:0]  tail_cnt;
+    logic [2:0]  wait_extra;
     typedef enum logic [2:0] {
         CP_IDLE, CP_WAITCP, CP_CP, CP_TAIL
     } cp_state_t;
@@ -138,6 +143,7 @@ module sdram_loader_dut (
             cprd       <= 1'b0;
             cpcnt      <= '0;
             tail_cnt   <= '0;
+            wait_extra <= '0;
             cp_addr_probe <= '0;
             cp_accept_probe_r <= 1'b0;
         end else begin
@@ -159,11 +165,13 @@ module sdram_loader_dut (
                             cpbusy   <= 1'b1;
                             cprd     <= 1'b1;
                             cpcnt    <= 9'd511;
+                            wait_extra <= 3'(WAITCP_EXTRA);
                             cp_state <= CP_WAITCP;
                         end
                     end
                 end
-                CP_WAITCP: cp_state <= CP_CP;
+                CP_WAITCP: if (wait_extra != 0) wait_extra <= wait_extra - 3'd1;
+                           else cp_state <= CP_CP;
                 CP_CP: begin
                     cpcnt <= cpcnt - 9'd1;
                     if (cpcnt == 9'd0) begin
@@ -185,7 +193,7 @@ module sdram_loader_dut (
         end
     end
 
-    sdram_loader #(.ADDR_WIDTH(32)) dut (
+    sdram_loader #(.ADDR_WIDTH(32), .CPDIN_STAGES(WAITCP_EXTRA)) dut (
         .clk(clk), .reset(reset),
         .start(start), .src_addr(src_addr), .dst_addr(dst_addr), .length(length),
         .busy(busy), .done(done),

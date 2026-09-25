@@ -41,9 +41,19 @@
 // low half, so treat MSB-set addresses as unverified until they are.
 //
 module sdram
+#(
+	parameter int CLK_MHZ = 100,           // clk frequency; scales the start-up wait
+	// Extra cycles beyond the controller's original 100MHz sequencing, which
+	// allows 2 cycles from ACTIVE to READ/WRITE (tRCD), 2 cycles of
+	// precharge after an auto-precharging access (tRP) and 6 cycles from
+	// AUTO_REFRESH to the next command (tRFC). Each is 0 at 100MHz.
+	parameter int TRCD_EXTRA = 0,
+	parameter int TRP_EXTRA  = 0,
+	parameter int TRFC_EXTRA = 0
+)
 (
 	input             init,        // reset to initialize RAM
-	input             clk,         // clock ~100MHz
+	input             clk,         // clock, CLK_MHZ
 
 	inout  reg [15:0] SDRAM_DQ,    // 16 bit bidirectional data bus
 	output reg [12:0] SDRAM_A,     // 13 bit multiplexed address bus
@@ -91,8 +101,8 @@ localparam OP_MODE             = 2'b00;    // only 00 (standard operation) allow
 localparam NO_WRITE_BURST      = 1'b1;     // 0= write burst enabled, 1=only single access write
 localparam MODE                = {3'b000, NO_WRITE_BURST, OP_MODE, CAS_LATENCY, ACCESS_TYPE, BURST_CODE};
 
-localparam sdram_startup_cycles= 14'd12100;// 100us, plus a little more, @ 100MHz
-localparam cycles_per_refresh  = 14'd780;  // (64000*100)/8192-1 Calc'd as (64ms @ 100MHz)/8192 rose
+localparam sdram_startup_cycles= 14'(121 * CLK_MHZ);// 100us, plus a little more
+localparam cycles_per_refresh  = 14'((64000 * CLK_MHZ) / 8192 - 1);  // (64ms @ CLK_MHZ)/8192; refresh is host-timed (Noodles.sv)
 localparam startup_refresh_max = 14'b11111111111111;
 
 // SDRAM commands
@@ -124,6 +134,8 @@ localparam STATE_RFSH    = 11;
 
 always @(posedge clk) begin
 	reg [CAS_LATENCY:0] data_ready_delay;
+	reg  [2:0] hold;                 // remaining extra wait cycles in the current state
+	reg        in_refresh;           // the IDLE_x chain follows an AUTO_REFRESH
 
 	reg        saved_wr;
 	reg [12:0] cas_addr;
@@ -165,6 +177,8 @@ always @(posedge clk) begin
 				//------------------------------------------------------------------------
 				SDRAM_A    <= 0;
 				SDRAM_BA   <= 0;
+				hold       <= 0;
+				in_refresh <= 1'b0;
 
 				if (refresh_count == (startup_refresh_max-64)) chip <= 0;
 				if (refresh_count == (startup_refresh_max-32)) chip <= 1;
@@ -211,11 +225,18 @@ always @(posedge clk) begin
 			STATE_IDLE_5: state <= STATE_IDLE_4;
 			STATE_IDLE_4: state <= STATE_IDLE_3;
 			STATE_IDLE_3: state <= STATE_IDLE_2;
-			STATE_IDLE_2: state <= STATE_IDLE_1;
-			STATE_IDLE_1: state <= STATE_IDLE;
+			STATE_IDLE_2: begin
+				state <= STATE_IDLE_1;
+				hold  <= in_refresh ? 3'(TRFC_EXTRA) : 3'(TRP_EXTRA);
+			end
+			STATE_IDLE_1: if (hold != 0) hold <= hold - 1'd1; else begin
+				state      <= STATE_IDLE;
+				in_refresh <= 1'b0;
+			end
 
 			STATE_IDLE: begin
 				if (refresh ^ refresh_old) begin
+					in_refresh <= 1'b1;
 					state      <= STATE_RFSH;
 					command    <= CMD_AUTO_REFRESH;
 					chip       <= 0;
@@ -228,6 +249,7 @@ always @(posedge clk) begin
 					saved_wr   <= wr;
 					command    <= CMD_ACTIVE;
 					state      <= STATE_WAIT;
+					hold       <= 3'(TRCD_EXTRA);
 					ready      <= 0;
 				end
 				else begin
@@ -241,12 +263,13 @@ always @(posedge clk) begin
 						cpcnt   <= 511;
 						command <= CMD_ACTIVE;
 						state   <= STATE_WAITCP;
+						hold    <= 3'(TRCD_EXTRA);
 						cprd    <= 1;
 					end
 				end
 			end
 
-			STATE_WAIT: state <= STATE_RW;
+			STATE_WAIT: if (hold != 0) hold <= hold - 1'd1; else state <= STATE_RW;
 			STATE_RW: begin
 				// Wait at least 4 cycles @96MHz (2 CAS_LATENCY + 2 PRECHARGE (tRP 21ns))
 				state         <= STATE_IDLE_4;
@@ -262,7 +285,7 @@ always @(posedge clk) begin
 				end
 			end
 
-			STATE_WAITCP: state <= STATE_CP;
+			STATE_WAITCP: if (hold != 0) hold <= hold - 1'd1; else state <= STATE_CP;
 			STATE_CP: begin
 				SDRAM_A       <= {2'b00, !cpcnt, cas_addr[9:0]};
 				cas_addr[8:0] <= cas_addr[8:0] + 1'd1;

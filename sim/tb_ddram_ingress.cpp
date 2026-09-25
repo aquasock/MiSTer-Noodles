@@ -12,6 +12,17 @@ static void Check(bool ok, const char *message) {
     }
 }
 
+struct Command {
+    bool we = false, rd = false;
+    uint32_t addr = 0;
+    uint64_t din = 0;
+    uint8_t be = 0, burstcnt = 0;
+    bool operator==(const Command &o) const {
+        return we == o.we && rd == o.rd && addr == o.addr && burstcnt == o.burstcnt &&
+               (!we || (din == o.din && be == o.be));
+    }
+};
+
 struct Write {
     uint32_t addr;
     uint64_t data;
@@ -26,6 +37,8 @@ public:
     unsigned run = 0, longest_run = 0;
     int response_delay = 0;
     bool read_pending = false;
+    bool response_next = false;
+    Command held;
 
     void Reset() {
         dut.wr_en = dut.wr64_en = dut.rd_en = dut.rd64_en = 0;
@@ -40,6 +53,8 @@ public:
         writes.clear();
         response_delay = 0;
         read_pending = false;
+        held = Command{};
+        response_next = false;
         run = longest_run = 0;
         accepted = issued = read_accepted = read_returned = 0;
         dut.clk = 0; dut.eval();
@@ -64,9 +79,15 @@ public:
         dut.clk = 0; dut.eval();
         Check(!(dut.ddram_we && dut.ddram_rd), "read/write commands overlap");
         Check(!dut.idle || (writes.empty() && !read_pending), "idle with accepted work outstanding");
-        if (busy) Check(!dut.ddram_we && !dut.ddram_rd, "command issued while bridge busy");
+        // Avalon-MM: a command presented while the bridge is busy is not
+        // accepted and must be held unchanged until a non-busy cycle.
+        Command now{bool(dut.ddram_we), bool(dut.ddram_rd), uint32_t(dut.ddram_addr),
+                    uint64_t(dut.ddram_din), uint8_t(dut.ddram_be), uint8_t(dut.ddram_burstcnt)};
+        if (held.we || held.rd)
+            Check(now == held, "command changed or withdrawn while the bridge was busy");
+        held = busy ? now : Command{};
 
-        if (dut.ddram_we) {
+        if (dut.ddram_we && !busy) {
             Check(!writes.empty(), "write issued before acceptance/commit");
             auto expected = writes.front();
             writes.pop_front();
@@ -91,24 +112,30 @@ public:
                               uint8_t(upper ? 0xf0 : 0x0f)});
             ++accepted;
         }
-        Check(writes.size() <= 16, "ingress increased accepted capacity beyond sixteen");
+        // Sixteen queued writes plus one held in the registered command stage.
+        Check(writes.size() <= 17, "ingress increased accepted capacity beyond sixteen plus the command stage");
         if (dut.rd_en && dut.rd_ready) {
             read_pending = true;
             ++read_accepted;
         }
         if (response_delay) --response_delay;
-        if (dut.ddram_rd) {
+        if (dut.ddram_rd && !busy) {
             Check(dut.ddram_addr == (0x8004 >> 3) && dut.ddram_burstcnt == 1,
                   "read corrupted under write contention");
             Check(response_delay == 0, "unexpected extra read");
             response_delay = 3;
         }
-        if (dut.ddram_dout_ready) {
+        // The adapter registers returned data, so a word the bridge returns
+        // reaches the client on the following cycle.
+        if (response_next) {
             Check(dut.rd_valid && dut.rd_data == 0x11223344u && !dut.rd64_valid,
                   "scalar response corrupted under write contention");
             read_pending = false;
             ++read_returned;
+        } else {
+            Check(!dut.rd_valid && !dut.rd64_valid, "response without a returned word");
         }
+        response_next = dut.ddram_dout_ready;
         dut.clk = 1; dut.eval();
     }
 
@@ -135,8 +162,9 @@ int main(int argc, char **argv) {
         tb.DriveWrite(n, n % 2 == 0, n % 2 != 0);
         tb.Tick(true);
     }
-    Check(tb.accepted == 16 && !tb.dut.wr_ready && !tb.dut.wr64_ready,
-          "full queue did not accept exactly sixteen writes");
+    // Sixteen queued writes plus the one the empty command stage took.
+    Check(tb.accepted == 17 && !tb.dut.wr_ready && !tb.dut.wr64_ready,
+          "full queue did not accept exactly sixteen writes plus the command stage");
     tb.Drain();
 
     tb.Reset();

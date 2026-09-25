@@ -4,11 +4,8 @@
 // Noodles.sv uses to drive FB_BASE; the host draws into a buffer that is
 // neither front nor awaiting a flip, then issues a PRESENT to show it.
 //
-// fb_vbl is FB_VBL, the framework's vblank level signal -- safe to sample
-// directly with no cross-clock synchronizer, because CLK_VIDEO (this
-// core's own output) IS what the framework uses to generate it: Noodles.sv
-// ties CLK_VIDEO to clk_sys, so fb_vbl is already in this exact clock
-// domain, not a separate one.
+// fb_vbl and fb_retired are the framework's vertical-blank level and
+// retirement toggle after Noodles.sv's two-flop synchronizers into clk.
 //
 // Deliberately its own tiny module, not folded into cmdq.sv or an existing
 // engine: it never touches DDRAM_* at all (no read or write port), it only

@@ -36,7 +36,9 @@ For the current consumer-facing baseline, start with
 [docs/INTEGRATION.md](docs/INTEGRATION.md): memory reservations, command
 layouts, pixel format, ownership and limitations for consumers. It describes
 the core interface; the validated SDL2 renderer lives in MiSTer-GemRB.
-Current source is the accepted protocol 1.6 fill-batch core at 800x600 and 100MHz.
+Current source is the protocol 1.7 core at 800x600 with a 120MHz core clock and a
+separate 100MHz video clock, pending hardware acceptance; the accepted image is
+the 100MHz protocol 1.7 seed-13 build.
 It reuses the bounded descriptor-table ring to submit up to 64 ordered opaque
 fills with one command. Protocol 1.5 seed 13, protocol 1.4 and the older
 accepted 640x480 image remain recovery fallbacks.

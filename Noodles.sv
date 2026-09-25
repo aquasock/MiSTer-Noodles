@@ -280,10 +280,21 @@ link_control link_control
 
 // OUT-004/OUT-013: display flip. present.sv owns front_idx (which of
 // BUFFER_A/B/C is currently scanned out) and only changes it synced to
-// FB_VBL, the framework's vertical blank signal -- safe to sample directly
-// with no cross-clock synchronizer since CLK_VIDEO (this core's own output,
-// tied to clk_sys below) is what the framework uses to generate it in the
-// first place, so present.sv's own clk IS that same domain.
+// FB_VBL, the framework's vertical blank signal. FB_VBL is registered on
+// CLK_VIDEO, now a separate 100MHz clock, and FB_RETIRED on the framework's
+// own clock, so both are levels from other domains and pass through two
+// flops here. The added latency only delays a flip within vertical blank.
+(* altera_attribute = {"-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS"} *) reg [1:0] fb_vbl_sync;
+(* altera_attribute = {"-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS"} *) reg [1:0] fb_retired_sync;
+always @(posedge clk_sys or posedge reset)
+	if (reset) begin
+		fb_vbl_sync     <= 2'b00;
+		fb_retired_sync <= 2'b00;
+	end else begin
+		fb_vbl_sync     <= {fb_vbl_sync[0], FB_VBL};
+		fb_retired_sync <= {fb_retired_sync[0], FB_RETIRED};
+	end
+
 wire present_start, present_queued, present_accept, present_busy, present_done;
 wire [1:0] present_target;
 // Legacy fence parity (OUT-012) reports B as front; A and C both read as 0,
@@ -296,8 +307,8 @@ present #(
 (
 	.clk       (clk_sys),
 	.reset     (reset),
-	.fb_vbl    (FB_VBL),
-	.fb_retired(FB_RETIRED),
+	.fb_vbl    (fb_vbl_sync[1]),
+	.fb_retired(fb_retired_sync[1]),
 	.start     (present_start),
 	.queued    (present_queued),
 	.target    (present_target),
@@ -607,45 +618,31 @@ wire [63:0] adapter_wr64_data = wr_sel_blend ? blend_wr64_data :
 // path and failed 100MHz setup (OUT-013 build). A request simply waits one
 // cycle for its grant; control and link keep combinational priority, and
 // they use the port only while CMDQ is idle.
-localparam logic [2:0] RD_OWNER_COPY = 3'd0, RD_OWNER_BATCH = 3'd1,
-                       RD_OWNER_FILL_BATCH = 3'd2, RD_OWNER_BLEND = 3'd3,
-                       RD_OWNER_LOADER = 3'd4;
-reg [2:0] rd_owner;
-always @(posedge clk_sys or posedge reset)
-	if (reset) rd_owner <= RD_OWNER_COPY;
-	else rd_owner <= batch_rd_active      ? RD_OWNER_BATCH :
-	                 fill_batch_rd_active ? RD_OWNER_FILL_BATCH :
-	                 blend_busy           ? RD_OWNER_BLEND :
-	                 loader_rd64_active   ? RD_OWNER_LOADER : RD_OWNER_COPY;
-wire        rd_sel_control = control_rd_active;
-wire        rd_sel_link = !rd_sel_control && link_rd_active;
-wire        rd_sel_engine = !rd_sel_control && !rd_sel_link;
-wire        rd_sel_batch = rd_sel_engine && rd_owner == RD_OWNER_BATCH;
-wire        rd_sel_fill_batch = rd_sel_engine && rd_owner == RD_OWNER_FILL_BATCH;
+// Every client's port ownership, including link and control, now comes
+// from a register (rtl/ddram_read_owner.sv, proved by fv/ddram_read_owner.sby):
+// the owner is released only once its client drops active and no response
+// is outstanding, then passes to the highest-priority active client. The
+// previous combinational link/control priority placed link_ring's state on
+// sprite_batch's copy-address path. A request simply waits one cycle for its
+// grant. Each client's active spans every request and response it owns
+// (DDR-005): link_ring's and fill_batch's rd_active, sprite_batch's
+// rd_active across descriptor reads and copies, blit_blend's busy,
+// sdram_loader's rd64_active and blit_copy's busy.
+wire [6:0] rd_owner;
+wire        rd_sel_control = rd_owner[0];
+wire        rd_sel_link = rd_owner[1];
+wire        rd_sel_batch = rd_owner[2];
+wire        rd_sel_fill_batch = rd_owner[3];
 // Sprite reads remain on the hardware-proven DDR3 burst path. SDR-008
 // removes the SDRAM CDC overhead without changing this routing choice;
 // the optional SDRAM path still performs four 16-bit reads per pair.
 wire        rd_sel_batch64 = rd_sel_batch && batch_rd64_en;
-// blit_blend holds busy until every requested beat has returned, so busy
-// spans all of its REQ+WAIT windows (DDR-005).
-wire        rd_sel_blend = rd_sel_engine && rd_owner == RD_OWNER_BLEND;
+wire        rd_sel_blend = rd_owner[4];
 wire        rd_sel_blend64 = rd_sel_blend && blend_rd64_en;
-// SDR-003 (step 5a): sdram_loader's fill side is a rd64-only client (it
-// never uses the 32-bit rd/rd_addr path at all), given lowest priority
-// since it only ever runs in isolation from batch/link per cmdq.sv's
-// one-engine-at-a-time dispatch -- link_ring can still run concurrently
-// (host uploads are independent of engine ops), so it must still take
-// priority over the loader exactly like it does over batch.
-// Uses loader_rd64_active (spanning REQ+WAIT), not loader_rd64_en (REQ
-// only), for the same reason rd_active exists at all above: rd64_en
-// drops the moment the loader moves into its WAIT state to await
-// rd64_valid, and if the mux fell through then, adapter_rd64_valid/data
-// would be silently misrouted or dropped for that response.
-// The loader drives adapter_rd64_en through this select, so it must also
-// drop with loader_rd64_active rather than one cycle later with rd_owner.
-wire        rd_sel_loader64 = rd_sel_engine && rd_owner == RD_OWNER_LOADER &&
-                              loader_rd64_active;
-wire        rd_sel_copy = rd_sel_engine && rd_owner == RD_OWNER_COPY;
+// SDR-003: sdram_loader is a rd64-only client that drives adapter_rd64_en
+// through this select, so the select also requires its rd64_active.
+wire        rd_sel_loader64 = rd_owner[5] && loader_rd64_active;
+wire        rd_sel_copy = rd_owner[6];
 wire [31:0] adapter_rd_addr = rd_sel_control ? control_rd_addr :
                               rd_sel_link ? link_rd_addr :
                               rd_sel_batch ? batch_rd_addr :
@@ -665,6 +662,20 @@ wire        adapter_rd_ready, adapter_rd_valid;
 wire [31:0] adapter_rd_data;
 wire        adapter_rd64_ready, adapter_rd64_valid;
 wire [63:0] adapter_rd64_data;
+
+ddram_read_owner #(.CLIENTS(7)) ddram_read_owner
+(
+	.clk          (clk_sys),
+	.reset        (reset),
+	.active       ({copy_busy, loader_rd64_active, blend_busy, fill_batch_rd_active,
+	                batch_rd_active, link_rd_active, control_rd_active}),
+	.rd_accept    (adapter_rd_en && adapter_rd_ready),
+	.rd64_accept  (adapter_rd64_en && adapter_rd64_ready),
+	.rd64_len     (adapter_rd64_len),
+	.rd_response  (adapter_rd_valid),
+	.rd64_response(adapter_rd64_valid),
+	.owner        (rd_owner)
+);
 assign link_rd_ready = rd_sel_link ? adapter_rd_ready : 1'b0;
 assign control_rd_ready = rd_sel_control ? adapter_rd_ready : 1'b0;
 assign batch_rd_ready = rd_sel_batch ? adapter_rd_ready : 1'b0;
@@ -765,17 +776,35 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 ///////////////////////   CLOCKS   ///////////////////////////////
 
-// SDR-008: core and board SDRAM share one 100MHz PLL output.
-wire clk_sys, pll_locked;
+// SDR-008: core and board SDRAM share one PLL output, now 120MHz. The video
+// clock is a separate 100MHz output so the framework's scaler input and
+// output logic do not run at the core clock.
+localparam int CLK_SYS_MHZ = 120;
+// Board-SDRAM timing in cycles, from the 20ns tRCD/tRP and 60ns tRFC the
+// controller's original 100MHz sequencing provided (2, 2 and 6 cycles).
+localparam int SDRAM_TRCD_EXTRA = (20 * CLK_SYS_MHZ + 999) / 1000 - 2;
+localparam int SDRAM_TRP_EXTRA  = (20 * CLK_SYS_MHZ + 999) / 1000 - 2;
+localparam int SDRAM_TRFC_EXTRA = (60 * CLK_SYS_MHZ + 999) / 1000 - 6;
+wire clk_sys, clk_video, pll_locked;
 pll pll
 (
 	.refclk(CLK_50M),
 	.rst(0),
 	.outclk_0(clk_sys),
+	.outclk_1(clk_video),
 	.locked(pll_locked)
 );
 
-wire reset = RESET | status[0] | buttons[1];
+// Reset asserts asynchronously and releases synchronously. The releasing
+// register stays off the global clock network, whose insertion delay failed
+// 120MHz recovery, and is duplicated by fanout so each copy reaches nearby
+// registers over local routing; every copy releases on the same edge.
+wire reset_raw = RESET | status[0] | buttons[1];
+(* altera_attribute = "-name GLOBAL_SIGNAL OFF" *) (* maxfan = 128 *) reg [1:0] reset_sync = 2'b11;
+always @(posedge clk_sys or posedge reset_raw)
+	if (reset_raw) reset_sync <= 2'b11;
+	else reset_sync <= {reset_sync[0], 1'b0};
+wire reset = reset_sync[1];
 
 // SDR-001 (core-log entry 62, step 2): the local SDRAM board
 // controller, vendored from MiSTer-devel/NeoGeo_MiSTer's rtl/sdram.sv (see
@@ -790,7 +819,8 @@ wire reset = RESET | status[0] | buttons[1];
 // this board has no HPS/host write path at all (SDR-001 above). wr/bs/din
 // remain tied inactive; sdram_adapter only implements the read path (see
 // its own header for why).
-sdram sdram
+sdram #(.CLK_MHZ(CLK_SYS_MHZ), .TRCD_EXTRA(SDRAM_TRCD_EXTRA), .TRP_EXTRA(SDRAM_TRP_EXTRA),
+        .TRFC_EXTRA(SDRAM_TRFC_EXTRA)) sdram
 (
 	.init    (~pll_locked),
 	.clk     (clk_sys),
@@ -875,7 +905,7 @@ wire        loader_cpsel, loader_cprd, loader_cpreq, loader_cpbusy;
 wire [26:1] loader_cpaddr;
 wire [15:0] loader_cpdin;
 
-sdram_loader #(.ADDR_WIDTH(32)) sdram_loader
+sdram_loader #(.ADDR_WIDTH(32), .CPDIN_STAGES(SDRAM_TRCD_EXTRA)) sdram_loader
 (
 	.clk     (clk_sys),
 	.reset   (reset),
@@ -905,14 +935,14 @@ sdram_loader #(.ADDR_WIDTH(32)) sdram_loader
 
 // The controller's periodic auto-refresh is host-timed, not self-timed
 // (see rtl/sdram.sv: `if (refresh ^ refresh_old)`) -- toggling on every
-// rising edge of a free-running counter at cycles_per_refresh's own
-// cadence (780 clk_sys cycles at 100MHz = 7.8us, the standard 64ms/8192-
-// row JEDEC refresh interval) keeps the chip refreshed even while nothing
-// is issuing real reads/writes yet.
+// rising edge of a free-running counter every 7.8us (the standard 64ms/8192-
+// row JEDEC refresh interval, 936 clk_sys cycles at 120MHz) keeps the chip
+// refreshed even while nothing is issuing real reads/writes yet.
+localparam int SDRAM_REFRESH_CYCLES = (78 * CLK_SYS_MHZ) / 10;
 reg [9:0] sdram_refresh_count;
 reg       sdram_refresh;
 always_ff @(posedge clk_sys) begin
-	if (sdram_refresh_count == 10'd779) begin
+	if (sdram_refresh_count == 10'(SDRAM_REFRESH_CYCLES - 1)) begin
 		sdram_refresh_count <= '0;
 		sdram_refresh <= ~sdram_refresh;
 	end else begin
@@ -920,7 +950,7 @@ always_ff @(posedge clk_sys) begin
 	end
 end
 
-assign CLK_VIDEO = clk_sys;
+assign CLK_VIDEO = clk_video;
 
 // A permanently-0 CE_PIXEL was never correct -- the framework's OSD
 // compositing/mixer chain (sys/sys_top.v, sys/video_mixer.sv) uses it
@@ -930,7 +960,7 @@ assign CLK_VIDEO = clk_sys;
 // Exact rate is not yet tuned to any specific video mode -- a modest
 // divide-by-4 of clk_sys, the same shape virtually every MiSTer core uses.
 reg [1:0] ce_div;
-always @(posedge clk_sys) ce_div <= ce_div + 2'd1;
+always @(posedge clk_video) ce_div <= ce_div + 2'd1;
 assign CE_PIXEL = (ce_div == 2'd0);
 
 assign VGA_DE = 0;

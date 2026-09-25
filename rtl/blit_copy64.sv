@@ -41,6 +41,11 @@ module blit_copy64 #(
     logic [63:0] data_fifo [0:FIFO_DEPTH-1];
     logic [FIFO_DEPTH-1:0] valid_fifo;
     logic [PTR_W-1:0] wr_ptr, rd_ptr;
+    // Prepared FIFO fill for the next COMMIT: which slots it writes and the
+    // destination address each slot receives, computed in PREPARE from the
+    // wr_ptr/dst_cur that COMMIT will use (only COMMIT advances either).
+    logic [FIFO_DEPTH-1:0] fill_mask_p;
+    logic [ADDR_WIDTH-1:0] fill_dst_p [0:FIFO_DEPTH-1];
     logic [PTR_W-1:0] resp_ptr;
     logic [LENB-1:0] pair_count;
     // FIFO slots are reserved at request formation and freed on head
@@ -180,8 +185,11 @@ module blit_copy64 #(
     // a burst covers up to FIFO_DEPTH pairs and takes far longer than a
     // cycle to drain, and the next request is formed in the same cycle the
     // current one is accepted, so the issue rate is unchanged.
-    wire commit_now = want_len_p_valid && (want_len_p != 0) &&
-                      (!req_valid || rd64_ready);
+    // A request is formed only into an empty request register, so the
+    // adapter's rd64_ready (and the read-port owner behind it) never reaches
+    // the FIFO fill below. Requests already form at most every other cycle
+    // (PREPARE then COMMIT), so this rarely costs a cycle.
+    wire commit_now = want_len_p_valid && (want_len_p != 0) && !req_valid;
 
     assign rd64_en = req_valid;
     assign rd64_len = {{(8-LENB){1'b0}}, req_len};
@@ -252,6 +260,11 @@ module blit_copy64 #(
                     want_len_p <= want_len16_prep[LENB-1:0];
                     want_len_p_valid <= (want_len16_prep != 0);
                     row_end_p <= (want_len16_prep == row_remain_r);
+                    for (int j = 0; j < FIFO_DEPTH; j++) begin
+                        automatic logic [PTR_W-1:0] off = j[PTR_W-1:0] - wr_ptr;
+                        fill_mask_p[j] <= 16'(off) < want_len16_prep;
+                        fill_dst_p[j] <= dst_cur + {{(ADDR_WIDTH-PTR_W-3){1'b0}}, off, 3'b000};
+                    end
                 end
                 // COMMIT: consume the already-registered want_len_p. State
                 // advances when the request is FORMED, not when it is
@@ -262,11 +275,10 @@ module blit_copy64 #(
                     req_valid <= 1'b1;
                     req_len <= want_len_p;
                     req_addr <= src_cur;
-                    for (int i = 0; i < FIFO_DEPTH; i++) begin
-                        if (i < int'(want_len_p)) begin
-                            automatic logic [PTR_W-1:0] idx = wr_ptr + i[PTR_W-1:0];
-                            dst0_fifo[idx] <= dst_cur + ADDR_WIDTH'(8 * i);
-                            valid_fifo[idx] <= 1'b0;
+                    for (int j = 0; j < FIFO_DEPTH; j++) begin
+                        if (fill_mask_p[j]) begin
+                            dst0_fifo[j] <= fill_dst_p[j];
+                            valid_fifo[j] <= 1'b0;
                         end
                     end
                     wr_ptr <= wr_ptr + want_len_p[PTR_W-1:0];

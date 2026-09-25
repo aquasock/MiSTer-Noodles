@@ -11,7 +11,7 @@
 //      operation) combination, with and without single rounding, over
 //      random operands;
 //   5. 16M random vectors over all inputs and valid modes.
-// One input is launched per cycle and compared 7 cycles later.
+// One input is launched per cycle and compared 8 cycles later.
 
 #include <cstdint>
 #include <cstdio>
