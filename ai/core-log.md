@@ -514,3 +514,48 @@ Retain the correct binary-alpha shortcuts, but do not expect them to remove the 
 - [x] Passed
 
 ---
+
+## 13 COMMIT Unreleased ??? 2026-09-25T07:39:14-07:00
+
+#### Coming From:
+
+Unreleased eb5886f
+
+#### Purpose:
+
+Increase shared framebuffer throughput by replacing separate full-width DDR3 writes with explicitly declared contiguous Avalon write bursts.
+
+#### Outcome:
+
+The approved proposal follows a valid 15.036-second active-combat profile from MiSTer-GemRB that collected 2,508 main-thread samples with none lost. GemRB used about 60% of one Cortex-A9 core in that window, main-thread user work rose from about 20% of one core while paused to 33% in combat, audio decoding and resampling accounted for about 6.5% of one core, and named Noodles ARM work remained approximately 3.6% in both states. Renderer windows ran at 15.7-19.8fps with 5.9-6.7ms of queue work and 21.0-27.3ms of presentation completion wait, so ARM saturation and Noodles command construction are not the main limit. The current DDR adapter already accepts producer-declared multiword reads but forces every write to `DDRAM_BURSTCNT=1`; the proposed internal change gives solid-fill, paired copy and blend output producers bounded buffers that declare contiguous full-word write runs before the first beat, while scalar edge writes, transparent or unchanged holes, colour keys, read/write fairness and exact command order retain their current behavior. The host protocol and SDL contract are expected to remain unchanged.
+
+#### Next Steps:
+
+Confirm the Avalon write-burst handshake used by the MiSTer DDR bridge, extend the behavioral memory models for backpressure on every burst beat, and implement an explicit burst descriptor plus data stream rather than post-hoc adapter contiguity detection. Add directed tests for full and partial rows, discontinuous pitch, scalar boundaries, skipped blend output, alternating reads and writes and reset or busy conditions, then run the complete simulation, SDK, sanitizer and ARM suites. Require a local seed-13 fit and all four timing corners before publishing source, run no more than two Quartus builds in parallel, and accept the result only after exact pixels, audio, synthetic fill/copy/blend throughput and controlled stationary, panning and combat comparisons on MiSTer.
+
+#### Files Modified:
+
+- Noodles.sv
+- rtl/blit.sv
+- rtl/blit_blend.sv
+- rtl/blit_copy64.sv
+- rtl/ddram_adapter.sv
+- rtl/sprite_batch.sv
+- sim/engine_blend_dut.sv
+- sim/engine_copy64_dut.sv
+- sim/engine_ddram_dut.sv
+- sim/engine_dut.sv
+- sim/engine_fill_batch_dut.sv
+- sim/engine_sprite_batch_dut.sv
+- sim/engine_sprite_batch_sdram_dut.sv
+- sim/tb_blit_blend.cpp
+- sim/tb_blit_copy64.cpp
+- sim/tb_ddram_adapter.cpp
+- sim/tb_solid_fill.cpp
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
