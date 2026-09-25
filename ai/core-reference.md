@@ -113,6 +113,7 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 | Is it safe to pipeline several commands (including a PRESENT) without fence-waiting each one individually? | LINK component records | LINK-007 |
 | Does OUT-004's single-vblank-edge PRESENT margin actually hold under heavy per-frame draw load? | OUT component records | OUT-005 |
 | When has ascal reached its output-domain frame retirement boundary? | OUT component records | OUT-007 |
+| How can drawing continue while a flip waits for vertical blank? Where is the third display buffer? | OUT component records | OUT-013 |
 | Does the FPGA's SDRAM board actually reach the HPS/Linux side at all? | SDR component records | SDR-001 |
 
 ---
@@ -576,6 +577,15 @@ OUT-005: "OUT-004's single-fresh-vblank-edge PRESENT margin is not reliably suff
   supersedes: "OUT-011"
   decision: "rtl/link_fence.sv publishes the completion count in bits 30:0 and the persistent front_sel parity in bit 31 of the existing fence word. lib/noodles_link.c masks the count and initializes each handle's back-buffer parity from the published front bit, so process restarts do not assume buffer A is front."
   consequence: "A host process can safely reopen the shared link after prior PRESENT commands without drawing into the current scanout surface solely because its local present counter restarted. The completion-count capacity is reduced to 31 bits."
+
+- record_id: OUT-013
+  kind: INTERFACE
+  component_id: OUT
+  title: "Queued three-buffer PRESENT lets later commands run while a flip waits for vertical blank"
+  status: DECIDED
+  decided_date: 2026-09-25
+  decision: "Protocol 1.7 adds capability bit 11, a third fixed 800x600 display surface BUFFER_C at 0x31600000 and opcode 11 PRESENT_QUEUED, whose dst_addr word selects buffer 0-2 or, with value 3, a flip barrier. rtl/present.sv owns a two-bit front_idx driving a three-way FB_BASE mux. CMDQ holds any PRESENT, without accepting it, while a flip is pending; it then starts a queued flip and completes the command's fence on acceptance, so later non-PRESENT commands no longer wait for the vertical-blank flip or its retirement. A queued flip captures the FB_RETIRED level at the flip itself, so its retirement follows a scaler boundary after the new base took effect. A barrier is accepted once no flip is pending and completes without flipping. Legacy opcode-4 PRESENT keeps its blocking behavior, captures FB_RETIRED at start and toggles between A and B, choosing B unless B is front. Fence bit 31 reports whether B is front, so A and C both publish 0."
+  consequence: "Because a new flip is accepted only after the previous one retires, commands queued after PRESENT_QUEUED for frame k may use the buffer shown before frame k-1 once frame k-1 is accepted. SDK 0.12's opt-in three-buffer mode rotates the back buffer through the one buffer that is neither front nor pending, allows back-buffer CPU transfers while a queued flip is pending, and follows a handle's first queued flip with a barrier because fence parity cannot distinguish A from C. BUFFER_C lies between the 0x31400000 tool scratch slot and the managed arena; tools must not use it as scratch while a three-buffer client is displaying."
 
 - record_id: SDR-001
   kind: ARCHITECTURE
