@@ -115,6 +115,7 @@ Component IDs are the `record_id` prefix for records that belong to that compone
 | When has ascal reached its output-domain frame retirement boundary? | OUT component records | OUT-007 |
 | How can drawing continue while a flip waits for vertical blank? Where is the third display buffer? | OUT component records | OUT-013 |
 | Does the FPGA's SDRAM board actually reach the HPS/Linux side at all? | SDR component records | SDR-001 |
+| Which handshake and completion guarantees are formally proved, and how do I rerun the proofs? | CMDQ component records | CMDQ-004 |
 
 ---
 
@@ -163,6 +164,7 @@ LINK-004: "lib/noodles_link.{h,c} is the real host-side API (open/close, noodles
 LINK-005: "rtl/link_fence.sv publishes a monotonic done-count to DRAM (HEADER_ADDR+12) on blit_done||copy_done; noodles_link_submitted_count()/done_count() let the host know when a specific command actually finished"
 LINK-006: "noodles_link_upload() writes host asset data straight into DDR3 via mmap+memcpy at a caller-given address, bypassing the ring buffer and every BLIT engine entirely -- per DDR-002's direct physical addressing"
 LINK-007: "Pipelining commands (pushing several without fence-waiting each one) is safe -- CMDQ dispatches the ring strictly FIFO -- but noodles_present_and_wait() must compare done_count() against PRESENT's own absolute fence position (done_baseline + submitted), not a pre-push delta, or it reports the flip done early once other commands are in flight ahead of it"
+CMDQ-004: "link_ring/CMDQ/PRESENT handshake, one-completion-per-command and flip-retirement contracts are SymbiYosys properties proved by `make formal`"
 OUT-005: "OUT-004's single-fresh-vblank-edge PRESENT margin is not reliably sufficient once per-frame draw work spans more than ~1-2 vsync periods -- ascal's own internal buffering and avl_clk-domain fb_base latch (separate from FB_VBL) can desync from our flip, causing intermittent visible ghosting; root cause identified, no fix implemented yet"
 ```
 
@@ -718,6 +720,15 @@ OUT-005: "OUT-004's single-fresh-vblank-edge PRESENT margin is not reliably suff
   consequence: "SDK 0.9 selects free tables round-robin and tracks one baseline-adjusted completion fence per table, so accepted batches may remain queued or execute concurrently with host preparation of later batches without overwriting live descriptors. Typed and raw opcode-5 submissions acquire only their selected table; uploads overlapping any owned table fail with EAGAIN, and the complete descriptor pool remains excluded from general surface allocation and raw uploads. A table becomes reusable when its command fence retires. Ring-full and no-free-table retries publish no command and do not modify descriptor storage. Protocol 1.0 through 1.4 cores remain attachable for their advertised operations."
   supersedes: "LINK-008, LINK-015"
 
+- record_id: CMDQ-004
+  kind: INTERFACE
+  component_id: CMDQ
+  title: "The link_ring, CMDQ and PRESENT handshake, completion and retirement contracts are machine-checked properties"
+  status: DECIDED
+  decided_date: 2026-09-25
+  decision: "link_ring keeps one read outstanding with its address held until the response, fetches the eight words of the slot at read_ptr only after a poll finds write_ptr different, offers exactly those words and holds cmd_valid and cmd_data unchanged until CMDQ's cmd_ready, and advances and writes back read_ptr once per accepted command. While cmd_valid is low, CMDQ's cmd_ready depends only on its own state and its last engine's busy, never on cmd_data, and CMDQ dispatches an offered command exactly when it reports ready. Each recognized command (opcodes 1, 2, 3, 4, 6, 7 and 8, opcode 11 with buffer 0-3, and opcodes 5 and 10 with a valid descriptor table and count 1-64) receives exactly one engine start or queued-flip acceptance and exactly one completion before CMDQ is ready again; any other command is accepted and dropped without a completion. CMDQ accepts no PRESENT while a flip is pending and never restarts an engine that is still running. present changes FB_BASE only on an FB_VBL rising edge, retires each flip exactly once after selecting its buffer and after FB_RETIRED differs from the level sampled at start for opcode 4 or at the flip for opcode 11, shows a queued flip's named buffer, and reports done only for opcode 4."
+  consequence: "Each contract is stated as a SymbiYosys property in the owning module's `ifdef FORMAL` block and proved by k-induction with cover checks through `make formal`; synthesis never defines FORMAL. A change to rtl/link_ring.sv, rtl/cmdq.sv or rtl/present.sv must keep `make formal` passing, and a deliberate contract change must supersede this record. The engines are modeled only by their start, busy and done behavior, so their datapaths and the top-level read-port owner and fence composition in Noodles.sv are not covered by these proofs."
+
 ```yaml
 - record_id: "<COMPONENT>-<NNN>"
   kind: ARCHITECTURE | INTERFACE | CONVENTION
@@ -740,7 +751,7 @@ OUT-005: "OUT-004's single-fresh-vblank-edge PRESENT margin is not reliably suff
 - Component decomposition below CORE and LINK (e.g. blitter, compositor, format conversion, output/scaler interface) is intentionally unscoped until those milestones are approved; do not pre-load speculative components or records for them.
 
 ```yaml
-last_reviewed: 2026-09-21
+last_reviewed: 2026-09-25
 ```
 # DDR-005: Paired full-word SOLID_FILL writes
 
