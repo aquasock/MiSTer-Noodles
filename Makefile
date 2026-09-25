@@ -165,11 +165,11 @@ $(BLIT_BLEND_SIM): $(BLEND_RTL) rtl/ddram_adapter.sv sim/engine_blend_dut.sv sim
 		--Wall --Wno-fatal -Wno-DECLFILENAME -CFLAGS -std=c++17 \
 		$(BLEND_RTL) rtl/ddram_adapter.sv sim/engine_blend_dut.sv sim/tb_blit_blend.cpp -o $(notdir $@)
 
-$(BATCH_CMDQ_SIM): rtl/cmdq.sv sim/cmdq_batch_dut.sv sim/tb_cmdq_batch.cpp
+$(BATCH_CMDQ_SIM): rtl/cmdq.sv rtl/present.sv sim/cmdq_batch_dut.sv sim/tb_cmdq_batch.cpp
 	@mkdir -p $(dir $@)
 	$(VERILATOR) --cc --exe --build --Mdir $(dir $@) --top-module cmdq_batch_dut \
 		--Wall --Wno-fatal -Wno-DECLFILENAME \
-		rtl/cmdq.sv sim/cmdq_batch_dut.sv sim/tb_cmdq_batch.cpp -o $(notdir $@)
+		rtl/cmdq.sv rtl/present.sv sim/cmdq_batch_dut.sv sim/tb_cmdq_batch.cpp -o $(notdir $@)
 
 $(SOLID_FILL_SIM): rtl/cmdq.sv rtl/blit.sv sim/engine_dut.sv sim/tb_solid_fill.cpp lib/noodles_link.h
 	@mkdir -p $(dir $@)

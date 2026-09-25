@@ -258,7 +258,8 @@ static int back_buffer_transfer(noodles_link_t *link, const noodles_rect_t *rect
                                 uint32_t timeout_ms, int write) {
     if (!link || !pixels || !validate_back_buffer_transfer(rect, host_pitch))
         return fail(EINVAL);
-    if (link->present_pending) return fail(EAGAIN);
+    /* A queued three-buffer flip never involves the back buffer. */
+    if (link->present_pending && link->buffer_count != 3) return fail(EAGAIN);
     if (noodles_link_drain(link, timeout_ms) != 0) return -1;
     uint32_t address = noodles_link_back_buffer(link) +
         (uint32_t)rect->y * NOODLES_BUFFER_PITCH + (uint32_t)rect->x * 4;

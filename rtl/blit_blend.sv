@@ -152,12 +152,14 @@ module blit_blend #(
     );
 
     // ---------------------------------------------------------------
-    // Reservations. px_res counts pixel FIFO slots in use or reserved by
-    // outstanding source bursts; dst_res counts destination FIFO entries
-    // plus outstanding destination words; out_res counts pipeline occupants
-    // plus output FIFO entries.
-    logic [PX_W:0]  px_res;
-    logic [DST_W:0] dst_res;
+    // Reservations. px_space counts pixel FIFO slots neither in use nor
+    // reserved by outstanding source bursts; dst_space counts destination
+    // FIFO capacity not used by entries or outstanding destination words;
+    // out_res counts pipeline occupants plus output FIFO entries. Keeping
+    // free space rather than occupancy lets request formation compare a
+    // burst's size directly, without an adder on the req_len timing path.
+    logic [PX_W:0]  px_space;
+    logic [DST_W:0] dst_space;
     logic [OUT_W:0] out_res;
     logic [TAG_W:0] tag_count;
 
@@ -168,7 +170,7 @@ module blit_blend #(
     logic        prefer_dst;
 
     wire s_ok = !solid_r && s_valid &&
-                ({1'b0, px_res} + (PX_W+2)'(s_px) <= (PX_W+2)'(PX_DEPTH));
+                ((PX_W+1)'(s_px) <= px_space);
     wire        d_pending = fast_alpha_r && partial_pending;
     wire        d_req_valid = d_pending || d_valid;
     wire [31:0] d_req_addr = d_pending ? partial_dst_addr : d_addr;
@@ -176,7 +178,7 @@ module blit_blend #(
     wire        d_req_lo = d_pending ? partial_dst_lo : d_lo;
     wire        d_req_hi = d_pending ? partial_dst_hi : d_hi;
     wire d_ok = d_req_valid &&
-                ({1'b0, dst_res} + (DST_W+2)'(d_req_len) <= (DST_W+2)'(DST_DEPTH));
+                ((DST_W+1)'(d_req_len) <= dst_space);
     // Do not observe a walker's state from the preceding command while the
     // new command's registered setup and walk_start are still in flight.
     wire can_form = busy && prep == 2'd0 && !walk_start && !req_valid &&
@@ -249,7 +251,7 @@ module blit_blend #(
     assign opaque_emit = opaque_stage_valid &&
                          (out_res < (OUT_W+1)'(OUT_DEPTH));
     assign fast_decide = busy && prep == 2'd0 && !walk_start && fast_alpha_r &&
-                         d_valid && d_src_ready && (dst_res == 0) && !launch && !r_dst &&
+                         d_valid && d_src_ready && (dst_space == (DST_W+1)'(DST_DEPTH)) && !launch && !r_dst &&
                          !partial_pending && (!opaque_stage_valid || opaque_emit);
     // In fast mode every classified pair advances immediately. A partial
     // pair retains its address below, so forming that read must not advance
@@ -417,7 +419,7 @@ module blit_blend #(
             req_valid <= 1'b0;
             req_len <= '0; req_addr <= '0;
             prefer_dst <= 1'b1;
-            px_res <= '0; dst_res <= '0; out_res <= '0;
+            px_space <= (PX_W+1)'(PX_DEPTH); dst_space <= (DST_W+1)'(DST_DEPTH); out_res <= '0;
             tag_count <= '0; tag_head <= '0; tag_tail <= '0; beat <= '0; burst_px <= '0;
             r_src <= 1'b0; r_dst <= 1'b0; r_we_lo <= 1'b0; r_we_hi <= 1'b0; r_publish <= 1'b0;
             partial_pending <= 1'b0;
@@ -541,16 +543,16 @@ module blit_blend #(
             px_count <= px_count + (r_publish ? (PX_W+1)'(r_px) : '0)
                                  - (launch_fifo ? (PX_W+1)'(pop_n) : '0)
                                  - (fast_decide ? (PX_W+1)'(d_pop_n) : '0);
-            px_res <= px_res + (s_form ? (PX_W+1)'(s_px) : '0)
-                             - (launch_fifo ? (PX_W+1)'(pop_n) : '0)
-                             - (fast_decide ? (PX_W+1)'(d_pop_n) : '0);
+            px_space <= px_space - (s_form ? (PX_W+1)'(s_px) : '0)
+                                 + (launch_fifo ? (PX_W+1)'(pop_n) : '0)
+                                 + (fast_decide ? (PX_W+1)'(d_pop_n) : '0);
 
             if (r_dst) dw_wp <= dw_wp + 1'b1;
             if (launch) dw_rp <= dw_rp + 1'b1;
             dw_count <= dw_count + (r_dst ? (DST_W+1)'(1) : '0)
                                  - (launch ? (DST_W+1)'(1) : '0);
-            dst_res <= dst_res + (d_form ? (DST_W+1)'(d_req_len) : '0)
-                               - (launch ? (DST_W+1)'(1) : '0);
+            dst_space <= dst_space - (d_form ? (DST_W+1)'(d_req_len) : '0)
+                                   + (launch ? (DST_W+1)'(1) : '0);
 
             if (result_write || opaque_emit) of_wp <= of_wp + 1'b1;
             if (wr_fire) of_rp <= of_rp + 1'b1;

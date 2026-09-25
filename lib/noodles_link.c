@@ -32,6 +32,8 @@
 #define NOODLES_OP_BLIT_BLEND 7u
 #define NOODLES_OP_BLEND_FILL 8u
 #define NOODLES_OP_FILL_BATCH 10u
+#define NOODLES_OP_PRESENT_QUEUED 11u
+#define NOODLES_PRESENT_BARRIER 3u
 #define NOODLES_FENCE_MASK 0x7fffffffu
 // Wait-loop sleep backoff. The minimum covers link_control's 1024-cycle poll
 // period plus a DDR3 round trip, so a liveness ping is normally answered by
@@ -156,6 +158,7 @@ static int initialize_transport(noodles_link_t *link) {
     link->done_baseline = fence_state & NOODLES_FENCE_MASK;
     link->confirmed_done = link->done_baseline;
     link->presents_completed = (fence_state >> 31) & 1u;
+    link->buffer_count = 2;
     if (link->write_ptr >= NOODLES_RING_SLOTS || link->header[2] >= NOODLES_RING_SLOTS)
         return fail(EPROTO);
     if (link->write_ptr != link->header[2]) return fail(EBUSY);
@@ -377,7 +380,8 @@ int noodles_link_poll(noodles_link_t *link, noodles_fence_t target, int *complet
     *complete = reached;
     if (reached && link->present_pending &&
         noodles_link_fence_reached(link, link->present_fence)) {
-        link->presents_completed = (link->header[3] >> 31) & 1u;
+        if (link->buffer_count == 2)
+            link->presents_completed = (link->header[3] >> 31) & 1u;
         link->present_pending = 0;
     }
     return 0;
@@ -491,6 +495,8 @@ static int valid_command(const noodles_link_t *link, const uint32_t *c, int allo
             valid_mode(c[6]) && valid_rect(c[1], c[2], c[3], c[4], allow_managed);
     case NOODLES_OP_PRESENT:
         return !(c[1] | c[2] | c[3] | c[4] | c[5] | c[6] | c[7]);
+    case NOODLES_OP_PRESENT_QUEUED:
+        return c[1] <= NOODLES_PRESENT_BARRIER && !(c[2] | c[3] | c[4] | c[5] | c[6] | c[7]);
     case NOODLES_OP_SPRITE_BATCH:
     case NOODLES_OP_FILL_BATCH:
         return descriptor_table_index(link, c[1], NULL) && c[3] >= 1 &&
@@ -591,16 +597,31 @@ static int ring_has_space(const noodles_link_t *link) {
     return 1;
 }
 
+static uint32_t back_buffer_index(const noodles_link_t *link) {
+    return 3u - link->last_presented - link->previous_presented;
+}
+
+static void publish_command(noodles_link_t *link, const uint32_t command[8]);
+
 static int push_command(noodles_link_t *link, const uint32_t command[8], int allow_managed) {
     if (noodles_link_check(link) != 0) return -1;
     if (!valid_command(link, command, allow_managed)) {
         errno = EINVAL;
         return -1;
     }
-    if (command[0] == NOODLES_OP_PRESENT && link->present_pending)
+    int present_op = command[0] == NOODLES_OP_PRESENT || command[0] == NOODLES_OP_PRESENT_QUEUED;
+    if (present_op && link->present_pending)
         return fail(EAGAIN);
     if (command[0] < 32 && !(link->capabilities & (1u << command[0])))
         return fail(ENOTSUP);
+    /* Each mode presents only through its own opcode, and a queued flip may
+     * show only the current back buffer. */
+    if (link->buffer_count == 3 ? command[0] == NOODLES_OP_PRESENT
+                                : command[0] == NOODLES_OP_PRESENT_QUEUED)
+        return fail(EINVAL);
+    if (command[0] == NOODLES_OP_PRESENT_QUEUED && command[1] != NOODLES_PRESENT_BARRIER &&
+        command[1] != back_buffer_index(link))
+        return fail(EINVAL);
     uint32_t op = command[0] & 0xffu;
     int is_batch = op == NOODLES_OP_SPRITE_BATCH || op == NOODLES_OP_FILL_BATCH;
     unsigned table_index = 0;
@@ -609,6 +630,20 @@ static int push_command(noodles_link_t *link, const uint32_t command[8], int all
         if (!descriptor_available(link, table_index)) return -1;
     }
     if (!ring_has_space(link)) return -1;
+    if (is_batch) {
+        link->batch_pending |= UINT64_C(1) << table_index;
+        link->next_descriptor_table =
+            (table_index + 1) % descriptor_table_count(link);
+    }
+    publish_command(link, command);
+    if (is_batch)
+        link->batch_fence[table_index] = noodles_link_last_fence(link);
+    return 0;
+}
+
+/* Writes a validated command to the next ring slot and records the
+ * presentation state it creates. The caller has checked ring space. */
+static void publish_command(noodles_link_t *link, const uint32_t command[8]) {
     uint32_t next_write_ptr = (link->write_ptr + 1) % NOODLES_RING_SLOTS;
 
     volatile uint32_t *slot = link->slots + link->write_ptr * NOODLES_SLOT_WORDS;
@@ -618,18 +653,20 @@ static int push_command(noodles_link_t *link, const uint32_t command[8], int all
     link->header[0] = next_write_ptr;  // publish: FPGA can now see and fetch it
     link->write_ptr = next_write_ptr;
     link->submitted += 1;
-    if (is_batch) {
-        link->batch_fence[table_index] =
-            (link->done_baseline + link->submitted) & NOODLES_FENCE_MASK;
-        link->batch_pending |= UINT64_C(1) << table_index;
-        link->next_descriptor_table =
-            (table_index + 1) % descriptor_table_count(link);
-    }
-    if (command[0] == NOODLES_OP_PRESENT) {
+    if (command[0] == NOODLES_OP_PRESENT || command[0] == NOODLES_OP_PRESENT_QUEUED) {
         link->present_fence = noodles_link_last_fence(link);
         link->present_pending = 1;
     }
-    return 0;
+    if (command[0] == NOODLES_OP_PRESENT_QUEUED) {
+        if (command[1] == NOODLES_PRESENT_BARRIER) {
+            /* No flip is pending once the barrier is accepted, so both
+             * buffers other than the front are free. */
+            link->previous_presented = (link->last_presented + 1) % 3u;
+        } else {
+            link->previous_presented = link->last_presented;
+            link->last_presented = command[1];
+        }
+    }
 }
 
 int noodles_push_command(noodles_link_t *link, const uint32_t command[8]) {
@@ -778,10 +815,49 @@ uint32_t noodles_link_done_count(const noodles_link_t *link) {
 
 int noodles_push_present(noodles_link_t *link, noodles_fence_t *fence) {
     if (!fence) return fail(EINVAL);
+    if (noodles_link_check(link) != 0) return -1;
+    if (link->buffer_count == 3) {
+        const uint32_t command[8] = {NOODLES_OP_PRESENT_QUEUED, back_buffer_index(link),
+                                     0, 0, 0, 0, 0, 0};
+        const uint32_t barrier[8] = {NOODLES_OP_PRESENT_QUEUED, NOODLES_PRESENT_BARRIER,
+                                     0, 0, 0, 0, 0, 0};
+        if (link->present_pending) return fail(EAGAIN);
+        /* The first queued flip and its barrier are published together. */
+        const uint32_t needed = link->three_buffer_primed ? 1u : 2u;
+        for (uint32_t i = 1; i <= needed; ++i)
+            if ((link->write_ptr + i) % NOODLES_RING_SLOTS == link->header[2])
+                return fail(EAGAIN);
+        publish_command(link, command);
+        if (!link->three_buffer_primed) {
+            publish_command(link, barrier);
+            link->three_buffer_primed = 1;
+        }
+        *fence = noodles_link_last_fence(link);
+        return 0;
+    }
     const uint32_t command[8] = {NOODLES_OP_PRESENT, 0, 0, 0, 0, 0, 0, 0};
     if (noodles_push_command(link, command) != 0) return -1;
     *fence = noodles_link_last_fence(link);
     return 0;
+}
+
+int noodles_link_enable_three_buffers(noodles_link_t *link) {
+    if (noodles_link_check(link) != 0) return -1;
+    if (link->buffer_count == 3) return 0;
+    if (!(link->capabilities & NOODLES_CAP_QUEUED_PRESENT)) return fail(ENOTSUP);
+    if (link->present_pending) return fail(EAGAIN);
+    /* The fence parity reports B as front, or A or C otherwise. Start with a
+     * buffer that is certainly not front; the first queued flip's barrier
+     * then retires whichever buffer was front before rotation relies on it. */
+    link->last_presented = link->presents_completed ? 1u : 0u;
+    link->previous_presented = link->presents_completed ? 0u : 2u;
+    link->three_buffer_primed = 0;
+    link->buffer_count = 3;
+    return 0;
+}
+
+int noodles_link_buffer_count(const noodles_link_t *link) {
+    return link && link->buffer_count == 3 ? 3 : 2;
 }
 
 int noodles_present_and_wait(noodles_link_t *link) {
@@ -791,6 +867,11 @@ int noodles_present_and_wait(noodles_link_t *link) {
 }
 
 uint32_t noodles_link_back_buffer(const noodles_link_t *link) {
+    if (link->buffer_count == 3) {
+        static const uint32_t buffers[3] = {NOODLES_BUFFER_A_ADDR, NOODLES_BUFFER_B_ADDR,
+                                            NOODLES_BUFFER_C_ADDR};
+        return buffers[back_buffer_index(link)];
+    }
     uint32_t parity = link->presents_completed ^ (link->present_pending ? 1u : 0u);
     return parity ? NOODLES_BUFFER_A_ADDR : NOODLES_BUFFER_B_ADDR;
 }

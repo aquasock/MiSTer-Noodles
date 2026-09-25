@@ -64,6 +64,7 @@ Current fixed uses (end addresses are exclusive):
 | `[0x31000000, 0x311d4c00)` | 800x600 buffer A pixels; within its fixed 2MiB slot beginning at `0x31000000`. |
 | `[0x31200000, 0x313d4c00)` | 800x600 buffer B pixels; within its fixed 2MiB slot beginning at `0x31200000`. |
 | `0x31400000` and tool-specific addresses | Demo scratch/assets, not an allocator or a promise of available capacity. |
+| `[0x31600000, 0x317d4c00)` | Protocol 1.7 800x600 buffer C pixels, used only by queued three-buffer flips (OUT-013); not scratch while such a client is displaying. |
 | `[0x32000000, 0x40000000)` | SDK 0.3 managed-surface arena; 224MiB, excluded from raw SDK commands and uploads. |
 
 Leave the control-memory neighborhood and both 2MiB scanout slots reserved;
@@ -122,6 +123,7 @@ limits, not a promise that every representable rectangle is safe.
 | 7 | BLIT_BLEND | As COPY, with alpha modulation in word 5 bits 7:0 and bits 31:8 zero. Straight-alpha source-over per BLIT-007; source and destination must not overlap. Protocol 1.1 cores only (capability bit 7). |
 | 8 | BLEND_FILL | Words 1-4 describe the destination; word 5 is one constant straight-RGBA source colour; word 6 is a validated explicit blend mode; word 7 is zero. Reads the destination but no source surface. Protocol 1.4 cores only (capability bit 8). |
 | 10 | FILL_BATCH | Word 1 selects a descriptor table exactly as SPRITE_BATCH and word 3 is descriptor count, 1-64. Other words zero. Protocol 1.6 and newer cores only (capability bit 10). |
+| 11 | PRESENT_QUEUED | Word 1 is display buffer 0-2 (A, B, C) or 3 for a flip barrier; others zero. Waits unaccepted while a flip is pending, then completes on acceptance while the flip happens at the next vblank; a barrier completes without flipping. Protocol 1.7 and newer cores only (capability bit 11). |
 
 Bytes beyond the requested length in the last SDRAM page are not valid
 copied data; the loader can flush stale page-buffer contents there.

@@ -69,6 +69,11 @@ module emu
 // down for the full sizing/placement rationale.
 localparam logic [31:0] BUFFER_A_ADDR = 32'h3100_0000;
 localparam logic [31:0] BUFFER_B_ADDR = 32'h3120_0000;
+localparam logic [31:0] BUFFER_C_ADDR = 32'h3160_0000;  // OUT-013 third buffer
+
+// Declared ahead of their first use; present.sv drives them (OUT-004/OUT-013).
+wire       present_retired;
+wire [1:0] front_idx;
 
 assign ADC_BUS  = 'Z;
 assign USER_OUT = '1;
@@ -101,7 +106,8 @@ wire [31:0] blit_any_dst_addr;
 reg dst_addr_wrong_ever;
 always @(posedge clk_sys or posedge reset)
 	if (reset) dst_addr_wrong_ever <= 1'b0;
-	else if (blit_any_start && blit_any_dst_addr != BUFFER_A_ADDR && blit_any_dst_addr != BUFFER_B_ADDR)
+	else if (blit_any_start && blit_any_dst_addr != BUFFER_A_ADDR && blit_any_dst_addr != BUFFER_B_ADDR &&
+	         blit_any_dst_addr != BUFFER_C_ADDR)
 		dst_addr_wrong_ever <= 1'b1;
 
 assign LED_DISK = dst_addr_wrong_ever;
@@ -119,12 +125,12 @@ assign LED_POWER = {1'b1, link_dispatch_ever};
 assign BUTTONS = 0;
 
 // Keep the framebuffer path enabled from reset so ascal can acknowledge its
-// first FB_BASE latch; FB_FORCE_BLANK remains asserted until a PRESENT has
-// completed, so uninitialized memory is never displayed.
+// first FB_BASE latch; FB_FORCE_BLANK remains asserted until a flip of
+// either kind has retired, so uninitialized memory is never displayed.
 reg present_done_ever;
 always @(posedge clk_sys or posedge reset)
 	if (reset) present_done_ever <= 1'b0;
-	else if (present_done) present_done_ever <= 1'b1;
+	else if (present_retired) present_done_ever <= 1'b1;
 
 // LED_USER: latches solid the first time blit_start fires for any reason --
 // a basic "has the fill engine ever run" health indicator. Was originally
@@ -143,14 +149,17 @@ always @(posedge clk_sys or posedge reset)
 // ring (header+slots, a few KB, at 0x30020000+). NOT based at 0x20000000,
 // see SURF-004: MiSTer's own system video scaler uses physical byte
 // 0x20000000 as its RAM base, a real collision the MiSTer-Raster project
-// hit and fixed on this exact platform. front_sel (from present.sv,
-// flipped by PRESENT) selects which buffer FB_BASE currently points at;
-// the host draws into whichever one is NOT front.
+// hit and fixed on this exact platform. front_idx (from present.sv,
+// changed by PRESENT or PRESENT_QUEUED) selects which buffer FB_BASE
+// currently points at; the host draws into a buffer that is neither front
+// nor awaiting a flip. BUFFER_C (OUT-013) occupies the free 2MB slot after
+// the 0x31400000 tool scratch slot and is used only by queued flips.
 assign FB_EN = 1'b1;
 assign FB_FORMAT = {2'b00, 3'b110};
 assign FB_WIDTH = 12'd800;
 assign FB_HEIGHT = 12'd600;
-assign FB_BASE = front_sel ? BUFFER_B_ADDR : BUFFER_A_ADDR;
+assign FB_BASE = front_idx == 2'd2 ? BUFFER_C_ADDR :
+                 front_idx == 2'd1 ? BUFFER_B_ADDR : BUFFER_A_ADDR;
 assign FB_STRIDE = 14'd3200;
 assign FB_FORCE_BLANK = ~present_done_ever;
 
@@ -269,14 +278,17 @@ link_control link_control
 	.session_active  (link_session_active)
 );
 
-// OUT-004: double-buffer flip. present.sv owns front_sel (which of
-// BUFFER_A/BUFFER_B is currently scanned out) and only changes it synced to
+// OUT-004/OUT-013: display flip. present.sv owns front_idx (which of
+// BUFFER_A/B/C is currently scanned out) and only changes it synced to
 // FB_VBL, the framework's vertical blank signal -- safe to sample directly
 // with no cross-clock synchronizer since CLK_VIDEO (this core's own output,
 // tied to clk_sys below) is what the framework uses to generate it in the
 // first place, so present.sv's own clk IS that same domain.
-wire present_start, present_busy, present_done;
-wire front_sel;
+wire present_start, present_queued, present_accept, present_busy, present_done;
+wire [1:0] present_target;
+// Legacy fence parity (OUT-012) reports B as front; A and C both read as 0,
+// which keeps a legacy client's next draw off the scanned-out buffer.
+wire front_sel = front_idx == 2'd1;
 
 present #(
 	.RETIRE_VBLANKS(0)
@@ -287,9 +299,12 @@ present #(
 	.fb_vbl    (FB_VBL),
 	.fb_retired(FB_RETIRED),
 	.start     (present_start),
+	.queued    (present_queued),
+	.target    (present_target),
 	.busy      (present_busy),
 	.done      (present_done),
-	.front_sel (front_sel)
+	.retired   (present_retired),
+	.front_idx (front_idx)
 );
 
 // LINK-005: completion fence. blit_done/copy_done/present_done fire once
@@ -304,10 +319,12 @@ present #(
 // internally executes many descriptor copies.  Omitting it leaves the host
 // fence unchanged, so sprite-demo's one-descriptor diagnostic waits forever
 // and a following PRESENT can never retire.
+// A queued PRESENT (OUT-013) completes its command on acceptance through
+// present_accept; its background flip and retirement advance nothing.
 // A blend launched by sprite_batch is one descriptor of a batch, not a
 // command of its own; only CMDQ-launched BLIT_BLENDs advance the fence.
 wire cmd_done_pulse = (blit_done && !fill_batch_busy) || copy_done || batch_done ||
-                      fill_batch_done || present_done || loader_done ||
+                      fill_batch_done || present_done || present_accept || loader_done ||
                       (blend_done && !batch_busy);
 
 wire [31:0] fence_wr_addr, fence_wr_data;
@@ -372,6 +389,9 @@ cmdq cmdq
 	.fill_batch_busy(fill_batch_busy),
 	.fill_batch_done(fill_batch_done),
 	.present_start  (present_start),
+	.present_queued (present_queued),
+	.present_target (present_target),
+	.present_accept (present_accept),
 	.present_busy  (present_busy),
 	.present_done  (present_done),
 	.loader_start   (loader_start),
@@ -576,19 +596,39 @@ wire [63:0] adapter_wr64_data = wr_sel_blend ? blend_wr64_data :
 // blit_copy's idle address's bit[2] instead of link's own pinned request
 // address, silently handing link_ring the WRONG half of the 64-bit DDRAM
 // word it had actually asked for.
+//
+// Engine clients (batch, fill_batch, blend, loader, copy) never overlap:
+// CMDQ runs one engine command at a time, sprite_batch reads its next
+// descriptor only after the copy or blend it launched is done, and each
+// client's rd_active or busy spans every outstanding response. Their owner
+// is therefore taken from a register, one cycle after the client becomes
+// active, instead of a combinational priority chain: the chain placed
+// fill_batch's state on the rd64_len -> rd64_ready -> blit_copy64 commit
+// path and failed 100MHz setup (OUT-013 build). A request simply waits one
+// cycle for its grant; control and link keep combinational priority, and
+// they use the port only while CMDQ is idle.
+localparam logic [2:0] RD_OWNER_COPY = 3'd0, RD_OWNER_BATCH = 3'd1,
+                       RD_OWNER_FILL_BATCH = 3'd2, RD_OWNER_BLEND = 3'd3,
+                       RD_OWNER_LOADER = 3'd4;
+reg [2:0] rd_owner;
+always @(posedge clk_sys or posedge reset)
+	if (reset) rd_owner <= RD_OWNER_COPY;
+	else rd_owner <= batch_rd_active      ? RD_OWNER_BATCH :
+	                 fill_batch_rd_active ? RD_OWNER_FILL_BATCH :
+	                 blend_busy           ? RD_OWNER_BLEND :
+	                 loader_rd64_active   ? RD_OWNER_LOADER : RD_OWNER_COPY;
 wire        rd_sel_control = control_rd_active;
 wire        rd_sel_link = !rd_sel_control && link_rd_active;
-wire        rd_sel_batch = !rd_sel_control && !rd_sel_link && batch_rd_active;
-wire        rd_sel_fill_batch = !rd_sel_control && !rd_sel_link && !rd_sel_batch &&
-                                fill_batch_rd_active;
+wire        rd_sel_engine = !rd_sel_control && !rd_sel_link;
+wire        rd_sel_batch = rd_sel_engine && rd_owner == RD_OWNER_BATCH;
+wire        rd_sel_fill_batch = rd_sel_engine && rd_owner == RD_OWNER_FILL_BATCH;
 // Sprite reads remain on the hardware-proven DDR3 burst path. SDR-008
 // removes the SDRAM CDC overhead without changing this routing choice;
 // the optional SDRAM path still performs four 16-bit reads per pair.
 wire        rd_sel_batch64 = rd_sel_batch && batch_rd64_en;
 // blit_blend holds busy until every requested beat has returned, so busy
 // spans all of its REQ+WAIT windows (DDR-005).
-wire        rd_sel_blend = !rd_sel_control && !rd_sel_link && !rd_sel_batch &&
-                           !rd_sel_fill_batch && blend_busy;
+wire        rd_sel_blend = rd_sel_engine && rd_owner == RD_OWNER_BLEND;
 wire        rd_sel_blend64 = rd_sel_blend && blend_rd64_en;
 // SDR-003 (step 5a): sdram_loader's fill side is a rd64-only client (it
 // never uses the 32-bit rd/rd_addr path at all), given lowest priority
@@ -601,10 +641,11 @@ wire        rd_sel_blend64 = rd_sel_blend && blend_rd64_en;
 // drops the moment the loader moves into its WAIT state to await
 // rd64_valid, and if the mux fell through then, adapter_rd64_valid/data
 // would be silently misrouted or dropped for that response.
-wire        rd_sel_loader64 = !rd_sel_control && !rd_sel_link && !rd_sel_batch &&
-                              !rd_sel_fill_batch && !rd_sel_blend && loader_rd64_active;
-wire        rd_sel_copy = !rd_sel_control && !rd_sel_link && !rd_sel_batch &&
-                          !rd_sel_fill_batch && !rd_sel_blend && !rd_sel_loader64;
+// The loader drives adapter_rd64_en through this select, so it must also
+// drop with loader_rd64_active rather than one cycle later with rd_owner.
+wire        rd_sel_loader64 = rd_sel_engine && rd_owner == RD_OWNER_LOADER &&
+                              loader_rd64_active;
+wire        rd_sel_copy = rd_sel_engine && rd_owner == RD_OWNER_COPY;
 wire [31:0] adapter_rd_addr = rd_sel_control ? control_rd_addr :
                               rd_sel_link ? link_rd_addr :
                               rd_sel_batch ? batch_rd_addr :

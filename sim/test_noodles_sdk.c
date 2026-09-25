@@ -267,6 +267,84 @@ int main(void) {
     assert(noodles_push_present(a, &second_fence) == 0);
     closed(a);
 
+    /* OUT-013 three-buffer mode: capability-gated, one-way, rotating the
+     * back buffer through A, B and C with a barrier after the first flip. */
+    memory[0] = memory[2] = memory[3] = 0;
+    seed_identity();
+    complete_on_sleep = 1;
+    a = open_verified();
+    assert(noodles_link_buffer_count(a) == 2);
+    assert(noodles_link_enable_three_buffers(a) == -1 && errno == ENOTSUP);
+    assert(noodles_push_present(a, &fence) == 0);
+    closed(a);
+    memory[0] = memory[2] = memory[3] = 0;
+    seed_identity();
+    memory[6] = 0xffe;
+    complete_on_sleep = 0;
+    a = open_verified();
+    assert(noodles_push_present(a, &fence) == 0);
+    assert(noodles_link_enable_three_buffers(a) == -1 && errno == EAGAIN);
+    memory[2] = memory[0];
+    memory[3] = 0x80000000u | fence;  /* the legacy flip showed B */
+    assert(noodles_link_wait(a, fence, 10) == 0);
+    closed(a);
+    /* Parity 0 means A or C may be front: start with B. */
+    memory[0] = memory[2] = memory[3] = 0;
+    seed_identity();
+    memory[6] = 0xffe;
+    a = open_verified();
+    assert(noodles_link_enable_three_buffers(a) == 0 && noodles_link_buffer_count(a) == 3);
+    assert(noodles_link_enable_three_buffers(a) == 0);
+    assert(noodles_link_back_buffer(a) == NOODLES_BUFFER_B_ADDR);
+    const uint32_t legacy_present[8] = {4, 0, 0, 0, 0, 0, 0, 0};
+    const uint32_t queued_a[8] = {11, 0, 0, 0, 0, 0, 0, 0};
+    assert(noodles_push_command(a, legacy_present) == -1 && errno == EINVAL);
+    assert(noodles_push_command(a, queued_a) == -1 && errno == EINVAL);
+    uint32_t present_slot = memory[0];
+    assert(noodles_push_present(a, &fence) == 0);
+    assert(memory[1024 + present_slot * 8] == 11 && memory[1024 + present_slot * 8 + 1] == 1);
+    assert(memory[1024 + (present_slot + 1) % 64 * 8] == 11 && memory[1024 + (present_slot + 1) % 64 * 8 + 1] == 3);
+    assert(fence == noodles_link_last_fence(a) && memory[0] == (present_slot + 2) % 64);
+    assert(noodles_link_back_buffer(a) == NOODLES_BUFFER_A_ADDR);
+    assert(noodles_push_present(a, &second_fence) == -1 && errno == EAGAIN);
+    const uint32_t fill_a[8] = {1, NOODLES_BUFFER_A_ADDR, 3200, 800, 600, 0, 0, 0};
+    assert(noodles_push_command(a, fill_a) == 0);
+    /* Back-buffer CPU transfers are allowed while the queued flip waits. */
+    complete_on_sleep = 1;
+    const noodles_rect_t queued_rect = {1, 2, 3, 1};
+    const uint32_t queued_pixels[3] = {1, 2, 3};
+    assert(noodles_back_buffer_update(a, &queued_rect, queued_pixels, 12, 10) == 0);
+    assert(noodles_link_wait(a, fence, 10) == 0);
+    const uint32_t expected_rotation[] = {0, 2, 1, 0, 2};
+    const uint32_t next_back[] = {NOODLES_BUFFER_C_ADDR, NOODLES_BUFFER_B_ADDR,
+                                  NOODLES_BUFFER_A_ADDR, NOODLES_BUFFER_C_ADDR,
+                                  NOODLES_BUFFER_B_ADDR};
+    for (unsigned i = 0; i < 5; ++i) {
+        present_slot = memory[0];
+        assert(noodles_push_present(a, &fence) == 0);
+        assert(memory[1024 + present_slot * 8] == 11 &&
+               memory[1024 + present_slot * 8 + 1] == expected_rotation[i]);
+        assert(memory[0] == (present_slot + 1) % 64);  /* no further barrier */
+        assert(noodles_link_back_buffer(a) == next_back[i]);
+        assert(noodles_link_wait(a, fence, 10) == 0);
+    }
+    closed(a);
+    /* Parity 1 means B is front: start with C; once the barrier has
+     * retired B it is free again, then A follows. */
+    memory[0] = memory[2] = 0;
+    memory[3] = 0x80000000u;
+    seed_identity();
+    memory[6] = 0xffe;
+    a = open_verified();
+    assert(noodles_link_enable_three_buffers(a) == 0);
+    assert(noodles_link_back_buffer(a) == NOODLES_BUFFER_C_ADDR);
+    assert(noodles_push_present(a, &fence) == 0);
+    assert(noodles_link_back_buffer(a) == NOODLES_BUFFER_B_ADDR);
+    assert(noodles_link_wait(a, fence, 10) == 0);
+    assert(noodles_push_present(a, &fence) == 0);
+    assert(noodles_link_back_buffer(a) == NOODLES_BUFFER_A_ADDR);
+    closed(a);
+
     memset(memory, 0, sizeof(memory));
     control_active = 0;
     memory[3] = 0x7ffffffeu;

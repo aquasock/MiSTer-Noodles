@@ -8,15 +8,16 @@
 extern "C" {
 #endif
 
-#define NOODLES_SDK_VERSION "0.11.0"
+#define NOODLES_SDK_VERSION "0.12.0"
 /* Newest protocol this SDK knows. Verified open accepts any 1.x core;
  * optional operations are gated by capability bits and minor revision
  * (LINK-016). */
-#define NOODLES_PROTOCOL_VERSION 0x00010006u
+#define NOODLES_PROTOCOL_VERSION 0x00010007u
 #define NOODLES_CAP_BLIT_BLEND (1u << 7)
 #define NOODLES_CAP_BLEND_FILL (1u << 8)
 #define NOODLES_CAP_DESCRIPTOR_RING (1u << 9)
 #define NOODLES_CAP_FILL_BATCH (1u << 10)
+#define NOODLES_CAP_QUEUED_PRESENT (1u << 11)
 
 /* Sprite descriptor flags (BLIT-006, BLIT-008). BLEND/MIRROR_X/MIRROR_Y make
  * a flagged draw: its colorkey field is then an RGBA modulation (R in bits
@@ -93,6 +94,7 @@ enum {
                             NOODLES_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, NOODLES_BLENDOP_ADD)
 #define NOODLES_BUFFER_A_ADDR 0x31000000u
 #define NOODLES_BUFFER_B_ADDR 0x31200000u
+#define NOODLES_BUFFER_C_ADDR 0x31600000u
 #define NOODLES_BUFFER_PITCH 3200u
 #define NOODLES_BUFFER_WIDTH 800u
 #define NOODLES_BUFFER_HEIGHT 600u
@@ -196,6 +198,20 @@ int noodles_push_load_sdram(noodles_link_t *link, uint32_t sdram_dst_addr,
  * tracking after retirement. Never resubmit on ETIMEDOUT. */
 int noodles_push_present(noodles_link_t *link, noodles_fence_t *fence);
 int noodles_present_and_wait(noodles_link_t *link);
+
+/* Three-buffer presentation (OUT-013, protocol 1.7). One-way for the
+ * handle: ENOTSUP without NOODLES_CAP_QUEUED_PRESENT, EAGAIN while a
+ * PRESENT is pending. Afterwards noodles_link_back_buffer() rotates buffers
+ * A, B and C and noodles_push_present() queues the flip. Its fence
+ * completes when the core accepts it, once the previous flip has retired,
+ * rather than at the flip, and later commands run while the flip waits for
+ * vertical blank. The first queued PRESENT of a handle is followed by a
+ * flip barrier, so the second frame's commands start only after the first
+ * flip retires. Back-buffer CPU transfers remain allowed while a queued
+ * flip is pending; raw legacy PRESENT commands are rejected. */
+int noodles_link_enable_three_buffers(noodles_link_t *link);
+/* 2 until noodles_link_enable_three_buffers() succeeds, then 3. */
+int noodles_link_buffer_count(const noodles_link_t *link);
 
 /* Upload excludes control memory except descriptor tables supported by the
  * attached core, which are ownership-protected, and excludes the managed arena. */

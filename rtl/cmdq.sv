@@ -3,7 +3,8 @@
 // (SOLID_FILL), blit_copy (BLIT_COPY / BLIT_COPY_KEY -- both dispatch to
 // the same engine, differing only in whether colorkey transparency is on),
 // blit_blend (BLIT_BLEND / BLEND_FILL -- BLIT-007/BLIT-010), fill_batch
-// (FILL_BATCH), or present (PRESENT, the double-buffer flip -- OUT-004).
+// (FILL_BATCH), or present (PRESENT, the double-buffer flip -- OUT-004;
+// PRESENT_QUEUED, the three-buffer flip -- OUT-013).
 //
 // ai/core-reference.md CMDQ-001 defines the command slot layout this module
 // decodes; BLIT-002/BLIT-003/BLIT-006/BLIT-007 define what each BLIT opcode's fields
@@ -67,6 +68,9 @@ module cmdq #(
     input  logic                  fill_batch_done,
 
     output logic                  present_start,
+    output logic                  present_queued,
+    output logic [1:0]            present_target,
+    output logic                  present_accept,  // queued flip's command completion
     input  logic                  present_busy,
     input  logic                  present_done,
 
@@ -96,6 +100,9 @@ module cmdq #(
     // byte address (must be page-aligned, see sdram_loader.sv's header)
     // and color as the 32-bit byte length to copy; dst_pitch/width/height
     // are unused.
+    // PRESENT_QUEUED (OUT-013) carries the target display buffer index 0-2
+    // in dst_addr; other fields are zero. Index 3 is a flip barrier: it is
+    // accepted once no flip is pending and completes without flipping.
     localparam logic [7:0] OP_SOLID_FILL    = 8'h01;
     localparam logic [7:0] OP_BLIT_COPY     = 8'h02;
     localparam logic [7:0] OP_BLIT_COPY_KEY = 8'h03;
@@ -105,6 +112,7 @@ module cmdq #(
     localparam logic [7:0] OP_BLIT_BLEND    = 8'h07;
     localparam logic [7:0] OP_BLEND_FILL    = 8'h08;
     localparam logic [7:0] OP_FILL_BATCH    = 8'h0a;
+    localparam logic [7:0] OP_PRESENT_QUEUED = 8'h0b;
     localparam logic [31:0] DESCRIPTOR_BASE = 32'h3002_2000;
     localparam logic [31:0] DESCRIPTOR_END  = 32'h3004_2000;
 
@@ -117,11 +125,18 @@ module cmdq #(
     wire [31:0] c_src_addr  = cmd_data[223:192];
     wire [15:0] c_src_pitch = cmd_data[239:224];
 
-    typedef enum logic {IDLE, WAIT_DONE} state_t;
+    typedef enum logic [1:0] {IDLE, WAIT_DONE, ACCEPT_PRESENT} state_t;
     state_t state;
 
+    // A PRESENT of either kind waits in IDLE, without being accepted, while
+    // an earlier flip is still pending; other commands proceed.
+    wire present_op = op == OP_PRESENT || op == OP_PRESENT_QUEUED;
+    wire present_blocked = present_op && present_busy;
+
+    // ENGINE_NONE follows a queued PRESENT: its flip runs in the background,
+    // so nothing holds CMDQ once the command has been accepted.
     typedef enum logic [2:0] {ENGINE_BLIT, ENGINE_COPY, ENGINE_PRESENT, ENGINE_BATCH, ENGINE_LOAD,
-                              ENGINE_BLEND, ENGINE_FILL_BATCH} engine_t;
+                              ENGINE_BLEND, ENGINE_FILL_BATCH, ENGINE_NONE} engine_t;
     engine_t active_engine;
     logic engine_done_seen;
     wire engine_busy = (active_engine == ENGINE_COPY)    ? copy_busy :
@@ -129,12 +144,14 @@ module cmdq #(
                         (active_engine == ENGINE_BATCH) ? batch_busy :
                         (active_engine == ENGINE_FILL_BATCH) ? fill_batch_busy :
                         (active_engine == ENGINE_LOAD) ? loader_busy :
+                        (active_engine == ENGINE_NONE) ? 1'b0 :
                         (active_engine == ENGINE_BLEND) ? blend_busy : blit_busy;
     wire engine_done = (active_engine == ENGINE_COPY)    ? copy_done :
                         (active_engine == ENGINE_PRESENT) ? present_done :
                         (active_engine == ENGINE_BATCH) ? batch_done :
                        (active_engine == ENGINE_FILL_BATCH) ? fill_batch_done :
                         (active_engine == ENGINE_LOAD) ? loader_done :
+                        (active_engine == ENGINE_NONE) ? 1'b0 :
                         (active_engine == ENGINE_BLEND) ? blend_done : blit_done;
 
     always_ff @(posedge clk or posedge reset) begin
@@ -170,6 +187,9 @@ module cmdq #(
             fill_batch_base <= '0;
             fill_batch_count <= '0;
             present_start  <= 1'b0;
+            present_queued <= 1'b0;
+            present_target <= 2'd0;
+            present_accept <= 1'b0;
             loader_start    <= 1'b0;
             loader_src_addr <= '0;
             loader_dst_addr <= '0;
@@ -179,6 +199,7 @@ module cmdq #(
             copy_start    <= 1'b0;
             blend_start   <= 1'b0;
             present_start <= 1'b0;
+            present_accept <= 1'b0;
             batch_start    <= 1'b0;
             fill_batch_start <= 1'b0;
             loader_start   <= 1'b0;
@@ -186,7 +207,7 @@ module cmdq #(
             unique case (state)
                 IDLE: begin
                     // Unknown opcodes are accepted and dropped.
-                    if (cmd_valid && !blit_busy && !copy_busy && !present_busy && !blend_busy) begin
+                    if (cmd_valid && !blit_busy && !copy_busy && !blend_busy && !present_blocked) begin
                         if (op == OP_SOLID_FILL) begin
                             blit_dst_addr  <= c_dst_addr;
                             blit_dst_pitch <= c_dst_pitch;
@@ -236,8 +257,15 @@ module cmdq #(
                             state          <= WAIT_DONE;
                         end else if (op == OP_PRESENT) begin
                             present_start <= 1'b1;
+                            present_queued <= 1'b0;
                             active_engine <= ENGINE_PRESENT;
                             state         <= WAIT_DONE;
+                        end else if (op == OP_PRESENT_QUEUED && c_dst_addr <= 32'd3) begin
+                            present_start  <= c_dst_addr != 32'd3;
+                            present_queued <= 1'b1;
+                            present_target <= c_dst_addr[1:0];
+                            active_engine  <= ENGINE_NONE;
+                            state          <= ACCEPT_PRESENT;
                         end else if (op == OP_SPRITE_BATCH && c_width != 0 && c_width <= 64 &&
                                      c_dst_addr >= DESCRIPTOR_BASE &&
                                      c_dst_addr < DESCRIPTOR_END &&
@@ -269,6 +297,13 @@ module cmdq #(
                     end
                 end
 
+                // present sees start this cycle and is busy from the next,
+                // which is when IDLE can first consider another PRESENT.
+                ACCEPT_PRESENT: begin
+                    present_accept <= 1'b1;
+                    state          <= IDLE;
+                end
+
                 WAIT_DONE: begin
                     if (engine_done) engine_done_seen <= 1'b1;
                     if ((engine_done || engine_done_seen) && memory_idle) begin
@@ -282,6 +317,6 @@ module cmdq #(
         end
     end
 
-    assign cmd_ready = (state == IDLE) && !engine_busy;
+    assign cmd_ready = (state == IDLE) && !engine_busy && !present_blocked;
 
 endmodule

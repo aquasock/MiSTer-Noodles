@@ -6,8 +6,9 @@
 fence as completed. Protocol 1.1 cores add opcode 7, BLIT_BLEND; 1.2 cores add
 flagged batch draws (blend, mirroring and RGBA modulation per draw); 1.3 cores
 add explicit blend modes per draw; 1.4 cores add opcode 8, BLEND_FILL; and
-1.5 cores add a 64-table descriptor ring; and 1.6 cores add opcode 10,
-FILL_BATCH.
+1.5 cores add a 64-table descriptor ring; 1.6 cores add opcode 10,
+FILL_BATCH; and 1.7 cores add opcode 11, PRESENT_QUEUED, with a third display
+buffer.
 Framebuffer geometry and the 100MHz core clock are unchanged.
 
 Use `noodles_link_open()` for the stage-2B core. The explicit
@@ -59,8 +60,8 @@ little-endian 32-bit words.
 | Address | Owner | Meaning |
 |---|---|---|
 | `0x30020010` | FPGA | Magic `0x4e444c53`. Published last during initialization. |
-| `0x30020014` | FPGA | Protocol version, major in bits 31:16 and minor in 15:0; `0x00010006` with FILL_BATCH, `0x00010005` with the descriptor ring, `0x00010004` with BLEND_FILL, `0x00010003` with explicit blend modes, `0x00010002` with flagged batch draws, `0x00010001` with BLIT_BLEND only, `0x00010000` before. |
-| `0x30020018` | FPGA | Capability bits: `0x000007fe` adds bit 10 for FILL_BATCH; bit 9 advertises the descriptor ring; bit N advertises opcode N for bits 1-8. Older cores publish `0x000003fe`, `0x000001fe`, `0x000000fe` or `0x0000007e`. |
+| `0x30020014` | FPGA | Protocol version, major in bits 31:16 and minor in 15:0; `0x00010007` with PRESENT_QUEUED, `0x00010006` with FILL_BATCH, `0x00010005` with the descriptor ring, `0x00010004` with BLEND_FILL, `0x00010003` with explicit blend modes, `0x00010002` with flagged batch draws, `0x00010001` with BLIT_BLEND only, `0x00010000` before. |
+| `0x30020018` | FPGA | Capability bits: `0x00000ffe` adds bit 11 for PRESENT_QUEUED; `0x000007fe` adds bit 10 for FILL_BATCH; bit 9 advertises the descriptor ring; bit N advertises opcode N for bits 1-8. Older cores publish `0x000003fe`, `0x000001fe`, `0x000000fe` or `0x0000007e`. |
 | `0x3002001c` | FPGA | Width in bits 31:16, height in bits 15:0. |
 | `0x30020020` | FPGA | Framebuffer pitch in bytes. |
 | `0x30020028/2c` | Host | 64-bit request token, low word then high word. |
@@ -173,6 +174,21 @@ of arbitrary caller-owned memory. This also applies to raw opcode-4
 submissions. The convenience `noodles_present_and_wait()` submits once and
 waits up to 2000ms.
 
+On protocol 1.7 cores, `noodles_link_enable_three_buffers()` switches a handle
+to three display buffers (OUT-013). The switch is one-way, needs
+`NOODLES_CAP_QUEUED_PRESENT` and no pending PRESENT. `noodles_link_back_buffer()`
+then returns the one buffer of A, B and C that is neither displayed nor
+awaiting display, and `noodles_push_present()` submits PRESENT_QUEUED. Its fence
+completes when the core accepts the flip, once the previous flip has retired,
+so commands queued after it execute while the flip waits for vertical blank;
+`noodles_present_and_wait()` likewise returns on acceptance. A second PRESENT
+still returns `EAGAIN` until the first is accepted. The handle's first queued
+flip is published with a flip barrier, because fence parity cannot tell
+whether A or C was displayed before the switch, so the second frame starts only
+after the first flip retires. Back-buffer CPU transfers are allowed while a
+queued flip is pending, and raw opcode-4 PRESENT commands are rejected.
+`noodles_link_buffer_count()` reports 2 or 3.
+
 On a wait timeout or clock/sleep failure the handle is faulted. Further
 work is rejected with that error; even late completion does not restore it.
 **Timeout does not cancel queued work or a flip.** Do not resubmit that
@@ -254,7 +270,7 @@ must not retain surface or cache pointers after close.
 
 `noodles_back_buffer_update()` and `noodles_back_buffer_read()` provide bounded
 CPU access to an entirely in-bounds rectangle of the currently writable
-800x600 back buffer. They refuse access while a present is pending, wait for
+800x600 back buffer. They refuse access while a two-buffer present is pending, wait for
 earlier commands with the caller's timeout, preserve host and device row
 pitches and resolve the buffer role only after the wait. This makes regional
 software fallbacks coherent without exposing `/dev/mem` or a managed-surface
@@ -335,7 +351,7 @@ stable shared-library ABI promise in this static-only pre-1.0 SDK.
 
 No SDL code, runtime resolution switch or automatic core reload is included.
 Managed surfaces and the texture cache are host-SDK facilities that work
-over protocol 1.0 through 1.6; SDK 0.4 added BLIT_BLEND for protocol 1.1
+over protocol 1.0 through 1.7; SDK 0.4 added BLIT_BLEND for protocol 1.1
 cores, SDK 0.5 flagged batch draws for protocol 1.2 cores, SDK 0.6 added
 explicit blend modes for protocol 1.3 cores, and SDK 0.7 added synchronized
 CPU transfers and fill for the current back buffer. SDK 0.8 adds constant
@@ -346,6 +362,7 @@ SDK 0.10 adds ordered opaque fill descriptors for protocol 1.6 and shares the
 existing descriptor-ring ownership between sprite and fill batches.
 SDK 0.11 adds a bounded forward-progress wait for retrying transient command
 ring and descriptor-table pressure without draining the complete stream.
+SDK 0.12 adds opt-in three-buffer presentation for protocol 1.7.
 
 ## Stage-2A hardware execution
 

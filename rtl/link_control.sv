@@ -33,10 +33,11 @@ module link_control #(
 );
 
     localparam logic [31:0] MAGIC = 32'h4e44_4c53;
-    localparam logic [31:0] PROTOCOL = 32'h0001_0006;       // fill batches
+    localparam logic [31:0] PROTOCOL = 32'h0001_0007;       // queued three-buffer present
     // Bits 1-8 advertise matching opcodes, bit 9 advertises the bounded
-    // descriptor ring, and bit 10 advertises opcode 10 FILL_BATCH.
-    localparam logic [31:0] CAPABILITIES = 32'h0000_07fe;
+    // descriptor ring, bit 10 advertises opcode 10 FILL_BATCH and bit 11
+    // opcode 11 PRESENT_QUEUED with the third display buffer (OUT-013).
+    localparam logic [31:0] CAPABILITIES = 32'h0000_0ffe;
     localparam logic [31:0] GEOMETRY = {16'd800, 16'd600};
     localparam logic [31:0] PITCH = 32'd3200;
     localparam logic [31:0] CLAIM = 32'h434c_414d;

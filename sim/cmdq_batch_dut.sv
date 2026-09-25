@@ -13,8 +13,22 @@ module cmdq_batch_dut (
     output logic blend_mode_en, output logic [23:0] blend_mode,
     output logic [31:0] copy_dst_addr, output logic [31:0] copy_src_addr,
     output logic [15:0] copy_width, output logic [15:0] copy_height,
-    input logic blend_busy, input logic blend_done
+    input logic blend_busy, input logic blend_done,
+    // OUT-013: the real present engine behind CMDQ, with the display
+    // boundary and scaler retirement acknowledgement driven by the testbench.
+    input logic fb_vbl, input logic fb_retired,
+    output logic present_start, output logic present_accept,
+    output logic present_busy, output logic present_done,
+    output logic present_retired, output logic [1:0] front_idx
 );
+    logic present_queued;
+    logic [1:0] present_target;
+    present #(.RETIRE_VBLANKS(0)) present_i (
+        .clk(clk), .reset(reset), .fb_vbl(fb_vbl), .fb_retired(fb_retired),
+        .start(present_start), .queued(present_queued), .target(present_target),
+        .busy(present_busy), .done(present_done), .retired(present_retired),
+        .front_idx(front_idx)
+    );
     cmdq dut (
         .clk(clk), .reset(reset), .cmd_valid(cmd_valid), .cmd_data(cmd_data),
         .cmd_ready(cmd_ready),
@@ -34,7 +48,9 @@ module cmdq_batch_dut (
         .fill_batch_start(fill_batch_start), .fill_batch_base(fill_batch_base),
         .fill_batch_count(fill_batch_count), .fill_batch_busy(fill_batch_busy),
         .fill_batch_done(fill_batch_done),
-        .present_start(), .present_busy(1'b0), .present_done(1'b0),
+        .present_start(present_start), .present_queued(present_queued),
+        .present_target(present_target), .present_accept(present_accept),
+        .present_busy(present_busy), .present_done(present_done),
         .loader_start(), .loader_src_addr(), .loader_dst_addr(), .loader_length(),
         .loader_busy(1'b0), .loader_done(1'b0)
     );

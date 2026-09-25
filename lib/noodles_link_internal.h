@@ -27,6 +27,10 @@ struct noodles_link {
     uint32_t next_descriptor_table;
     uint32_t token_lo, token_hi, ping_seq, capabilities, protocol;
     int present_pending, ping_pending, verified, fault;
+    /* Three-buffer mode (OUT-013): the last two buffers queued for display;
+     * the back buffer is the remaining one. */
+    uint32_t buffer_count, last_presented, previous_presented;
+    int three_buffer_primed;
     int surface_allocator_initialized;
     struct noodles_extent *surface_free;
     struct noodles_surface *surfaces, *retired_surfaces;

@@ -83,6 +83,12 @@ surface's own last use, and descriptor ownership still prevents table reuse.
 A second `PRESENT`, arbitrary raw uploads and direct CPU back-buffer transfers
 remain blocked until the pending flip retires.
 
+Protocol 1.7 and SDK 0.12 add an opt-in third display buffer.
+`noodles_link_enable_three_buffers()` makes `noodles_push_present()` submit a
+queued flip that the core accepts as soon as the previous flip has retired, so
+the next frame's drawing proceeds while the flip waits for vertical blank.
+Legacy PRESENT and two-buffer clients are unchanged.
+
 ## Build
 
     make          # cross-build the ARM-side host tools (static, armv7/Cortex-A9)

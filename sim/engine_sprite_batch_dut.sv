@@ -115,14 +115,30 @@ module engine_sprite_batch_dut (
     assign      blend_wr64_ready = sel_blend && adapter_wr_space;
     assign batch_wr_ready = !sel_blend && adapter_wr_space && !batch_wr64_en;
     assign batch_wr64_ready = !sel_blend && adapter_wr_space;
-    wire [31:0] rd64_addr = sel_blend ? blend_rd64_addr : batch_rd64_addr;
-    wire [7:0]  rd64_len = sel_blend ? blend_rd64_len : batch_rd64_len;
-    wire        rd64_en = sel_blend ? blend_rd64_en : batch_rd64_en;
-    assign blend_rd64_ready = sel_blend && rd64_ready;
-    assign batch_rd64_ready = !sel_blend && rd64_ready;
+    // Mirrors Noodles.sv's registered read owner: a client is granted the
+    // read port one cycle after it becomes active, batch before blend.
+    logic rd_owner_batch, rd_owner_blend;
+    always_ff @(posedge clk or posedge reset) begin
+        if (reset) begin
+            rd_owner_batch <= 1'b0;
+            rd_owner_blend <= 1'b0;
+        end else begin
+            rd_owner_batch <= batch_rd_active;
+            rd_owner_blend <= !batch_rd_active && blend_busy;
+        end
+    end
+    wire rd_sel_batch64 = rd_owner_batch && batch_rd64_en;
+    wire rd_sel_blend64 = rd_owner_blend && blend_rd64_en;
+    wire [31:0] rd64_addr = rd_sel_batch64 ? batch_rd64_addr :
+                            rd_sel_blend64 ? blend_rd64_addr : 32'b0;
+    wire [7:0]  rd64_len = rd_sel_batch64 ? batch_rd64_len :
+                           rd_sel_blend64 ? blend_rd64_len : 8'd1;
+    wire        rd64_en = rd_sel_batch64 || rd_sel_blend64;
+    assign blend_rd64_ready = rd_sel_blend64 ? rd64_ready : 1'b0;
+    assign batch_rd64_ready = rd_sel_batch64 ? rd64_ready : 1'b0;
     assign batch_rd64_data = rd64_data;
-    assign batch_rd64_valid = !sel_blend && rd64_valid;
-    assign blend_rd64_valid = sel_blend && rd64_valid;
+    assign batch_rd64_valid = rd_owner_batch && rd64_valid;
+    assign blend_rd64_valid = rd_owner_blend && rd64_valid;
 
     ddram_adapter adapter_i (
         .clk             (clk),
