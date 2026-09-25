@@ -448,3 +448,38 @@ Add a generic bounded progress wait that retires or live-confirms only the next 
 - [x] Passed
 
 ---
+
+## 11 COMMIT Unreleased ??? 2026-09-25T03:55:03-07:00
+
+#### Coming From:
+
+Unreleased 8846a6d
+
+#### Purpose:
+
+Replace whole-stream drains under transient queue pressure with a bounded wait for the next necessary command completion.
+
+#### Outcome:
+
+The proposed SDK 0.11 API waits for one command of verified forward progress, or live-confirms the latest raw completion when hardware has already caught up, without changing the nonblocking submission contract. This gives consumers a safe retry primitive for command-ring and descriptor-table `EAGAIN` responses while preserving queued presentation overlap, timeout faulting and fence wraparound behavior. The protocol and RBF remain unchanged.
+
+#### Next Steps:
+
+Add native coverage for outstanding work, already-retired but unconfirmed work, idle calls, presentation state and fence wraparound; run the full host, installed-consumer, sanitizer and ARM suites; then pin the SDK in MiSTer-GemRB and replace renderer submission drains with bounded progress-and-retry loops before repeating hardware validation and frame measurements.
+
+#### Files Modified:
+
+- README.md
+- docs/SDK.md
+- lib/noodles.pc.in
+- lib/noodles_link.c
+- lib/noodles_link.h
+- sim/test_noodles_sdk.c
+- sim/test_sdk_install.sh
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
