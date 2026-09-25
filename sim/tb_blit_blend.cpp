@@ -434,6 +434,16 @@ int main(int argc, char **argv) {
                 }
     }
 
+    // A longer opaque draw under injected DDRAM_BUSY stalls exercises the
+    // one-pair hold/replay path when output credits fill.
+    {
+        tb.SetBusy(true);
+        Rect r{0x31380000u, 131 * 4, 0x33380000u, 130 * 4,
+               128, 4, AlphaMod(255)};
+        CheckCase(tb, mem, r, "opaque-backpressure", 255);
+        tb.SetBusy(false);
+    }
+
     // Zero-size commands complete without memory traffic.
     {
         const size_t reads = mem.reads(), writes = mem.writes();
@@ -454,6 +464,11 @@ int main(int argc, char **argv) {
                 mem.Write32(r.src + y * r.src_pitch + x * 4, 0x80406080u);
         mem.SetLatency(10, 0);
         cost = Run(tb, mem, r);
+        if (cost >= 10000) {
+            std::fprintf(stderr, "FAIL: partial-alpha fallback serialized destination reads (%llu cycles)\n",
+                         static_cast<unsigned long long>(cost));
+            return 1;
+        }
     }
 
     std::printf("PASS: blit_blend %d randomized sprite/solid rects + alignment/transparent/opaque/zero-size cases; "

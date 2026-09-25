@@ -50,6 +50,10 @@ module blend_walk #(
     logic [16:0] left;
     logic [15:0] rows_left;
     logic        in_row, setup, first, off, pitch_neg_r, reverse_r, fresh;
+    logic [31:0] burst_addr_r;
+    logic [4:0]  burst_len_r;
+    logic [5:0]  burst_px_r;
+    logic        burst_lo_r, burst_hi_r;
 
     // Preparation from the current state.
     wire [4:0]  len = single ? 5'd1 :
@@ -63,14 +67,19 @@ module blend_walk #(
     wire [16:0] last_lane = {16'd0, row[2]} + {1'b0, width} - 17'd1;
     wire [16:0] last_word = last_lane >> 1;
 
-    assign valid = in_row && fresh;
+    assign valid = in_row && (single || fresh);
+    assign burst_addr = single ? addr : burst_addr_r;
+    assign burst_len = single ? len : burst_len_r;
+    assign burst_px = single ? ({len, 1'b0} - {5'd0, !lo} - {5'd0, !hi}) : burst_px_r;
+    assign burst_lo = single ? lo : burst_lo_r;
+    assign burst_hi = single ? hi : burst_hi_r;
 
     always_ff @(posedge clk) begin
-        burst_len <= len;
-        burst_addr <= reverse_r ? addr - {24'd0, len - 5'd1, 3'b000} : addr;
-        burst_lo <= lo;
-        burst_hi <= hi;
-        burst_px <= {len, 1'b0} - {5'd0, !lo} - {5'd0, !hi};
+        burst_len_r <= len;
+        burst_addr_r <= reverse_r ? addr - {24'd0, len - 5'd1, 3'b000} : addr;
+        burst_lo_r <= lo;
+        burst_hi_r <= hi;
+        burst_px_r <= {len, 1'b0} - {5'd0, !lo} - {5'd0, !hi};
     end
 
     always_ff @(posedge clk or posedge reset) begin

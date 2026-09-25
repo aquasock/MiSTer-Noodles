@@ -118,8 +118,15 @@ module blit_blend #(
     logic        s_lo, d_lo, s_hi, d_hi;
     logic        s_form, d_form, d_step;
     logic        d_src_ready, d_alpha_zero, d_alpha_opaque;
-    logic        fast_decide, fast_zero, fast_opaque, launch;
-    logic        partial_pending;
+    logic        fast_decide, opaque_emit, launch;
+    logic        partial_pending, partial_src_valid;
+    logic [31:0] partial_src_lo, partial_src_hi;
+    logic [31:0] partial_dst_addr;
+    logic        partial_dst_lo, partial_dst_hi;
+    logic        opaque_stage_valid;
+    logic [63:0] opaque_stage_data;
+    logic [28:0] opaque_stage_word;
+    logic        opaque_stage_full, opaque_stage_hi;
 
     blend_walk #(.BURST(BURST)) src_walk (
         .clk(clk), .reset(reset), .start(walk_start),
@@ -162,7 +169,14 @@ module blit_blend #(
 
     wire s_ok = !solid_r && s_valid &&
                 ({1'b0, px_res} + (PX_W+2)'(s_px) <= (PX_W+2)'(PX_DEPTH));
-    wire d_ok = d_valid && ({1'b0, dst_res} + (DST_W+2)'(d_len) <= (DST_W+2)'(DST_DEPTH));
+    wire        d_pending = fast_alpha_r && partial_pending;
+    wire        d_req_valid = d_pending || d_valid;
+    wire [31:0] d_req_addr = d_pending ? partial_dst_addr : d_addr;
+    wire [4:0]  d_req_len = d_pending ? 5'd1 : d_len;
+    wire        d_req_lo = d_pending ? partial_dst_lo : d_lo;
+    wire        d_req_hi = d_pending ? partial_dst_hi : d_hi;
+    wire d_ok = d_req_valid &&
+                ({1'b0, dst_res} + (DST_W+2)'(d_req_len) <= (DST_W+2)'(DST_DEPTH));
     // Do not observe a walker's state from the preceding command while the
     // new command's registered setup and walk_start are still in flight.
     wire can_form = busy && prep == 2'd0 && !walk_start && !req_valid &&
@@ -232,13 +246,15 @@ module blit_blend #(
                             (!d_hi || d_src_hi[31:24] == 8'hff);
     // Do not inspect the same FIFO head that an ordinary launch consumes,
     // or contend with the destination response FIFO's single write port.
+    assign opaque_emit = opaque_stage_valid &&
+                         (out_res < (OUT_W+1)'(OUT_DEPTH));
     assign fast_decide = busy && prep == 2'd0 && !walk_start && fast_alpha_r &&
                          d_valid && d_src_ready && (dst_res == 0) && !launch && !r_dst &&
-                         !partial_pending;
-    assign fast_zero = fast_decide && d_alpha_zero;
-    assign fast_opaque = fast_decide && d_alpha_opaque && !d_alpha_zero &&
-                         (dst_res < (DST_W+1)'(DST_DEPTH));
-    assign d_step = d_form || fast_zero || fast_opaque;
+                         !partial_pending && (!opaque_stage_valid || opaque_emit);
+    // In fast mode every classified pair advances immediately. A partial
+    // pair retains its address below, so forming that read must not advance
+    // the walker a second time.
+    assign d_step = fast_alpha_r ? fast_decide : d_form;
 
     // Response stage: each beat, with its pixel slots and destination
     // metadata already decoded from the tag, is registered here and written
@@ -264,10 +280,15 @@ module blit_blend #(
     wire [1:0] pop_n = {1'b0, head_lo} + {1'b0, head_hi};
 
     assign launch = (dw_count != 0) &&
-                    (solid_r || ({1'b0, px_count} >= (PX_W+2)'(pop_n))) &&
+                    (solid_r || partial_src_valid ||
+                     ({1'b0, px_count} >= (PX_W+2)'(pop_n))) &&
                     (out_res < (OUT_W+1)'(OUT_DEPTH));
-    wire [31:0] lane_src_lo = solid_r ? solid_color_r : px0;
-    wire [31:0] lane_src_hi = solid_r ? solid_color_r : (head_lo ? px1 : px0);
+    wire [31:0] lane_src_lo = solid_r ? solid_color_r :
+                                    partial_src_valid ? partial_src_lo : px0;
+    wire [31:0] lane_src_hi = solid_r ? solid_color_r :
+                                    partial_src_valid ? partial_src_hi :
+                                    (head_lo ? px1 : px0);
+    wire launch_fifo = launch && !solid_r && !partial_src_valid;
 
     // ---------------------------------------------------------------
     // Pixel lanes and sideband.
@@ -321,18 +342,18 @@ module blit_blend #(
 
     wire finished = busy && prep == 2'd0 && !walk_start && (solid_r || s_finished) && d_finished &&
                     !req_valid && (tag_count == 0) && !r_src && !r_dst && (dw_count == 0) &&
-                    (out_res == 0);
+                    !partial_pending && !partial_src_valid && !opaque_stage_valid && (out_res == 0);
 
     // ---------------------------------------------------------------
     always_ff @(posedge clk) begin
         if (s_form || d_form) begin
             tag_is_dst[tag_tail] <= d_form;
-            tag_lo[tag_tail] <= d_form ? d_lo : s_lo;
-            tag_hi[tag_tail] <= d_form ? d_hi : s_hi;
-            tag_len[tag_tail] <= d_form ? d_len : s_len;
+            tag_lo[tag_tail] <= d_form ? d_req_lo : s_lo;
+            tag_hi[tag_tail] <= d_form ? d_req_hi : s_hi;
+            tag_len[tag_tail] <= d_form ? d_req_len : s_len;
             tag_px[tag_tail] <= s_px;
             tag_px_base[tag_tail] <= px_wp;
-            tag_word[tag_tail] <= d_form ? d_addr[31:3] : s_addr[31:3];
+            tag_word[tag_tail] <= d_form ? d_req_addr[31:3] : s_addr[31:3];
         end
         r_data <= rd64_data;
         r_slot_lo <= slot_lo;
@@ -345,13 +366,11 @@ module blit_blend #(
             px_mem[r_slot_lo] <= r_data[31:0];
         if (r_we_hi)
             px_mem[r_slot_hi] <= r_data[63:32];
-        if (r_dst || fast_opaque) begin
-            // A synthetic zero destination lets the existing exact blend
-            // pipeline and edge-lane write path emit the opaque source pair.
-            dw_mem[dw_wp] <= r_dst ? r_data : 64'd0;
-            dw_word[dw_wp] <= r_dst ? r_word : d_addr[31:3];
-            dw_lo[dw_wp] <= r_dst ? r_dlo : d_lo;
-            dw_hi[dw_wp] <= r_dst ? r_dhi : d_hi;
+        if (r_dst) begin
+            dw_mem[dw_wp] <= r_data;
+            dw_word[dw_wp] <= r_word;
+            dw_lo[dw_wp] <= r_dlo;
+            dw_hi[dw_wp] <= r_dhi;
         end
         sb_dst[0] <= dw_mem[dw_rp];
         sb_word[0] <= dw_word[dw_rp];
@@ -363,7 +382,15 @@ module blit_blend #(
             sb_lo[i] <= sb_lo[i-1];
             sb_hi[i] <= sb_hi[i-1];
         end
-        if (result_write) begin
+        if (opaque_emit) begin
+            // Alpha 255 makes standard identity-modulated blending an exact
+            // source copy, so enqueue it directly without a destination read
+            // or a trip through the blend pipeline.
+            of_data[of_wp] <= opaque_stage_data;
+            of_word[of_wp] <= opaque_stage_word;
+            of_full[of_wp] <= opaque_stage_full;
+            of_hi[of_wp] <= opaque_stage_hi;
+        end else if (result_write) begin
             // A word with only one written lane (row edge or colour key)
             // stores just that lane, never the other lane's stale read.
             of_data[of_wp] <= result;
@@ -394,6 +421,13 @@ module blit_blend #(
             tag_count <= '0; tag_head <= '0; tag_tail <= '0; beat <= '0; burst_px <= '0;
             r_src <= 1'b0; r_dst <= 1'b0; r_we_lo <= 1'b0; r_we_hi <= 1'b0; r_publish <= 1'b0;
             partial_pending <= 1'b0;
+            partial_src_valid <= 1'b0;
+            partial_src_lo <= '0; partial_src_hi <= '0;
+            partial_dst_addr <= '0;
+            partial_dst_lo <= 1'b0; partial_dst_hi <= 1'b0;
+            opaque_stage_valid <= 1'b0;
+            opaque_stage_data <= '0; opaque_stage_word <= '0;
+            opaque_stage_full <= 1'b0; opaque_stage_hi <= 1'b0;
             px_wp <= '0; px_rp <= '0; px_count <= '0;
             dw_wp <= '0; dw_rp <= '0; dw_count <= '0;
             of_wp <= '0; of_rp <= '0; of_count <= '0;
@@ -416,6 +450,8 @@ module blit_blend #(
                 key_enable_r <= key_enable; key_r <= key_value;
                 prefer_dst <= 1'b1;
                 partial_pending <= 1'b0;
+                partial_src_valid <= 1'b0;
+                opaque_stage_valid <= 1'b0;
             end else if (prep != 2'd0) begin
                 // prep 3: span multiply settles; 2: base add; 1: start walkers.
                 prep <= prep - 2'd1;
@@ -430,8 +466,8 @@ module blit_blend #(
 
             if (s_form || d_form) begin
                 req_valid <= 1'b1;
-                req_addr <= d_form ? d_addr : s_addr;
-                req_len <= d_form ? d_len : s_len;
+                req_addr <= d_form ? d_req_addr : s_addr;
+                req_len <= d_form ? d_req_len : s_len;
                 prefer_dst <= !d_form;
             end else if (req_fire) begin
                 req_valid <= 1'b0;
@@ -444,6 +480,40 @@ module blit_blend #(
                 partial_pending <= 1'b0;
             else if (fast_decide && !d_alpha_zero && !d_alpha_opaque)
                 partial_pending <= 1'b1;
+
+            // Classification consumes every inspected source pair. Preserve
+            // the first partial-alpha pair here while its destination word
+            // is fetched, then feed it to the ordinary blend pipeline.
+            if (fast_decide && !d_alpha_zero && !d_alpha_opaque) begin
+                partial_src_valid <= 1'b1;
+                partial_src_lo <= d_src_lo;
+                partial_src_hi <= d_src_hi;
+                partial_dst_addr <= d_addr;
+                partial_dst_lo <= d_lo;
+                partial_dst_hi <= d_hi;
+            end else if (launch && partial_src_valid) begin
+                partial_src_valid <= 1'b0;
+            end
+
+            // Register opaque classification before writing the output RAM.
+            // The stage may drain and accept its successor in the same cycle,
+            // sustaining one pair per clock while preserving backpressure.
+            if (fast_decide && d_alpha_opaque && !d_alpha_zero) begin
+                opaque_stage_valid <= 1'b1;
+                opaque_stage_data <= {d_hi ? d_src_hi : 32'd0,
+                                      d_lo ? d_src_lo : 32'd0};
+                opaque_stage_word <= d_addr[31:3];
+                opaque_stage_full <= d_lo && d_hi;
+                opaque_stage_hi <= !d_lo;
+            end else if (opaque_emit) begin
+                opaque_stage_valid <= 1'b0;
+            end
+
+            // One partial pair proves that this draw is not binary-alpha.
+            // Resume the existing burst destination path for the rest of it,
+            // avoiding a regression on uniformly translucent textures.
+            if (d_form && fast_alpha_r)
+                fast_alpha_r <= 1'b0;
 
             if (s_form || d_form) tag_tail <= tag_tail + 1'b1;
             if (rd64_valid) begin
@@ -466,29 +536,29 @@ module blit_blend #(
             r_publish <= src_beat && h_last;
 
             if (s_form) px_wp <= px_wp + PX_W'(s_px);
-            if ((launch && !solid_r) || fast_zero)
-                px_rp <= px_rp + PX_W'(fast_zero ? d_pop_n : pop_n);
+            if (launch_fifo || fast_decide)
+                px_rp <= px_rp + PX_W'(fast_decide ? d_pop_n : pop_n);
             px_count <= px_count + (r_publish ? (PX_W+1)'(r_px) : '0)
-                                 - ((launch && !solid_r) ? (PX_W+1)'(pop_n) : '0)
-                                 - (fast_zero ? (PX_W+1)'(d_pop_n) : '0);
+                                 - (launch_fifo ? (PX_W+1)'(pop_n) : '0)
+                                 - (fast_decide ? (PX_W+1)'(d_pop_n) : '0);
             px_res <= px_res + (s_form ? (PX_W+1)'(s_px) : '0)
-                             - ((launch && !solid_r) ? (PX_W+1)'(pop_n) : '0)
-                             - (fast_zero ? (PX_W+1)'(d_pop_n) : '0);
+                             - (launch_fifo ? (PX_W+1)'(pop_n) : '0)
+                             - (fast_decide ? (PX_W+1)'(d_pop_n) : '0);
 
-            if (r_dst || fast_opaque) dw_wp <= dw_wp + 1'b1;
+            if (r_dst) dw_wp <= dw_wp + 1'b1;
             if (launch) dw_rp <= dw_rp + 1'b1;
             dw_count <= dw_count + (r_dst ? (DST_W+1)'(1) : '0)
-                                 + (fast_opaque ? (DST_W+1)'(1) : '0)
                                  - (launch ? (DST_W+1)'(1) : '0);
-            dst_res <= dst_res + (d_form ? (DST_W+1)'(d_len) : '0)
-                               + (fast_opaque ? (DST_W+1)'(1) : '0)
+            dst_res <= dst_res + (d_form ? (DST_W+1)'(d_req_len) : '0)
                                - (launch ? (DST_W+1)'(1) : '0);
 
-            if (result_write) of_wp <= of_wp + 1'b1;
+            if (result_write || opaque_emit) of_wp <= of_wp + 1'b1;
             if (wr_fire) of_rp <= of_rp + 1'b1;
             of_count <= of_count + (result_write ? (OUT_W+1)'(1) : '0)
+                                 + (opaque_emit ? (OUT_W+1)'(1) : '0)
                                  - (wr_fire ? (OUT_W+1)'(1) : '0);
             out_res <= out_res + (launch ? (OUT_W+1)'(1) : '0)
+                               + (opaque_emit ? (OUT_W+1)'(1) : '0)
                                - (result_skip ? (OUT_W+1)'(1) : '0)
                                - (wr_fire ? (OUT_W+1)'(1) : '0);
         end
