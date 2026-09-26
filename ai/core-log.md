@@ -726,7 +726,7 @@ Remove the temporary probe while teaching the shared DDR adapter to combine queu
 
 ---
 
-## 18 COMMIT Unreleased ??? 2026-09-25T19:20:33-07:00
+## 18 COMMIT Unreleased 812f4ea 2026-09-25T19:20:33-07:00
 
 #### Coming From:
 
@@ -738,17 +738,20 @@ Recover the 120MHz throughput gain by combining contiguous full-word writes into
 
 #### Outcome:
 
-Planned. Replace the adapter's burst-count-one write issue path with an eight-beat maximum burst sequencer that waits briefly for a contiguous run of committed full-word queue entries, holds the Avalon address and burst count for the complete transaction and advances data only on accepted beats. Partial and noncontiguous writes remain individual transactions, short runs flush when ingress stops, and reads retain the existing bounded round-robin arbitration. Remove the temporary hardware probe and teach every affected behavioral DDR model to validate write-burst address, data, byte-enable, hold and ordering semantics.
+Sources `307fb9a`, `6b2a0fd`, `858b4d9`, `93d20a3` and `812f4ea` remove the temporary DDR probe, combine adjacent full-word writes into Avalon bursts of up to eight beats, pipeline burst formation and command metadata, register blend launch selection, move response accounting behind registered metadata, replace the 64-bit copy completion comparison with a registered terminal condition and stage scalar-copy writes before the shared adapter. Partial and noncontiguous writes remain single transactions. The complete RTL simulation suite, formal proofs, host and ARM builds, SDK installation tests and timing-report regressions passed. Three clean Quartus 17.0.2 fits from pushed source `812f4ea` tested seeds 1, 2 and 3 in parallel. Seeds 1 and 3 missed slow-corner setup by 0.487ns and 0.363ns respectively, while seed 2 passed every setup, hold, recovery, removal and pulse-width check at all four corners with +0.172ns worst setup and +0.076ns worst hold. The seed-2 fit uses 13,848 ALMs, 22,189 registers, 365,835 memory bits and 60 DSP blocks; its RBF SHA256 is `d2439fe6bc4d0bf237d3c7cf7795b7fdaafd26491519e3d0b67dd0ff3ef1cd78`. No image from this source has been deployed or hardware-tested.
 
 #### Next Steps:
 
-Run the full simulation, formal, SDK and reporting regressions, then build three seeds in parallel from the exact pushed source. Deploy the best timing-qualified image through the release-convention core filename, repeat the exact-pixel, audio, copy-sweep and throughput tests, and compare fill and blend rates with Entry 17 before deciding whether the legacy scalar copy engine also needs replacement.
+Deploy the timing-qualified seed-2 image through the canonical MiSTer filename when the user requests it, verify clean cold and warm startup because the preceding unqualified image failed one cold renderer initialization, then run exact pixels, HDMI audio, copy sweep and throughput before accepting it. Keep the current live test undisturbed until then.
 
 #### Files Modified:
 
 - Makefile
 - Noodles.sv
 - files.qip
+- rtl/blit_blend.sv
+- rtl/blit_copy.sv
+- rtl/blit_copy64.sv
 - rtl/ddram_adapter.sv
 - rtl/ddram_perf_probe.sv
 - scripts/deploy.sh
@@ -763,7 +766,7 @@ Run the full simulation, formal, SDK and reporting regressions, then build three
 
 #### Status:
 
-- [ ] Built
+- [x] Built
 - [ ] Passed
 
 ---
