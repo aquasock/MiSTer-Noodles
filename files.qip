@@ -11,6 +11,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/blend_px.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/blend_walk.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/blit_blend.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/ddram_adapter.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/ddram_perf_probe.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/ddram_read_owner.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/link_ring.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/link_control.sv
