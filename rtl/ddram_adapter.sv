@@ -399,7 +399,12 @@ module ddram_adapter (
             // width without truncation -- unlike the tail-pointer advance
             // above, this accumulator needs the untruncated magnitude, not
             // a mod-DEPTH wraparound.
-            rsp_count <= rsp_count + (read_issue ? (PTR_W+1)'(head_len) : (PTR_W+1)'(0))
+            // Publish response capacity from the registered metadata stage,
+            // alongside the per-word metadata writes above. The physical
+            // response is itself registered before read_rsp, so this remains
+            // ready a cycle before any word can be consumed while removing
+            // write-side arbitration from rsp_count's input cone.
+            rsp_count <= rsp_count + (meta_valid ? (PTR_W+1)'(meta_len) : (PTR_W+1)'(0))
                                     - (read_rsp ? (PTR_W+1)'(1) : (PTR_W+1)'(0));
             rsp_committed <= rsp_committed
                              + ((rd_fire || rd64_fire) ? admit_words : 9'd0)

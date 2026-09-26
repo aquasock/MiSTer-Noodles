@@ -55,6 +55,10 @@ module blit_copy64 #(
     logic [15:0] col, row, width_r, height_r;
     logic [15:0] row_remain_r;
     logic [31:0] pairs_issued, pairs_done, total_pairs;
+    // Set when the final row request is formed. Keeping this as a registered
+    // one-bit condition prevents the total-pixel comparison from feeding all
+    // prepared FIFO-slot write enables.
+    logic issue_done;
     logic [ADDR_WIDTH-1:0] src_row, dst_row;
     logic [15:0] dst_pitch_r, src_pitch_r;
     logic key_enable_r;
@@ -170,7 +174,7 @@ module blit_copy64 #(
     // FIFO_DEPTH pairs and takes far longer than that to drain.
     wire [15:0] avail_pairs = 16'(FIFO_DEPTH) - {{(16-LENB){1'b0}}, reserved_count};
     wire [15:0] want_len16_prep = (row_remain_r < avail_pairs) ? row_remain_r : avail_pairs;
-    wire prepare_now = active && !scalar_tail && (pairs_issued < total_pairs) &&
+    wire prepare_now = active && !scalar_tail && !issue_done &&
                        !want_len_p_valid;
 
     wire [15:0] new_col = col + {{(15-LENB){1'b0}}, want_len_p, 1'b0};
@@ -215,6 +219,7 @@ module blit_copy64 #(
             col <= 0; row <= 0; width_r <= 0; height_r <= 0;
             row_remain_r <= 0;
             pairs_issued <= 0; pairs_done <= 0; total_pairs <= 0;
+            issue_done <= 0;
             src_row <= 0; dst_row <= 0; dst_pitch_r <= 0; src_pitch_r <= 0;
             src_cur <= 0; dst_cur <= 0; row_end_p <= 0;
 
@@ -233,6 +238,7 @@ module blit_copy64 #(
                 key_enable_r <= key_enable; key_r <= key_value;
                 pairs_issued <= 0; pairs_done <= 0;
                 total_pairs <= (width * height) >> 1;
+                issue_done <= 0;
                 pair_count <= 0; reserved_count <= 0;
                 req_valid <= 0;
                 want_len_p <= 0; want_len_p_valid <= 0;
@@ -285,6 +291,8 @@ module blit_copy64 #(
                     pairs_issued <= pairs_issued + 32'(want_len_p);
                     want_len_p_valid <= 1'b0;
                     if (row_end_p) begin
+                        if (row == height_r - 1'b1)
+                            issue_done <= 1'b1;
                         col <= 0; row <= row + 1'b1;
                         src_row <= src_row + src_pitch_r;
                         dst_row <= dst_row + dst_pitch_r;

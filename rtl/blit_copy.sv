@@ -40,6 +40,13 @@ module blit_copy #(
     logic key_enable_r;
     logic [DATA_WIDTH-1:0] key_value_r;
     logic active;
+    // Registered write head. The source FIFO is consumed when its entry is
+    // staged here, while this register holds the request stable through
+    // adapter backpressure and isolates the FIFO pointer/key mux from the
+    // shared write queue.
+    logic wr_valid_q;
+    logic [ADDR_WIDTH-1:0] wr_addr_q;
+    logic [DATA_WIDTH-1:0] wr_data_q;
 
     // The adapter can hold four requests while this engine can retain up to
     // FIFO_DEPTH source addresses and completed pixels.
@@ -48,6 +55,9 @@ module blit_copy #(
     wire all_issued = (issued == total_pixels);
     wire key_match = key_enable_r && (data_fifo[data_rd_ptr] == key_value_r);
     wire do_write = active && data_count != 0 && !key_match;
+    wire wr_accept = wr_valid_q && wr_ready;
+    wire stage_write = do_write && (!wr_valid_q || wr_accept);
+    wire consume_data = stage_write || (data_count != 0 && key_match);
 
     assign rd_addr = src_row_addr + ADDR_WIDTH'(issue_col) * BYTES_PER_PIXEL;
     // Leave room for returned data so the shared adapter can switch to the
@@ -55,9 +65,9 @@ module blit_copy #(
     // Keep the response queue shallow so destination writes are interleaved
     // with source reads instead of arriving as long four-pixel bursts.
     assign rd_en = active && !all_issued && issue_space && (data_count < 3);
-    assign wr_addr = write_addr_fifo[data_rd_ptr];
-    assign wr_data = data_fifo[data_rd_ptr];
-    assign wr_en = do_write;
+    assign wr_addr = wr_addr_q;
+    assign wr_data = wr_data_q;
+    assign wr_en = wr_valid_q;
 
     always_ff @(posedge clk or posedge reset) begin
         if (reset) begin
@@ -67,6 +77,7 @@ module blit_copy #(
             issue_col <= 0; issue_row <= 0; src_row_addr <= 0; dst_row_addr <= 0;
             width_r <= 0; dst_pitch_r <= 0; src_pitch_r <= 0;
             key_enable_r <= 0; key_value_r <= 0;
+            wr_valid_q <= 0; wr_addr_q <= 0; wr_data_q <= 0;
         end else begin
             done <= 0;
 
@@ -81,6 +92,7 @@ module blit_copy #(
                 addr_wr_ptr <= 0; addr_rd_ptr <= 0;
                 data_wr_ptr <= 0; data_rd_ptr <= 0;
                 addr_count <= 0; data_count <= 0;
+                wr_valid_q <= 0;
             end else if (active) begin
                 if (rd_en && rd_ready) begin
                     addr_fifo[addr_wr_ptr] <= dst_row_addr + ADDR_WIDTH'(issue_col) * BYTES_PER_PIXEL;
@@ -108,17 +120,26 @@ module blit_copy #(
                     default: addr_count <= addr_count;
                 endcase
 
-                if ((do_write && wr_ready) || (data_count != 0 && key_match)) begin
+                if (stage_write) begin
+                    wr_valid_q <= 1'b1;
+                    wr_addr_q <= write_addr_fifo[data_rd_ptr];
+                    wr_data_q <= data_fifo[data_rd_ptr];
+                end else if (wr_accept) begin
+                    wr_valid_q <= 1'b0;
+                end
+
+                if (consume_data) begin
                     data_rd_ptr <= data_rd_ptr + 1'b1;
                 end
 
-                case ({rd_valid, ((do_write && wr_ready) || (data_count != 0 && key_match))})
+                case ({rd_valid, consume_data})
                     2'b10: data_count <= data_count + 1'b1;
                     2'b01: data_count <= data_count - 1'b1;
                     default: data_count <= data_count;
                 endcase
 
-                if (all_issued && addr_count == 0 && data_count == 0 && !rd_valid) begin
+                if (all_issued && addr_count == 0 && data_count == 0 && !rd_valid &&
+                    !wr_valid_q) begin
                     active <= 0; busy <= 0; done <= 1;
                 end
             end
