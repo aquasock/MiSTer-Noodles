@@ -318,25 +318,21 @@ module ddram_adapter (
 
                     // Scalar writes are always standalone. A full-word write
                     // extends the open run only when its byte address is the
-                    // next 64-bit word. Eight entries close a run immediately;
-                    // an ingress pause or pending read closes a shorter run.
+                    // next 64-bit word. Eight entries close a run immediately.
+                    // A cycle with no committed entry closes a shorter run;
+                    // this decision uses only registered adapter state, so a
+                    // producer's current valid signal cannot reach this RAM.
                     if (!wr_ingress_full) begin
                         if (wr_run_count != 0)
                             wr_burst_len_q[wr_run_start] <= {4'd0, wr_run_count};
                         wr_burst_len_q[i] <= 8'd1;
                         wr_run_count <= 0;
                     end else if (wr_run_count == 0) begin
-                        if (!write_ingress || want_read) begin
-                            wr_burst_len_q[i] <= 8'd1;
-                            wr_run_count <= 0;
-                        end else begin
-                            wr_run_start <= PTR_W'(i);
-                            wr_run_count <= 4'd1;
-                            wr_run_last_addr <= wr_ingress_addr;
-                        end
+                        wr_run_start <= PTR_W'(i);
+                        wr_run_count <= 4'd1;
+                        wr_run_last_addr <= wr_ingress_addr;
                     end else if (wr_ingress_addr == wr_run_last_addr + 32'd8) begin
-                        if (wr_run_count == 4'(WRITE_BURST_MAX-1) ||
-                            !write_ingress || want_read) begin
+                        if (wr_run_count == 4'(WRITE_BURST_MAX-1)) begin
                             wr_burst_len_q[wr_run_start] <=
                                 {4'd0, wr_run_count} + 8'd1;
                             wr_run_count <= 0;
@@ -346,20 +342,15 @@ module ddram_adapter (
                         end
                     end else begin
                         wr_burst_len_q[wr_run_start] <= {4'd0, wr_run_count};
-                        if (!write_ingress || want_read) begin
-                            wr_burst_len_q[i] <= 8'd1;
-                            wr_run_count <= 0;
-                        end else begin
-                            wr_run_start <= PTR_W'(i);
-                            wr_run_count <= 4'd1;
-                            wr_run_last_addr <= wr_ingress_addr;
-                        end
+                        wr_run_start <= PTR_W'(i);
+                        wr_run_count <= 4'd1;
+                        wr_run_last_addr <= wr_ingress_addr;
                     end
                 end
             end
-            // A queued read must not wait for a producer that pauses with a
-            // short write run still open.
-            if (!(|wr_slot_en) && wr_run_count != 0 && want_read) begin
+            // No committed entry this cycle means the producer paused. Close
+            // its short run so reads and the completed write can progress.
+            if (!(|wr_slot_en) && wr_run_count != 0) begin
                 wr_burst_len_q[wr_run_start] <= {4'd0, wr_run_count};
                 wr_run_count <= 0;
             end
