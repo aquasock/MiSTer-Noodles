@@ -692,7 +692,7 @@ Keep the timing-qualified seed-2 image under the canonical launcher filename and
 
 ---
 
-## 17 COMMIT Unreleased ??? 2026-09-25T18:19:00-07:00
+## 17 COMMIT Unreleased 019a496 2026-09-25T18:19:00-07:00
 
 #### Coming From:
 
@@ -704,11 +704,11 @@ Measure why the 120MHz core retains the 100MHz engine throughput before selectin
 
 #### Outcome:
 
-Planned. The accepted 100MHz and qualified 120MHz measurements both sustain approximately 88 million 64-bit fill writes per second even though the latter provides 20 percent more core cycles, while the adapter still emits every write as a separate burst-count-one transaction. Add a temporary passive probe that counts elapsed core cycles, accepted read commands and words, accepted write beats, DDRAM backpressure, read responses and command-idle bubbles for isolated fill, copy and blend operations, then publish the completed snapshot only after the measured operation and adapter have drained so observation cannot alter the measured interval.
+Source `019a496` adds a passive physical-port probe and ARM reader that count an isolated operation only until its engine and the DDR adapter drain, then publish the snapshot through the lowest-priority write client after the measured interval. The complete simulation suite, formal proofs, native and installed SDK checks, ARM build and timing-report tests passed. Three disposable seed fits completed; all missed 120MHz setup, with seed 3 the closest at -0.344ns, and the user explicitly waived timing qualification for this short diagnostic. On MiSTer, seed 3 measured a 480,000-pixel solid fill in 327,226 cycles: 240,002 accepted 64-bit writes, only three command-idle cycles and 87,221 DDRAM-stalled command cycles, fixing the accepted rate near 88 million beats/s despite the 120MHz clock. Scalar BLIT_COPY issued 480,000 separate one-word reads and 480,002 writes while spending 1,087,688 of 2,261,572 cycles without a command. BLEND_FILL and BLIT_BLEND source/destination reads used healthy eight-word bursts, but their 240,002 writes remained individual beats and they respectively spent 214,104 of 548,229 and 658,292 of 1,002,247 cycles command-idle. This proves raw DDR bandwidth is not exhausted: burst-count-one writes pay enough bridge/controller backpressure to erase the clock gain, while the legacy scalar copy additionally serializes one-word reads and leaves the port idle. The qualified `f97ce70` seed-2 RBF was restored with SHA256 `ae2cdf45e0322f0d91bafeba481594b57c6d65c80fa444256a0153338e849cc6` under the release-convention `_Utility/Noodles_20260925.rbf` filename, with the launcher and MGL convention left intact.
 
 #### Next Steps:
 
-Run simulation and formal regressions, build three Quartus seeds in parallel, measure the real MiSTer bus cadence for representative full-surface operations and compare the counters with the wall-time rates. Use that evidence to distinguish single-beat write transaction overhead, undersized read refills and engine pipeline bubbles, then remove the temporary probe and propose the smallest throughput correction separately.
+Remove the temporary probe while teaching the shared DDR adapter to combine queued, contiguous full-word writes into legal Avalon write bursts, preserving sparse and partial writes as single beats. Verify the burst protocol and ordering in simulation, then measure fill and blend throughput before considering replacement of the legacy scalar BLIT_COPY path.
 
 #### Files Modified:
 
@@ -721,7 +721,7 @@ Run simulation and formal regressions, build three Quartus seeds in parallel, me
 
 #### Status:
 
-- [ ] Built
-- [ ] Passed
+- [x] Built
+- [x] Passed
 
 ---
