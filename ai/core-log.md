@@ -679,10 +679,10 @@ Run the complete Verilator and formal suites, rebuild the pinned 120MHz seed 3 a
 
 - Makefile
 - Noodles.sv
-- rtl/blit_copy64.sv
-- rtl/ddram_adapter.sv
-- sim/tb_blit_copy64.cpp
-- sim/tb_ddram_ingress.cpp
+- Noodles.qsf
+- rtl/blit_blend.sv
+- scripts/deploy.sh
+- sim/engine_copy_dut.sv
 - tools/copy-sweep.c
 
 #### Status:
