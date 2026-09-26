@@ -725,3 +725,45 @@ Remove the temporary probe while teaching the shared DDR adapter to combine queu
 - [x] Passed
 
 ---
+
+## 18 COMMIT Unreleased ??? 2026-09-25T19:20:33-07:00
+
+#### Coming From:
+
+Unreleased 019a496
+
+#### Purpose:
+
+Recover the 120MHz throughput gain by combining contiguous full-word writes into legal DDRAM bursts without changing pixels, ordering or sparse-write behavior.
+
+#### Outcome:
+
+Planned. Replace the adapter's burst-count-one write issue path with an eight-beat maximum burst sequencer that waits briefly for a contiguous run of committed full-word queue entries, holds the Avalon address and burst count for the complete transaction and advances data only on accepted beats. Partial and noncontiguous writes remain individual transactions, short runs flush when ingress stops, and reads retain the existing bounded round-robin arbitration. Remove the temporary hardware probe and teach every affected behavioral DDR model to validate write-burst address, data, byte-enable, hold and ordering semantics.
+
+#### Next Steps:
+
+Run the full simulation, formal, SDK and reporting regressions, then build three seeds in parallel from the exact pushed source. Deploy the best timing-qualified image through the release-convention core filename, repeat the exact-pixel, audio, copy-sweep and throughput tests, and compare fill and blend rates with Entry 17 before deciding whether the legacy scalar copy engine also needs replacement.
+
+#### Files Modified:
+
+- Makefile
+- Noodles.sv
+- files.qip
+- rtl/ddram_adapter.sv
+- rtl/ddram_perf_probe.sv
+- scripts/deploy.sh
+- sim/tb_blit_blend.cpp
+- sim/tb_blit_copy64.cpp
+- sim/tb_ddram_adapter.cpp
+- sim/tb_ddram_ingress.cpp
+- sim/tb_fill_batch.cpp
+- sim/tb_sprite_batch.cpp
+- sim/tb_sprite_batch_sdram.cpp
+- tools/ddram-perf.c
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
