@@ -533,27 +533,8 @@ blit_blend blit_blend
 	.wr64_en(blend_wr64_en), .wr64_ready(blend_wr64_ready)
 );
 
-// Temporary throughput diagnostic. It observes the physical DDRAM port only
-// while a direct engine command runs, then publishes the completed counters
-// after the adapter drains. The publisher is the lowest-priority write client.
-wire [31:0] perf_wr_addr, perf_wr_data;
-wire        perf_wr_en, perf_wr_ready;
-ddram_perf_probe ddram_perf_probe
-(
-	.clk(clk_sys), .reset(reset),
-	.fill_start(blit_start), .fill_done(blit_done),
-	.copy_start(copy_start), .copy_done(copy_done),
-	.blend_start(blend_start), .blend_done(blend_done),
-	.adapter_idle(adapter_idle),
-	.ddram_busy(DDRAM_BUSY), .ddram_burstcnt(DDRAM_BURSTCNT),
-	.ddram_rd(DDRAM_RD), .ddram_we(DDRAM_WE),
-	.ddram_dout_ready(DDRAM_DOUT_READY),
-	.wr_addr(perf_wr_addr), .wr_data(perf_wr_data),
-	.wr_en(perf_wr_en), .wr_ready(perf_wr_ready)
-);
-
 // Priority mux into the DDRAM adapter's write port: batch/blend/copy, link_ring,
-// link_control, fill, link_fence and the temporary performance probe. None
+// link_control, fill, and link_fence. None
 // can ever be simultaneously active by construction of CMDQ's own
 // single-engine dispatch (blit and blit_copy) and link_ring only writing
 // while idle/finishing a dispatch, so this priority is a tie-breaker, not
@@ -574,23 +555,18 @@ wire        wr_sel_engine = !wr_sel_batch && !wr_sel_blend && !wr_sel_copy && !w
                             !wr_sel_control && blit_busy;
 wire        wr_sel_fence  = !wr_sel_batch && !wr_sel_blend && !wr_sel_copy && !wr_sel_link &&
                             !wr_sel_control && !wr_sel_engine && fence_wr_en;
-wire        wr_sel_perf   = !wr_sel_batch && !wr_sel_blend && !wr_sel_copy && !wr_sel_link &&
-                            !wr_sel_control && !wr_sel_engine && !wr_sel_fence && perf_wr_en;
 wire [31:0] adapter_wr_addr = wr_sel_blend ? blend_wr_addr : wr_sel_batch ? batch_wr_addr :
                               wr_sel_copy ? copy_wr_addr :
                               wr_sel_link ? link_wr_addr : wr_sel_control ? control_wr_addr :
-                              wr_sel_engine ? engine_wr_addr : wr_sel_fence ? fence_wr_addr :
-                              perf_wr_addr;
+                              wr_sel_engine ? engine_wr_addr : fence_wr_addr;
 wire [31:0] adapter_wr_data = wr_sel_blend ? blend_wr_data : wr_sel_batch ? batch_wr_data :
                               wr_sel_copy ? copy_wr_data :
                               wr_sel_link ? link_wr_data : wr_sel_control ? control_wr_data :
-                              wr_sel_engine ? engine_wr_data : wr_sel_fence ? fence_wr_data :
-                              perf_wr_data;
+                              wr_sel_engine ? engine_wr_data : fence_wr_data;
 wire        adapter_wr_en   = wr_sel_blend ? blend_wr_en : wr_sel_batch ? batch_wr_en :
                               wr_sel_copy ? copy_wr_en :
                               wr_sel_link ? link_wr_en : wr_sel_control ? control_wr_en :
-                              wr_sel_engine ? engine_wr_en : wr_sel_fence ? fence_wr_en :
-                              perf_wr_en;
+                              wr_sel_engine ? engine_wr_en : fence_wr_en;
 // Each client's ready is its select, the adapter's registered queue space
 // and, for the scalar port, only that client's own paired request -- the
 // adapter's own ready depends on the muxed wr64_en, which let one engine's
@@ -605,7 +581,6 @@ assign link_wr_ready   = wr_sel_link   && adapter_wr_space;
 assign control_wr_ready = wr_sel_control && adapter_wr_space;
 assign engine_wr_ready = wr_sel_engine && adapter_wr_space && !engine_wr64_en;
 assign fence_wr_ready  = wr_sel_fence  && adapter_wr_space;
-assign perf_wr_ready   = wr_sel_perf   && adapter_wr_space;
 wire adapter_wr64_en = (wr_sel_engine && engine_wr64_en) ||
                        (wr_sel_batch && batch_wr64_en) ||
                        (wr_sel_blend && blend_wr64_en);

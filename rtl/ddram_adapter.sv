@@ -18,7 +18,9 @@
 // further command required -- the same assumption aquasock/MiSTer-Raster's
 // proven DDR arbiter (mpeg2_h262_ddram_arbiter.sv) already relies on.
 // Scalar (32-bit) reads always have an implicit length of 1, unchanged from
-// before.
+// before. Contiguous full-word writes are likewise gathered explicitly in
+// the queue and emitted as one Avalon write burst. Partial or discontinuous
+// writes retain their original single-beat shape.
 
 module ddram_adapter (
     input  logic         clk,
@@ -69,6 +71,7 @@ module ddram_adapter (
     localparam int DEPTH = 16;
     localparam int PTR_W = $clog2(DEPTH);
     localparam int MAX_BURST = DEPTH;
+    localparam int WRITE_BURST_MAX = 8;
 
     logic [31:0] wr_addr_q [0:DEPTH-1];
     logic [63:0] wr_data_q [0:DEPTH-1];
@@ -149,8 +152,35 @@ module ddram_adapter (
                         (rsp_committed + {1'b0, rd64_len} <= 9'(DEPTH));
 
     wire [7:0] head_len = (rd_count != 0 && rd_is64_q[rd_head]) ? rd_len_q[rd_head] : 8'd1;
+    wire [PTR_W:0] wr_committed = wr_count -
+        (wr_pending ? (PTR_W+1)'(1) : (PTR_W+1)'(0));
     wire want_read = (rd_count != 0) && ((rd_count != 1) || !rd_in_valid);
-    wire want_write = (wr_count != 0) && ((wr_count != 1) || !wr_pending);
+
+    // A producer that supplies one word per cycle never lets the old queue
+    // grow: each entry was issued as soon as it committed. Gather up to eight
+    // committed, contiguous full words before starting a transaction. When
+    // ingress pauses, flush any shorter run immediately. Scalar and sparse
+    // writes never wait for a full burst, and pending reads may force a short
+    // write run so the existing round-robin arbitration remains bounded.
+    logic [7:0] write_burst_len;
+    always_comb begin
+        write_burst_len = 8'd1;
+        for (int i = 1; i < WRITE_BURST_MAX; i++) begin
+            if (wr_committed > (PTR_W+1)'(i) &&
+                write_burst_len == 8'(i) &&
+                wr_full_q[wr_head] &&
+                wr_full_q[wr_head + PTR_W'(i)] &&
+                wr_addr_q[wr_head + PTR_W'(i)] ==
+                    wr_addr_q[wr_head] + 32'(i * 8))
+                write_burst_len = 8'(i + 1);
+        end
+    end
+    wire write_ingress = wr_fire || wr64_fire;
+    wire write_flush = (wr_committed >= (PTR_W+1)'(WRITE_BURST_MAX)) ||
+                       (!wr_pending && !write_ingress) ||
+                       (wr_committed != 0 && !wr_full_q[wr_head]) ||
+                       want_read;
+    wire want_write = (wr_committed != 0) && write_flush;
     // Choose the payload without bridge backpressure. Gating the address
     // mux with busy creates a bridge-ready -> address -> bridge-input path.
     // Busy still gates command acceptance and queue advancement.
@@ -176,9 +206,15 @@ module ddram_adapter (
     // for the queues and the response metadata below.
     logic        cmd_valid, cmd_read;
     logic [28:0] cmd_addr;
-    logic [7:0]  cmd_burstcnt, cmd_be;
+    logic [7:0]  cmd_burstcnt, cmd_be, cmd_write_left;
     logic [63:0] cmd_din;
-    wire cmd_load = !cmd_valid || !ddram_busy;
+    wire cmd_accept = cmd_valid && !ddram_busy;
+    wire read_accept = cmd_accept && cmd_read;
+    wire write_accept = cmd_accept && !cmd_read;
+    // An accepted read may be replaced without a bubble. A write burst owns
+    // the stage until its last data beat; the following command starts one
+    // cycle later because the next queue head is not visible until that edge.
+    wire cmd_load = !cmd_valid || read_accept;
     wire read_issue = select_read && cmd_load;
     wire write_issue = select_write && cmd_load;
 
@@ -187,7 +223,8 @@ module ddram_adapter (
     // scalar read or any 64-bit request that declared no extra length --
     // and the real Avalon-MM target auto-increments its own address and
     // streams that many beats back with no further command from this
-    // adapter. Writes are always single-beat.
+    // adapter. A write burst holds address and burstcnt while advancing its
+    // data and byte enable on each accepted beat, as Avalon-MM requires.
     assign ddram_burstcnt = cmd_burstcnt;
     assign ddram_rd = cmd_valid && cmd_read;
     assign ddram_we = cmd_valid && !cmd_read;
@@ -234,6 +271,7 @@ module ddram_adapter (
             cmd_burstcnt <= 8'd1;
             cmd_be <= '0;
             cmd_din <= '0;
+            cmd_write_left <= 8'd0;
         end else begin
             rr <= !rr;
             rsp_valid_q <= ddram_dout_ready;
@@ -242,21 +280,38 @@ module ddram_adapter (
             meta_is64 <= rd_is64_q[rd_head];
             meta_half <= rd_half_q[rd_head];
             meta_len <= head_len;
-            if (cmd_load) begin
+            if (cmd_valid && !cmd_read) begin
+                if (!ddram_busy) begin
+                    if (cmd_write_left > 8'd1) begin
+                        cmd_write_left <= cmd_write_left - 8'd1;
+                        cmd_be <= wr_full_q[wr_head + PTR_W'(1)] ? 8'hff :
+                                  (wr_addr_q[wr_head + PTR_W'(1)][2] ? 8'hf0 : 8'h0f);
+                        cmd_din <= wr_full_q[wr_head + PTR_W'(1)] ?
+                                   wr_data_q[wr_head + PTR_W'(1)] :
+                                   (wr_addr_q[wr_head + PTR_W'(1)][2] ?
+                                    {wr_data_q[wr_head + PTR_W'(1)][31:0], 32'b0} :
+                                    {32'b0, wr_data_q[wr_head + PTR_W'(1)][31:0]});
+                    end else begin
+                        cmd_valid <= 1'b0;
+                        cmd_write_left <= 8'd0;
+                    end
+                end
+            end else if (cmd_load) begin
                 cmd_valid <= read_issue || write_issue;
                 cmd_read <= select_read;
                 cmd_addr <= select_read ? rd_addr_q[rd_head][31:3] : wr_addr_q[wr_head][31:3];
-                cmd_burstcnt <= select_read ? head_len : 8'd1;
+                cmd_burstcnt <= select_read ? head_len : write_burst_len;
                 cmd_be <= wr_full_q[wr_head] ? 8'hff : (wr_addr_q[wr_head][2] ? 8'hf0 : 8'h0f);
                 cmd_din <= wr_full_q[wr_head] ? wr_data_q[wr_head] :
                            (wr_addr_q[wr_head][2] ? {wr_data_q[wr_head][31:0], 32'b0} :
                                                     {32'b0, wr_data_q[wr_head][31:0]});
+                cmd_write_left <= write_issue ? write_burst_len : 8'd0;
             end
             // Every accepted write reserves its slot before the next-cycle
             // commit. Producer decisions never drive the queue's wide enables.
-            wr_pending <= wr_fire || wr64_fire;
-            wr_slot_en <= wr_tail & {DEPTH{wr_fire || wr64_fire}};
-            if (wr_fire || wr64_fire) begin
+            wr_pending <= write_ingress;
+            wr_slot_en <= wr_tail & {DEPTH{write_ingress}};
+            if (write_ingress) begin
                 wr_ingress_addr <= wr64_fire ? wr64_addr : wr_addr;
                 wr_ingress_data <= wr64_fire ? wr64_data : {32'b0, wr_data};
                 wr_ingress_full <= wr64_fire;
@@ -269,9 +324,9 @@ module ddram_adapter (
                     wr_full_q[i] <= wr_ingress_full;
                 end
             end
-            if (write_issue)
+            if (write_accept)
                 wr_head <= wr_head + 1'b1;
-            case ({wr_fire || wr64_fire, write_issue})
+            case ({write_ingress, write_accept})
                 2'b10: wr_count <= wr_count + 1'b1;
                 2'b01: wr_count <= wr_count - 1'b1;
                 default: ;

@@ -55,22 +55,32 @@ public:
             std::fprintf(stderr, "RD asserted alongside WE\n");
             std::exit(1);
         }
-        if (burstcnt != 1) {
-            std::fprintf(stderr, "unexpected burstcnt=%u\n", burstcnt);
+        if (write_remaining_ == 0) {
+            if (burstcnt == 0 || burstcnt > 8) {
+                std::fprintf(stderr, "unexpected burstcnt=%u\n", burstcnt);
+                std::exit(1);
+            }
+            write_base_ = word_addr;
+            write_count_ = burstcnt;
+            write_remaining_ = burstcnt;
+        } else if (word_addr != write_base_ || burstcnt != write_count_) {
+            std::fprintf(stderr, "write command changed within burst\n");
             std::exit(1);
         }
-        if (word_addr >= words_.size()) {
-            std::fprintf(stderr, "write out of bounds: word_addr=0x%08x\n", word_addr);
+        const uint32_t write_addr = write_base_ + (write_count_ - write_remaining_);
+        if (write_addr >= words_.size()) {
+            std::fprintf(stderr, "write out of bounds: word_addr=0x%08x\n", write_addr);
             std::exit(1);
         }
-        uint64_t &word = words_[word_addr];
+        uint64_t &word = words_[write_addr];
         for (int i = 0; i < 8; ++i) {
             if (be & (1u << i)) {
                 const uint64_t byte = (din >> (8 * i)) & 0xFF;
                 word = (word & ~(0xFFull << (8 * i))) | (byte << (8 * i));
             }
         }
-        writes_.push_back(word_addr);
+        writes_.push_back(write_addr);
+        --write_remaining_;
     }
 
     uint64_t Word(uint32_t word_addr) const { return words_[word_addr]; }
@@ -79,6 +89,8 @@ public:
 private:
     std::vector<uint64_t> words_;
     std::vector<uint32_t> writes_;
+    uint32_t write_base_ = 0;
+    unsigned write_count_ = 0, write_remaining_ = 0;
 };
 
 class Testbench {

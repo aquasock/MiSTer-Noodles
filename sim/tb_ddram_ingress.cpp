@@ -35,6 +35,8 @@ public:
     std::deque<Write> writes;
     unsigned accepted = 0, issued = 0, read_accepted = 0, read_returned = 0;
     unsigned run = 0, longest_run = 0;
+    unsigned write_burst_left = 0, write_burst_index = 0;
+    unsigned write_burst_base = 0, write_burst_count = 0, max_write_burst = 0;
     int response_delay = 0;
     bool read_pending = false;
     bool response_next = false;
@@ -56,6 +58,8 @@ public:
         held = Command{};
         response_next = false;
         run = longest_run = 0;
+        write_burst_left = write_burst_index = 0;
+        write_burst_base = write_burst_count = max_write_burst = 0;
         accepted = issued = read_accepted = read_returned = 0;
         dut.clk = 0; dut.eval();
         Check(dut.idle, "reset did not empty ingress and queue");
@@ -89,11 +93,27 @@ public:
 
         if (dut.ddram_we && !busy) {
             Check(!writes.empty(), "write issued before acceptance/commit");
+            if (!write_burst_left) {
+                Check(dut.ddram_burstcnt >= 1 && dut.ddram_burstcnt <= 8,
+                      "write burst length is outside the adapter limit");
+                write_burst_base = dut.ddram_addr;
+                write_burst_count = dut.ddram_burstcnt;
+                write_burst_left = write_burst_count;
+                write_burst_index = 0;
+                if (write_burst_count > max_write_burst)
+                    max_write_burst = write_burst_count;
+            } else {
+                Check(dut.ddram_addr == write_burst_base &&
+                      dut.ddram_burstcnt == write_burst_count,
+                      "write burst address or count changed between beats");
+            }
             auto expected = writes.front();
             writes.pop_front();
-            Check(dut.ddram_addr == expected.addr && dut.ddram_din == expected.data &&
-                  dut.ddram_be == expected.be && dut.ddram_burstcnt == 1,
+            Check(write_burst_base + write_burst_index == expected.addr &&
+                  dut.ddram_din == expected.data && dut.ddram_be == expected.be,
                   "write lost, reordered, duplicated or wrong byte lanes");
+            ++write_burst_index;
+            --write_burst_left;
             ++issued;
             if (++run > longest_run) longest_run = run;
         } else {
@@ -112,8 +132,7 @@ public:
                               uint8_t(upper ? 0xf0 : 0x0f)});
             ++accepted;
         }
-        // Sixteen queued writes plus one held in the registered command stage.
-        Check(writes.size() <= 17, "ingress increased accepted capacity beyond sixteen plus the command stage");
+        Check(writes.size() <= 16, "ingress increased accepted capacity beyond sixteen writes");
         if (dut.rd_en && dut.rd_ready) {
             read_pending = true;
             ++read_accepted;
@@ -146,6 +165,7 @@ public:
             if (dut.idle) {
                 Check(writes.empty() && accepted == issued && read_accepted == read_returned,
                       "idle before all accepted commands completed");
+                Check(write_burst_left == 0, "idle in the middle of a write burst");
                 return;
             }
         }
@@ -162,19 +182,23 @@ int main(int argc, char **argv) {
         tb.DriveWrite(n, n % 2 == 0, n % 2 != 0);
         tb.Tick(true);
     }
-    // Sixteen queued writes plus the one the empty command stage took.
-    Check(tb.accepted == 17 && !tb.dut.wr_ready && !tb.dut.wr64_ready,
-          "full queue did not accept exactly sixteen writes plus the command stage");
+    Check(tb.accepted == 16 && !tb.dut.wr_ready && !tb.dut.wr64_ready,
+          "full queue did not accept exactly sixteen writes");
     tb.Drain();
 
     tb.Reset();
     for (unsigned n = 0; n < 256; ++n) {
-        tb.DriveWrite(n, n % 2 == 0, n % 2 != 0);
-        tb.Tick(false);
+        unsigned before = tb.accepted;
+        do {
+            tb.DriveWrite(n, false, true);
+            tb.Tick(false);
+        } while (tb.accepted == before);
     }
     tb.Drain();
-    Check(tb.accepted == 256 && tb.longest_run >= 256,
-          "ingress introduced bubbles in one-write-per-cycle traffic");
+    std::printf("contiguous: accepted=%u issued=%u max-burst=%u longest-run=%u\n",
+                tb.accepted, tb.issued, tb.max_write_burst, tb.longest_run);
+    Check(tb.accepted == 256 && tb.max_write_burst == 8 && tb.longest_run >= 8,
+          "contiguous full writes did not form eight-beat bursts");
 
     tb.Reset();
     uint32_t random = 0x12345678;
@@ -200,6 +224,6 @@ int main(int argc, char **argv) {
         tb.Drain();
         Check(tb.issued == 1, "post-reset write missing");
     }
-    std::puts("PASS: DDRAM ingress preserves 16-write capacity, ordering, full-rate throughput, arbitration and reset");
+    std::puts("PASS: DDRAM ingress preserves 16-write capacity, ordering, eight-beat bursts, arbitration and reset");
     return 0;
 }

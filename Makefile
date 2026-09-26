@@ -28,7 +28,6 @@ ARMFILLPUSH := build/arm/solid-fill-push
 ARMKEYPUSH  := build/arm/blit-copy-key-push
 ARMBENCH    := build/arm/bench
 ARMCOPYSWEEP:= build/arm/copy-sweep
-ARMPERF     := build/arm/ddram-perf
 ARMPRESENT  := build/arm/present-demo
 ARMSPRITE   := build/arm/sprite-demo
 ARMLOADBMP  := build/arm/load-bmp
@@ -44,7 +43,6 @@ HOSTFILLPUSH:= build/host/solid-fill-push
 HOSTKEYPUSH := build/host/blit-copy-key-push
 HOSTBENCH   := build/host/bench
 HOSTCOPYSWEEP:= build/host/copy-sweep
-HOSTPERF    := build/host/ddram-perf
 HOSTPRESENT := build/host/present-demo
 HOSTSPRITE  := build/host/sprite-demo
 HOSTLOADBMP := build/host/load-bmp
@@ -83,7 +81,7 @@ BLEND_RTL         := rtl/blend_px.sv rtl/blend_walk.sv rtl/blit_blend.sv
 
 .PHONY: all host deploy sim formal test-host test-timing test-sdk-install sdk sdk-host install-sdk clean
 
-all: sdk $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMCOPYSWEEP) $(ARMPERF) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS) $(ARMTILECACHE) $(ARMBLEND) $(ARMPRESENTPROBE)
+all: sdk $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMCOPYSWEEP) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS) $(ARMTILECACHE) $(ARMBLEND) $(ARMPRESENTPROBE)
 
 sdk: build/arm/libnoodles.a build/arm/sdk-smoke
 sdk-host: build/host/libnoodles.a build/host/sdk-smoke
@@ -302,9 +300,6 @@ $(ARMBENCH): tools/bench.c build/arm/libnoodles.a lib/noodles_link.h tools/sdk_h
 $(ARMCOPYSWEEP): tools/copy-sweep.c build/arm/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CPPFLAGS) $(CFLAGS) -static -o $@ tools/copy-sweep.c build/arm/libnoodles.a
 
-$(ARMPERF): tools/ddram-perf.c build/arm/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/arm
-	$(ARMCC) $(ARMFLAGS) $(CPPFLAGS) $(CFLAGS) -static -o $@ tools/ddram-perf.c build/arm/libnoodles.a
-
 $(ARMPRESENT): tools/present_demo.c build/arm/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CPPFLAGS) $(CFLAGS) -static -o $@ tools/present_demo.c build/arm/libnoodles.a
 
@@ -323,7 +318,7 @@ $(ARMTILECACHE): tools/tile_cache_demo.c build/arm/libnoodles.a lib/noodles_link
 $(ARMBLEND): tools/blend_demo.c sim/blend_ref.h build/arm/libnoodles.a lib/noodles_link.h lib/noodles_surface.h tools/sdk_helpers.h | build/arm
 	$(ARMCC) $(ARMFLAGS) $(CPPFLAGS) $(CFLAGS) -static -o $@ tools/blend_demo.c build/arm/libnoodles.a -lm
 
-host: sdk-host $(HOSTLINK) $(HOSTSLOTDUMP) $(HOSTMEMSCAN) $(HOSTCOPYPUSH) $(HOSTFILLPUSH) $(HOSTKEYPUSH) $(HOSTBENCH) $(HOSTCOPYSWEEP) $(HOSTPERF) $(HOSTPRESENT) $(HOSTSPRITE) $(HOSTLOADBMP) $(HOSTSTRESS) $(HOSTTILECACHE) $(HOSTBLEND) $(HOSTPRESENTPROBE)
+host: sdk-host $(HOSTLINK) $(HOSTSLOTDUMP) $(HOSTMEMSCAN) $(HOSTCOPYPUSH) $(HOSTFILLPUSH) $(HOSTKEYPUSH) $(HOSTBENCH) $(HOSTCOPYSWEEP) $(HOSTPRESENT) $(HOSTSPRITE) $(HOSTLOADBMP) $(HOSTSTRESS) $(HOSTTILECACHE) $(HOSTBLEND) $(HOSTPRESENTPROBE)
 
 $(HOSTLINK): tools/link_push.c build/host/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/host
 	$(HOSTCC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/link_push.c build/host/libnoodles.a
@@ -352,9 +347,6 @@ $(HOSTBENCH): tools/bench.c build/host/libnoodles.a lib/noodles_link.h tools/sdk
 $(HOSTCOPYSWEEP): tools/copy-sweep.c build/host/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/host
 	$(HOSTCC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/copy-sweep.c build/host/libnoodles.a
 
-$(HOSTPERF): tools/ddram-perf.c build/host/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/host
-	$(HOSTCC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/ddram-perf.c build/host/libnoodles.a
-
 $(HOSTPRESENT): tools/present_demo.c build/host/libnoodles.a lib/noodles_link.h tools/sdk_helpers.h | build/host
 	$(HOSTCC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/present_demo.c build/host/libnoodles.a
 
@@ -376,7 +368,7 @@ $(HOSTBLEND): tools/blend_demo.c sim/blend_ref.h build/host/libnoodles.a lib/noo
 build/arm build/host:
 	mkdir -p $@
 
-deploy: sdk $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMCOPYSWEEP) $(ARMPERF) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS) $(ARMTILECACHE) $(ARMBLEND) $(ARMPRESENTPROBE)
+deploy: sdk $(ARMLINK) $(ARMSLOTDUMP) $(ARMMEMSCAN) $(ARMCOPYPUSH) $(ARMFILLPUSH) $(ARMKEYPUSH) $(ARMBENCH) $(ARMCOPYSWEEP) $(ARMPRESENT) $(ARMSPRITE) $(ARMLOADBMP) $(ARMSTRESS) $(ARMTILECACHE) $(ARMBLEND) $(ARMPRESENTPROBE)
 	scripts/deploy.sh $(HOST)
 
 # Formal proofs (SymbiYosys with Z3; see docs/BUILD.md). Each .sby runs its

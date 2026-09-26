@@ -48,10 +48,20 @@ public:
             }
         }
         if (we) {
-            uint64_t &word = words_[word_addr];
-            if (!initialized_[word_addr]) {
+            if (write_remaining_ == 0) {
+                if (burstcnt == 0 || burstcnt > 8) std::exit(2);
+                write_base_ = word_addr;
+                write_count_ = burstcnt;
+                write_remaining_ = burstcnt;
+            } else if (word_addr != write_base_ || burstcnt != write_count_) {
+                std::fprintf(stderr, "write command changed within burst\n");
+                std::exit(2);
+            }
+            const uint32_t write_addr = write_base_ + (write_count_ - write_remaining_);
+            uint64_t &word = words_[write_addr];
+            if (!initialized_[write_addr]) {
                 word = kPattern;
-                initialized_[word_addr] = true;
+                initialized_[write_addr] = true;
             }
             for (unsigned byte = 0; byte < 8; ++byte) {
                 if (be & (1u << byte)) {
@@ -59,6 +69,7 @@ public:
                     word = (word & ~mask) | (din & mask);
                 }
             }
+            --write_remaining_;
             ++writes_;
         }
         if (rd) {
@@ -81,6 +92,8 @@ private:
     uint64_t dout_ = 0;
     bool dout_ready_ = false;
     size_t reads_ = 0, writes_ = 0;
+    uint32_t write_base_ = 0;
+    unsigned write_count_ = 0, write_remaining_ = 0;
 };
 
 class Testbench {

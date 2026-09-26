@@ -66,12 +66,26 @@ public:
             }
         }
         if (we) {
-            uint64_t word = Word(word_addr);
+            if (write_remaining_ == 0) {
+                if (burstcnt == 0 || burstcnt > 8) {
+                    std::fprintf(stderr, "FAIL: bad write burstcnt %u\n", burstcnt);
+                    std::exit(1);
+                }
+                write_base_ = word_addr;
+                write_count_ = burstcnt;
+                write_remaining_ = burstcnt;
+            } else if (word_addr != write_base_ || burstcnt != write_count_) {
+                std::fprintf(stderr, "FAIL: write command changed within burst\n");
+                std::exit(1);
+            }
+            const uint32_t write_addr = write_base_ + (write_count_ - write_remaining_);
+            uint64_t word = Word(write_addr);
             for (int i = 0; i < 8; ++i) {
                 if (be & (1u << i))
                     word = (word & ~(0xffull << (8 * i))) | (((din >> (8 * i)) & 0xff) << (8 * i));
             }
-            words_[word_addr] = word;
+            words_[write_addr] = word;
+            --write_remaining_;
             ++writes_;
         } else if (rd) {
             if (burstcnt == 0 || burstcnt > 16) {
@@ -97,6 +111,8 @@ private:
     uint64_t dout_ = 0;
     size_t writes_ = 0, reads_ = 0;
     unsigned latency_ = 3, jitter_ = 0;
+    uint32_t write_base_ = 0;
+    unsigned write_count_ = 0, write_remaining_ = 0;
 };
 
 class Testbench {
