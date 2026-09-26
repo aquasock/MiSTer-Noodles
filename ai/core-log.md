@@ -691,3 +691,37 @@ Keep the timing-qualified seed-2 image under the canonical launcher filename and
 - [x] Passed
 
 ---
+
+## 17 COMMIT Unreleased ??? 2026-09-25T18:19:00-07:00
+
+#### Coming From:
+
+Unreleased f97ce70
+
+#### Purpose:
+
+Measure why the 120MHz core retains the 100MHz engine throughput before selecting the next memory-path change.
+
+#### Outcome:
+
+Planned. The accepted 100MHz and qualified 120MHz measurements both sustain approximately 88 million 64-bit fill writes per second even though the latter provides 20 percent more core cycles, while the adapter still emits every write as a separate burst-count-one transaction. Add a temporary passive probe that counts elapsed core cycles, accepted read commands and words, accepted write beats, DDRAM backpressure, read responses and command-idle bubbles for isolated fill, copy and blend operations, then publish the completed snapshot only after the measured operation and adapter have drained so observation cannot alter the measured interval.
+
+#### Next Steps:
+
+Run simulation and formal regressions, build three Quartus seeds in parallel, measure the real MiSTer bus cadence for representative full-surface operations and compare the counters with the wall-time rates. Use that evidence to distinguish single-beat write transaction overhead, undersized read refills and engine pipeline bubbles, then remove the temporary probe and propose the smallest throughput correction separately.
+
+#### Files Modified:
+
+- Makefile
+- Noodles.sv
+- files.qip
+- rtl/ddram_perf_probe.sv
+- scripts/deploy.sh
+- tools/ddram-perf.c
+
+#### Status:
+
+- [ ] Built
+- [ ] Passed
+
+---
