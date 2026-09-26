@@ -90,7 +90,7 @@ module blit_blend #(
     localparam int DST_W = $clog2(DST_DEPTH);
     localparam int OUT_W = $clog2(OUT_DEPTH);
     localparam int TAG_W = $clog2(TAG_DEPTH);
-    localparam int LATENCY = 8;  // blend_px
+    localparam int LATENCY = 8;  // blend_px, after the registered launch stage
     // BLIT-009 presets, blend_px mode layout (aop, adf, asf, cop, cdf, csf,
     // reserved, single): SDL BLEND and NONE.
     localparam logic [23:0] MODE_BLEND = {3'd1, 4'd6, 4'd2, 3'd1, 4'd6, 4'd5, 2'b00};
@@ -320,7 +320,17 @@ module blit_blend #(
     wire launch_fifo = launch && !solid_r && !partial_src_valid;
 
     // ---------------------------------------------------------------
-    // Pixel lanes and sideband.
+    // Pixel lanes and sideband. Register the selected source and destination
+    // word before both the blend lanes and colour-key comparison. In
+    // particular, this splits the pixel-FIFO pointer/mux path from the
+    // equality comparator that decides the sideband lane enables. The launch
+    // stage accepts one word every clock, so throughput is unchanged while
+    // the fixed launch-to-result latency grows by one cycle.
+    logic        blend_in_valid;
+    logic [31:0] blend_src_lo, blend_src_hi;
+    logic [63:0] blend_dst;
+    logic [28:0] blend_word;
+    logic        blend_lane_lo, blend_lane_hi;
     logic        lo_out_valid;
     logic [31:0] lo_out, hi_out;
     logic [63:0] sb_dst  [0:LATENCY-1];
@@ -328,18 +338,18 @@ module blit_blend #(
     logic [LATENCY-1:0] sb_lo, sb_hi;
     // Colour-keyed lanes keep their destination value like out-of-rectangle
     // lanes; the key is compared with the unmodulated source pixel.
-    wire key_lo = key_enable_r && lane_src_lo == key_r;
-    wire key_hi = key_enable_r && lane_src_hi == key_r;
+    wire key_lo = key_enable_r && blend_src_lo == key_r;
+    wire key_hi = key_enable_r && blend_src_hi == key_r;
 
     blend_px lane_lo (
-        .clk(clk), .reset(reset), .in_valid(launch),
-        .src(lane_src_lo), .dst(dw_mem[dw_rp][31:0]), .mod(mod_r), .mode(mode_r),
+        .clk(clk), .reset(reset), .in_valid(blend_in_valid),
+        .src(blend_src_lo), .dst(blend_dst[31:0]), .mod(mod_r), .mode(mode_r),
         .out_valid(lo_out_valid), .out(lo_out)
     );
 
     blend_px lane_hi (
-        .clk(clk), .reset(reset), .in_valid(launch),
-        .src(lane_src_hi), .dst(dw_mem[dw_rp][63:32]), .mod(mod_r), .mode(mode_r),
+        .clk(clk), .reset(reset), .in_valid(blend_in_valid),
+        .src(blend_src_hi), .dst(blend_dst[63:32]), .mod(mod_r), .mode(mode_r),
         /* verilator lint_off PINCONNECTEMPTY */
         .out_valid(),
         /* verilator lint_on PINCONNECTEMPTY */
@@ -415,10 +425,10 @@ module blit_blend #(
             dw_lo[dw_wp] <= r_dlo;
             dw_hi[dw_wp] <= r_dhi;
         end
-        sb_dst[0] <= dw_mem[dw_rp];
-        sb_word[0] <= dw_word[dw_rp];
-        sb_lo[0] <= head_lo && !key_lo;
-        sb_hi[0] <= head_hi && !key_hi;
+        sb_dst[0] <= blend_dst;
+        sb_word[0] <= blend_word;
+        sb_lo[0] <= blend_lane_lo && !key_lo;
+        sb_hi[0] <= blend_lane_hi && !key_hi;
         for (int i = 1; i < LATENCY; i++) begin
             sb_dst[i] <= sb_dst[i-1];
             sb_word[i] <= sb_word[i-1];
@@ -477,6 +487,10 @@ module blit_blend #(
             opaque_stage_valid <= 1'b0;
             opaque_stage_data <= '0; opaque_stage_word <= '0;
             opaque_stage_full <= 1'b0; opaque_stage_hi <= 1'b0;
+            blend_in_valid <= 1'b0;
+            blend_src_lo <= '0; blend_src_hi <= '0;
+            blend_dst <= '0; blend_word <= '0;
+            blend_lane_lo <= 1'b0; blend_lane_hi <= 1'b0;
             px_wp <= '0; px_rp <= '0; px_count <= '0;
             dw_wp <= '0; dw_rp <= '0; dw_count <= '0;
             of_wp <= '0; of_rp <= '0; of_count <= '0;
@@ -484,6 +498,15 @@ module blit_blend #(
         end else begin
             done <= 1'b0;
             walk_start <= 1'b0;
+            blend_in_valid <= launch;
+            if (launch) begin
+                blend_src_lo <= lane_src_lo;
+                blend_src_hi <= lane_src_hi;
+                blend_dst <= dw_mem[dw_rp];
+                blend_word <= dw_word[dw_rp];
+                blend_lane_lo <= head_lo;
+                blend_lane_hi <= head_hi;
+            end
             if (start && !busy) begin
                 busy <= 1'b1;
                 prep <= 2'd3;
