@@ -200,6 +200,22 @@ int main(int argc, char **argv) {
     Check(tb.accepted == 256 && tb.max_write_burst == 8 && tb.longest_run >= 8,
           "contiguous full writes did not form eight-beat bursts");
 
+    for (unsigned length : {1u, 2u, 3u, 7u, 9u, 15u}) {
+        tb.Reset();
+        for (unsigned n = 0; n < length; ++n) {
+            unsigned before = tb.accepted;
+            do {
+                tb.DriveWrite(n, false, true);
+                tb.Tick(false);
+            } while (tb.accepted == before);
+        }
+        tb.Drain();
+        Check(tb.accepted == length && tb.issued == length,
+              "short contiguous run lost or duplicated a write");
+        Check(tb.max_write_burst == (length < 8 ? length : 8),
+              "short contiguous run did not flush with the expected burst length");
+    }
+
     tb.Reset();
     uint32_t random = 0x12345678;
     for (unsigned n = 0; n < 6000; ++n) {

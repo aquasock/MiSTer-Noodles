@@ -76,11 +76,15 @@ module ddram_adapter (
     logic [31:0] wr_addr_q [0:DEPTH-1];
     logic [63:0] wr_data_q [0:DEPTH-1];
     logic        wr_full_q [0:DEPTH-1];
+    logic [7:0]  wr_burst_len_q [0:DEPTH-1];
     logic [PTR_W-1:0] wr_head;
     logic [DEPTH-1:0] wr_tail, wr_slot_en;  // one-hot reservation and delayed commit
     logic [31:0] wr_ingress_addr;
     logic [63:0] wr_ingress_data;
     logic wr_ingress_full, wr_pending;
+    logic [PTR_W-1:0] wr_run_start;
+    logic [3:0] wr_run_count;
+    logic [31:0] wr_run_last_addr;
     // Counts all accepted writes, including the reserved ingress slot.
     logic [PTR_W:0] wr_count;
 
@@ -156,31 +160,12 @@ module ddram_adapter (
         (wr_pending ? (PTR_W+1)'(1) : (PTR_W+1)'(0));
     wire want_read = (rd_count != 0) && ((rd_count != 1) || !rd_in_valid);
 
-    // A producer that supplies one word per cycle never lets the old queue
-    // grow: each entry was issued as soon as it committed. Gather up to eight
-    // committed, contiguous full words before starting a transaction. When
-    // ingress pauses, flush any shorter run immediately. Scalar and sparse
-    // writes never wait for a full burst, and pending reads may force a short
-    // write run so the existing round-robin arbitration remains bounded.
-    logic [7:0] write_burst_len;
-    always_comb begin
-        write_burst_len = 8'd1;
-        for (int i = 1; i < WRITE_BURST_MAX; i++) begin
-            if (wr_committed > (PTR_W+1)'(i) &&
-                write_burst_len == 8'(i) &&
-                wr_full_q[wr_head] &&
-                wr_full_q[wr_head + PTR_W'(i)] &&
-                wr_addr_q[wr_head + PTR_W'(i)] ==
-                    wr_addr_q[wr_head] + 32'(i * 8))
-                write_burst_len = 8'(i + 1);
-        end
-    end
+    // Burst lengths are formed incrementally as queue entries commit and are
+    // stored only on the first entry of each run. This avoids a same-cycle
+    // eight-entry address scan between the queue and command registers.
+    wire [7:0] write_burst_len = wr_burst_len_q[wr_head];
     wire write_ingress = wr_fire || wr64_fire;
-    wire write_flush = (wr_committed >= (PTR_W+1)'(WRITE_BURST_MAX)) ||
-                       (!wr_pending && !write_ingress) ||
-                       (wr_committed != 0 && !wr_full_q[wr_head]) ||
-                       want_read;
-    wire want_write = (wr_committed != 0) && write_flush;
+    wire want_write = (wr_committed != 0) && (write_burst_len != 0);
     // Choose the payload without bridge backpressure. Gating the address
     // mux with busy creates a bridge-ready -> address -> bridge-input path.
     // Busy still gates command acceptance and queue advancement.
@@ -247,6 +232,11 @@ module ddram_adapter (
             wr_slot_en <= '0;
             wr_pending <= 1'b0;
             wr_count <= 0;
+            wr_run_start <= 0;
+            wr_run_count <= 0;
+            wr_run_last_addr <= 0;
+            for (int i = 0; i < DEPTH; i++)
+                wr_burst_len_q[i] <= 0;
             rd_head <= 0;
             rd_tail <= 0;
             rd_count <= 0;
@@ -317,12 +307,61 @@ module ddram_adapter (
                 wr_ingress_full <= wr64_fire;
                 wr_tail <= {wr_tail[DEPTH-2:0], wr_tail[DEPTH-1]};
             end
+            if (write_issue)
+                wr_burst_len_q[wr_head] <= 0;
             for (int i = 0; i < DEPTH; i++) begin
                 if (wr_slot_en[i]) begin
                     wr_addr_q[i] <= wr_ingress_addr;
                     wr_data_q[i] <= wr_ingress_data;
                     wr_full_q[i] <= wr_ingress_full;
+                    wr_burst_len_q[i] <= 0;
+
+                    // Scalar writes are always standalone. A full-word write
+                    // extends the open run only when its byte address is the
+                    // next 64-bit word. Eight entries close a run immediately;
+                    // an ingress pause or pending read closes a shorter run.
+                    if (!wr_ingress_full) begin
+                        if (wr_run_count != 0)
+                            wr_burst_len_q[wr_run_start] <= {4'd0, wr_run_count};
+                        wr_burst_len_q[i] <= 8'd1;
+                        wr_run_count <= 0;
+                    end else if (wr_run_count == 0) begin
+                        if (!write_ingress || want_read) begin
+                            wr_burst_len_q[i] <= 8'd1;
+                            wr_run_count <= 0;
+                        end else begin
+                            wr_run_start <= PTR_W'(i);
+                            wr_run_count <= 4'd1;
+                            wr_run_last_addr <= wr_ingress_addr;
+                        end
+                    end else if (wr_ingress_addr == wr_run_last_addr + 32'd8) begin
+                        if (wr_run_count == 4'(WRITE_BURST_MAX-1) ||
+                            !write_ingress || want_read) begin
+                            wr_burst_len_q[wr_run_start] <=
+                                {4'd0, wr_run_count} + 8'd1;
+                            wr_run_count <= 0;
+                        end else begin
+                            wr_run_count <= wr_run_count + 4'd1;
+                            wr_run_last_addr <= wr_ingress_addr;
+                        end
+                    end else begin
+                        wr_burst_len_q[wr_run_start] <= {4'd0, wr_run_count};
+                        if (!write_ingress || want_read) begin
+                            wr_burst_len_q[i] <= 8'd1;
+                            wr_run_count <= 0;
+                        end else begin
+                            wr_run_start <= PTR_W'(i);
+                            wr_run_count <= 4'd1;
+                            wr_run_last_addr <= wr_ingress_addr;
+                        end
+                    end
                 end
+            end
+            // A queued read must not wait for a producer that pauses with a
+            // short write run still open.
+            if (!(|wr_slot_en) && wr_run_count != 0 && want_read) begin
+                wr_burst_len_q[wr_run_start] <= {4'd0, wr_run_count};
+                wr_run_count <= 0;
             end
             if (write_accept)
                 wr_head <= wr_head + 1'b1;
