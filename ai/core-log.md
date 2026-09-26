@@ -657,7 +657,7 @@ Keep the accepted 100MHz image loaded and obtain approval for a diagnostic-only 
 
 ---
 
-## 16 COMMIT Unreleased ??? 2026-09-25T16:44:05-07:00
+## 16 COMMIT Unreleased f97ce70 2026-09-25T16:44:05-07:00
 
 #### Coming From:
 
@@ -669,11 +669,11 @@ Find and correct the 120MHz full-screen copy completion failure without weakenin
 
 #### Outcome:
 
-Planned. Add a bounded hardware diagnostic that varies copy width, height, alignment and repetition while reporting the last completed fence, then expose only the request, response, FIFO and terminal state needed to distinguish a DDRAM handshake loss from a copy-engine counter defect. Reproduce the first failing boundary on the seed-3 candidate, encode it as a simulation regression, correct the smallest responsible RTL contract and retain protocol 1.7 and SDK compatibility.
+Source `4b1015f` identifies the 120MHz copy timeout as an unowned DDR response: the scalar copy request could reach the adapter before the registered read-owner grant, so the adapter accepted a request for which the copy engine had reserved no response slot. It gates the adapter request with the actual grant, adds the registered owner handoff to the simulation regression and adds a bounded hardware copy sweep. Source `4673ec8` then registers blend FIFO alpha classification before it controls destination reads and opaque output, removing the remaining blend control path without changing results or measured simulation cycles. The complete Verilator suite, all formal jobs, native and installed SDK checks and ARM build passed. Nine exploratory clean fits tested seeds 1 through 7, 9 and 13; final source `f97ce70` pins seed 2 and a clean three-build reproduction from that exact online commit gave seed 2 a four-corner pass with +0.227ns worst setup and +0.077ns worst hold, while comparison seeds 1 and 3 missed only the 100MHz composite-video path by 0.034ns and 0.093ns. The qualified fit uses 12,906 ALMs, 22,261 registers, 365,969 memory bits and 60 DSP blocks, and its reproducible RBF SHA256 is `ae2cdf45e0322f0d91bafeba481594b57c6d65c80fa444256a0153338e849cc6`. On MiSTer it reported protocol 1.7, passed every bounded copy case through repeated 800x600 copies, completed the full engine and presentation throughput suite, retained exact SDL pixel hash `93f8e614` and passed HDMI audio in both two-buffer and three-buffer modes. Full-screen copy measured 26.5 Mpixel/s, fill 177.5 Mpixel/s and blended draws 66.7-70.7 Mpixel/s, confirming that the clock increase is timing and functionally qualified but does not materially raise the DDR- or pipeline-limited rates that determine the observed GemRB frame rate.
 
 #### Next Steps:
 
-Run the complete Verilator and formal suites, rebuild the pinned 120MHz seed 3 and require positive four-corner setup and hold slack, then require bounded-copy, exact-pixel, audio and full throughput diagnostics to pass on hardware before repeating the AR0015 GemRB comparison. Restore the accepted 100MHz image after every failed candidate test and do not resume the 150MHz target until this cycle passes.
+Keep the timing-qualified seed-2 image under the canonical launcher filename and retain the accepted 100MHz seed-13 image as the fallback. Use MiSTer-GemRB frame profiling and the measured per-operation rates to select a DDR traffic or engine-pipeline improvement before considering another clock increase, because 120MHz alone does not improve the current gameplay bottleneck.
 
 #### Files Modified:
 
@@ -687,7 +687,7 @@ Run the complete Verilator and formal suites, rebuild the pinned 120MHz seed 3 a
 
 #### Status:
 
-- [ ] Built
-- [ ] Passed
+- [x] Built
+- [x] Passed
 
 ---
