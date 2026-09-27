@@ -799,3 +799,32 @@ None.
 - [ ] Passed
 
 ---
+
+## 20 COMMIT Unreleased 812f4ea 2026-09-26T17:55:31-07:00
+
+#### Coming From:
+
+Unreleased 812f4ea
+
+#### Purpose:
+
+Restore the hardware-qualified pre-burst image after the final DDR write-burst candidate regressed GemRB viewport panning.
+
+#### Outcome:
+
+The user confirmed that the manual test following entry 19 exercised the actual timing-qualified source `812f4ea` seed-2 RBF with SHA256 `d2439fe6bc4d0bf237d3c7cf7795b7fdaafd26491519e3d0b67dd0ff3ef1cd78`, not the earlier timing-violating intermediate, and reported slower GemRB panning. The approved recovery is to treat the globally active write combiner as hardware-rejected for the default image, restore the previously hardware-qualified source `f97ce70` seed-2 RBF with SHA256 `ae2cdf45e0322f0d91bafeba481594b57c6d65c80fa444256a0153338e849cc6` under the canonical launcher filename, verify the target and standard renderer checks, correct the MiSTer-GemRB qualification record, and stop without pursuing an opt-in burst redesign or further GemRB development.
+
+#### Next Steps:
+
+Commit this approved recovery record, replace the canonical RBF with the hash-verified `f97ce70` artifact, verify protocol identity, exact pixels, HDMI audio, bounded copy sweep and the accepted panning path, then record the result in a new entry and leave `812f4ea` as a timing-qualified but hardware-rejected experimental source.
+
+#### Files Modified:
+
+None.
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
