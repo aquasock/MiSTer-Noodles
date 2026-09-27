@@ -770,3 +770,32 @@ Deploy the timing-qualified seed-2 image through the canonical MiSTer filename w
 - [ ] Passed
 
 ---
+
+## 19 COMMIT Unreleased 812f4ea 2026-09-26T17:41:30-07:00
+
+#### Coming From:
+
+Unreleased 812f4ea
+
+#### Purpose:
+
+Deploy the timing-qualified seed-2 DDR write-burst image for user-directed hardware testing.
+
+#### Outcome:
+
+The canonical GemRB MGL was found to select `_Utility/Noodles_20260925.rbf`, which incorrectly held intermediate source `93d20a3` seed 2 with SHA256 `29df3cc992220ba04ca171e598918080e498b1e6aff20f28f924630cedaebebe`; that fit fails slow-corner setup by 0.531ns at 100C and 0.455ns at negative 40C. At the user's direction it was atomically replaced with source `812f4ea` seed 2, and the device now verifies SHA256 `d2439fe6bc4d0bf237d3c7cf7795b7fdaafd26491519e3d0b67dd0ff3ef1cd78`. This candidate passed every check at all four timing corners with +0.172ns worst setup and +0.076ns worst hold. No MGL, core, GemRB process, diagnostic or automated replay was launched; hardware acceptance remains pending the user's manual test.
+
+#### Next Steps:
+
+The user will manually launch and test clean startup and gameplay. If startup succeeds, verify warm startup, protocol identity, exact pixels, HDMI audio, bounded copy sweep and throughput before accepting this image; restore the hardware-qualified `f97ce70` seed-2 image with SHA256 `ae2cdf45e0322f0d91bafeba481594b57c6d65c80fa444256a0153338e849cc6` if the candidate fails.
+
+#### Files Modified:
+
+None.
+
+#### Status:
+
+- [x] Built
+- [ ] Passed
+
+---
