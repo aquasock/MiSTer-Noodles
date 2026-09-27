@@ -828,3 +828,32 @@ None.
 - [ ] Passed
 
 ---
+
+## 21 COMMIT Unreleased f97ce70 2026-09-26T18:01:36-07:00
+
+#### Coming From:
+
+Unreleased 812f4ea
+
+#### Purpose:
+
+Record restoration and hardware reacceptance of the pre-burst 120MHz seed-2 image as the canonical GemRB core.
+
+#### Outcome:
+
+The canonical MiSTer file was replaced through the standard GemRB core installer with source `f97ce70` seed 2 as `/media/fat/_Utility/Noodles_20260926.rbf`, and both local and device SHA256 verified as `ae2cdf45e0322f0d91bafeba481594b57c6d65c80fa444256a0153338e849cc6`. After a clean reboot it reported protocol `0x00010007` and capability mask `0xffe`; the bounded copy sweep passed every case from repeated 1x1 operations through three 800x600 copies, the SDL diagnostic retained exact pixel hash `93f8e614`, and the one-second 48kHz stereo HDMI audio queue drained. The unchanged secondary panning replay emitted all 1707 events over 57.101 seconds, ended normally, and the user observed that it passed. GemRB was then stopped, leaving no replay, launcher or game process active. Source `812f4ea` remains a four-corner timing pass but is hardware-rejected for the default image because its globally active DDR write combiner slowed GemRB viewport panning; no opt-in redesign is planned.
+
+#### Next Steps:
+
+Keep `f97ce70` and RBF SHA256 `ae2cdf45e0322f0d91bafeba481594b57c6d65c80fa444256a0153338e849cc6` as the accepted canonical image, retain `812f4ea` only as experimental history, and leave no open GemRB or write-burst development cycle.
+
+#### Files Modified:
+
+None.
+
+#### Status:
+
+- [x] Built
+- [x] Passed
+
+---
